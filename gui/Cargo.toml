@@ -1,0 +1,10 @@
+[package]
+name = "gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+texpak = { path = ".." }
+eframe = "0.29"
+image = "=0.25.2"
