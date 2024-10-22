@@ -1,11 +1,8 @@
 //! All the math functions are implemented here.
 
-use std::{
-    collections::btree_map::Values,
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
-};
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
-#[inline(never)]
+#[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     // This lerp is monotonic and produces exactly a for t = 0 and b for t = 1.
 
@@ -97,8 +94,19 @@ impl Vec2 {
         Vec2([x, y])
     }
 
+    #[inline(always)]
     pub const fn splat(value: f32) -> Self {
         Vec2([value, value])
+    }
+
+    #[inline(always)]
+    pub const fn dot(self, rhs: Vec2) -> f32 {
+        self.x() * rhs.x() + self.y() * rhs.y()
+    }
+
+    #[inline(always)]
+    pub fn length(&self) -> f32 {
+        self.dot(*self).sqrt()
     }
 
     #[inline(always)]
@@ -354,6 +362,16 @@ impl Vec3 {
 
     pub const fn splat(value: f32) -> Self {
         Vec3([value, value, value])
+    }
+
+    #[inline(always)]
+    pub const fn dot(self, rhs: Vec3) -> f32 {
+        self.x() * rhs.x() + self.y() * rhs.y() + self.z() * rhs.z()
+    }
+
+    #[inline(always)]
+    pub fn length(&self) -> f32 {
+        self.dot(*self).sqrt()
     }
 
     #[inline(always)]
@@ -1080,8 +1098,19 @@ impl Vec4 {
         Vec4([x, y, z, w])
     }
 
+    #[inline(always)]
     pub const fn splat(value: f32) -> Self {
         Vec4([value, value, value, value])
+    }
+
+    #[inline(always)]
+    pub const fn dot(self, rhs: Vec4) -> f32 {
+        self.x() * rhs.x() + self.y() * rhs.y() + self.z() * rhs.z() + self.w() * rhs.w()
+    }
+
+    #[inline(always)]
+    pub fn length(&self) -> f32 {
+        self.dot(*self).sqrt()
     }
 
     #[inline(always)]
@@ -2885,11 +2914,11 @@ impl Rgb32F {
     }
 
     #[inline(always)]
-    pub const fn into_opaque(&self) -> Rgba32F {
+    pub const fn into_opaque(self) -> Rgba32F {
         Rgba32F([self.r(), self.g(), self.b(), 1.0])
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Rgb32F([
             lerp(a.r(), b.r(), t),
@@ -2906,7 +2935,7 @@ impl Rgb32F {
     #[inline(always)]
     pub const fn distance_squared(a: Self, b: Self) -> f32 {
         let diff = Self::diff(a, b);
-        diff.x() * diff.x() + diff.y() * diff.y() + diff.z() * diff.z()
+        diff.dot(diff)
     }
 
     #[inline(always)]
@@ -2915,7 +2944,7 @@ impl Rgb32F {
     }
 
     #[inline(always)]
-    pub const fn offset(&self, offset: Vec3) -> Self {
+    pub const fn offset(self, offset: Vec3) -> Self {
         Rgb32F([
             self.r() + offset.x(),
             self.g() + offset.y(),
@@ -3006,20 +3035,41 @@ impl Rgb565 {
         self.0
     }
 
+    /// Return color from raw bits.
+    #[inline(always)]
+    pub const fn from_bits(bits: u16) -> Self {
+        Rgb565(bits)
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn from_bytes(bytes: [u8; 2]) -> Self {
+        Rgb565(u16::from_le_bytes(bytes))
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn bytes(&self) -> [u8; 2] {
+        self.0.to_le_bytes()
+    }
+
+    #[inline(always)]
     pub fn r(&self) -> u8 {
         (self.0 >> 11) as u8
     }
 
+    #[inline(always)]
     pub fn g(&self) -> u8 {
         ((self.0 >> 5) & 0b111111) as u8
     }
 
+    #[inline(always)]
     pub fn b(&self) -> u8 {
         (self.0 & 0b11111) as u8
     }
 
     #[inline(always)]
-    pub const fn into_f32(&self) -> Rgb32F {
+    pub const fn into_f32(self) -> Rgb32F {
         let r = ((self.0 >> 11) & 0b11111) as f32 / 31.0;
         let g = ((self.0 >> 5) & 0b111111) as f32 / 63.0;
         let b = (self.0 & 0b11111) as f32 / 31.0;
@@ -3089,7 +3139,7 @@ impl Yiq32F {
     }
 
     #[inline(always)]
-    pub const fn into_rgb(&self) -> Rgb32F {
+    pub const fn into_rgb(self) -> Rgb32F {
         let [y, i, q] = self.0;
         let r = y + 0.956 * i + 0.619 * q;
         let g = y - 0.272 * i - 0.647 * q;
@@ -3116,6 +3166,31 @@ impl Yiq32F {
 
         (luminance_diff + chrominance_diff).sqrt()
     }
+
+    #[inline(always)]
+    pub const fn diff(a: Self, b: Self) -> Vec3 {
+        Vec3([a.y() - b.y(), a.i() - b.i(), a.q() - b.q()])
+    }
+
+    #[inline(always)]
+    pub const fn distance_squared(a: Self, b: Self) -> f32 {
+        let diff = Self::diff(a, b);
+        diff.dot(diff)
+    }
+
+    #[inline(always)]
+    pub fn distance(a: Self, b: Self) -> f32 {
+        Self::distance_squared(a, b).sqrt()
+    }
+
+    #[inline(always)]
+    pub const fn offset(self, offset: Vec3) -> Self {
+        Yiq32F([
+            self.y() + offset.x(),
+            self.i() + offset.y(),
+            self.q() + offset.z(),
+        ])
+    }
 }
 
 impl From<Rgb32F> for Yiq32F {
@@ -3139,6 +3214,13 @@ impl From<Rgb32F> for Vec3 {
     }
 }
 
+impl From<Yiq32F> for Vec3 {
+    #[inline(always)]
+    fn from(value: Yiq32F) -> Self {
+        Vec3([value.y(), value.i(), value.q()])
+    }
+}
+
 impl From<Rgba32F> for Vec4 {
     #[inline(always)]
     fn from(value: Rgba32F) -> Self {
@@ -3150,6 +3232,13 @@ impl From<Vec3> for Rgb32F {
     #[inline(always)]
     fn from(value: Vec3) -> Self {
         Rgb32F([value.x(), value.y(), value.z()])
+    }
+}
+
+impl From<Vec3> for Yiq32F {
+    #[inline(always)]
+    fn from(value: Vec3) -> Self {
+        Yiq32F([value.x(), value.y(), value.z()])
     }
 }
 

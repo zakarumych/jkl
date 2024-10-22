@@ -11,10 +11,32 @@ use crate::math::{Region3, Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F};
 pub struct Block {
     color0: Rgb565,
     color1: Rgb565,
-    texels: u32,
+    texels: [u8; 4],
 }
 
 impl Block {
+    pub fn bytes(&self) -> [u8; 8] {
+        let color0 = self.color0.bytes();
+        let color1 = self.color1.bytes();
+        let texels = self.texels;
+
+        [
+            color0[0], color0[1], color1[0], color1[1], texels[0], texels[1], texels[2], texels[3],
+        ]
+    }
+
+    pub fn from_bytes(bytes: [u8; 8]) -> Block {
+        let color0 = Rgb565::from_bytes([bytes[0], bytes[1]]);
+        let color1 = Rgb565::from_bytes([bytes[2], bytes[3]]);
+        let texels = [bytes[4], bytes[5], bytes[6], bytes[7]];
+
+        Block {
+            color0,
+            color1,
+            texels,
+        }
+    }
+
     /// Decodes single BC1 block.
     pub fn decode(self) -> [[Rgba32F; 4]; 4] {
         // Decode endpoints.
@@ -23,7 +45,7 @@ impl Block {
 
         // Prepare local variables.
         let mut colors = [[Rgba32F::TRANSPARENT; 4]; 4];
-        let mut texels = self.texels;
+        let texels = self.texels;
 
         // Check mode.
         let intermediate = if self.color0.bits() < self.color1.bits() {
@@ -46,10 +68,9 @@ impl Block {
         // Decode texels.
         for i in 0..4 {
             for j in 0..4 {
-                let index = texels & 0b11;
-                texels >>= 2;
+                let index = (texels[i] >> 2 * j) & 0b11;
 
-                colors[3 - i][3 - j] = match index {
+                colors[i][j] = match index {
                     0 => color0,
                     1 => intermediate[0],
                     2 => intermediate[1],
@@ -62,132 +83,136 @@ impl Block {
         colors
     }
 
-    pub fn encode(colors: [[Rgb32F; 4]; 4], opt: usize) -> Self {
-        let region = Region3::new((0..16).map(|i| colors[i / 4][i % 4].into()));
+    pub fn encode(colors: [[Rgb32F; 4]; 4], optimize: usize) -> Self {
+        let region = Region3::new((0..16).map(|i| Rgb32F::from(colors[i / 4][i % 4]).into()));
 
-        let mut best = (Rgb565::BLACK, Rgb565::BLACK);
+        let mut best_endpoints = (Rgb32F::BLACK, Rgb32F::BLACK);
         let mut best_errors = (Vec3::ZERO, Vec3::ZERO);
         let mut best_errors_weight = f32::INFINITY;
 
         for diagonal in region.diagonals() {
             // Convert diagonal to colors, loose precision.
-            let color0_565 = Rgb565::from_f32(Rgb32F::from(diagonal.0));
-            let color1_565 = Rgb565::from_f32(Rgb32F::from(diagonal.1));
+            let color0 = Rgb32F::from(diagonal.0);
+            let color1 = Rgb32F::from(diagonal.1);
 
-            let (errors, errors_weight) = block_errors(colors, (color0_565, color1_565));
+            let (errors, errors_weight) = block_errors(colors, (color0, color1));
 
             if errors_weight < best_errors_weight {
-                best = (color0_565, color1_565);
+                best_endpoints = (color0, color1);
                 best_errors = errors;
                 best_errors_weight = errors_weight;
             }
         }
 
-        let mut endpoints = best;
+        for i in 0..optimize {
+            if best_errors_weight < 1e-6 {
+                break;
+            }
 
-        if opt > 0 {
-            optimize_endpoints(&mut endpoints, best_errors, best_errors_weight * 3.0);
+            let endpoints = optimize_endpoints(
+                best_endpoints,
+                best_errors,
+                best_errors_weight,
+                0.01 / (i + 1) as f32,
+            );
+
+            let (errors, errors_weight) = block_errors(colors, best_endpoints);
+            // if errors_weight < best_errors_weight {
+            best_endpoints = endpoints;
+            best_errors = errors;
+            best_errors_weight = errors_weight;
+
+            //     eprintln!("!!!OPTIMIZED!!!");
+            // } else {
+            //     break;
+            // }
         }
 
-        for i in 1..opt {
-            let (errors, errors_weight) = block_errors(colors, endpoints);
-            optimize_endpoints(&mut endpoints, errors, errors_weight * 3.0 * (i + 1) as f32);
+        let mut best_565 = (
+            Rgb565::from_f32(best_endpoints.0),
+            Rgb565::from_f32(best_endpoints.1),
+        );
+
+        if best_565.0.bits() > best_565.1.bits() {
+            core::mem::swap(&mut best_565.0, &mut best_565.1);
         }
 
-        if endpoints.0.bits() > endpoints.1.bits() {
-            core::mem::swap(&mut endpoints.0, &mut endpoints.1);
-        } else if endpoints.0 == endpoints.1 {
-            endpoints.1 = Rgb565::WHITE;
-        }
-
-        let texels = block_encoding(colors, endpoints);
+        let texels = block_encoding(colors, best_565);
 
         Block {
-            color0: endpoints.0,
-            color1: endpoints.1,
+            color0: best_565.0,
+            color1: best_565.1,
             texels,
         }
     }
 }
 
-fn optimize_endpoints(endpoints: &mut (Rgb565, Rgb565), errors: (Vec3, Vec3), errors_weight: f32) {
-    adjust_endpoint(&mut endpoints.0, errors.0 / errors_weight);
-    adjust_endpoint(&mut endpoints.1, errors.1 / errors_weight);
+fn optimize_endpoints(
+    endpoints: (Rgb32F, Rgb32F),
+    errors: (Vec3, Vec3),
+    errors_weight: f32,
+    rate: f32,
+) -> (Rgb32F, Rgb32F) {
+    (
+        endpoints.0.offset(errors.0 / errors_weight * rate),
+        endpoints.1.offset(errors.1 / errors_weight * rate),
+    )
 }
 
-fn adjust_endpoint(endpoint: &mut Rgb565, correction: Vec3) {
-    let r = endpoint.r() as i16;
-    let g = endpoint.g() as i16;
-    let b = endpoint.b() as i16;
-    let x = (correction.x() * 31.0).clamp(0.0, 31.0) as i16;
-    let y = (correction.y() * 63.0).clamp(0.0, 63.0) as i16;
-    let z = (correction.z() * 31.0).clamp(0.0, 31.0) as i16;
-
-    *endpoint = Rgb565::new(
-        (r + x).clamp(0, 31) as u8,
-        (g + y).clamp(0, 63) as u8,
-        (b + z).clamp(0, 31) as u8,
-    );
+fn distance(v: Vec3) -> f32 {
+    // v.length()
+    Yiq32F::perceptual_distance(Yiq32F::from_rgb(Rgb32F::from(v)), Yiq32F::BLACK)
 }
 
-fn block_errors(colors: [[Rgb32F; 4]; 4], endpoints: (Rgb565, Rgb565)) -> ((Vec3, Vec3), f32) {
+fn block_errors(colors: [[Rgb32F; 4]; 4], endpoints: (Rgb32F, Rgb32F)) -> ((Vec3, Vec3), f32) {
     let mut errors = (Vec3::ZERO, Vec3::ZERO);
     let mut errors_weight = 0.0;
 
-    let color0 = endpoints.0.into_f32();
-    let color1 = endpoints.1.into_f32();
+    let color0 = endpoints.0;
+    let color1 = endpoints.1;
 
     let color13 = Rgb32F::lerp(color0, color1, 1.0 / 3.0);
     let color23 = Rgb32F::lerp(color0, color1, 2.0 / 3.0);
 
-    let yiq0 = Yiq32F::from(color0);
-    let yiq13 = Yiq32F::from(color13);
-    let yiq23 = Yiq32F::from(color23);
-    let yiq1 = Yiq32F::from(color1);
-
     for i in 0..4 {
         for j in 0..4 {
-            let rgb = colors[i][j];
-            let yiq = Yiq32F::from(rgb);
+            let texel = colors[i][j];
 
-            let e0 = Yiq32F::perceptual_distance(yiq, yiq0);
-            let e13 = Yiq32F::perceptual_distance(yiq, yiq13);
-            // let e0 = Rgb32F::distance_squared(rgb, color0);
-            // let e13 = Rgb32F::distance_squared(rgb, color13);
+            let error0 = Rgb32F::diff(texel, color0);
+            let error13 = Rgb32F::diff(texel, color13);
+
+            let e0 = distance(error0);
+            let e13 = distance(error13);
 
             if e0 < e13 {
                 // Closest to color0.
-                let error = Rgb32F::diff(rgb, color0);
-                errors.0 += error * e0;
+                errors.0 += error0;
                 errors_weight += e0;
                 continue;
             }
 
-            let e23 = Yiq32F::perceptual_distance(yiq, yiq23);
-            // let e23 = Rgb32F::distance_squared(rgb, color23);
+            let error23 = Rgb32F::diff(texel, color23);
+            let e23 = distance(error23);
 
             if e13 < e23 {
                 // Closest to color13.
-                let error = Rgb32F::diff(rgb, color13);
-                errors.0 += error * e13 * (2.0 / 3.0);
-                errors.1 += error * e13 * (1.0 / 3.0);
+                errors.0 += error13 * (2.0 / 3.0);
+                errors.1 += error13 * (1.0 / 3.0);
                 errors_weight += e13;
                 continue;
             }
 
-            let e1 = Yiq32F::perceptual_distance(yiq, yiq1);
-            // let e1 = Rgb32F::distance_squared(rgb, color1);
+            let error1 = Rgb32F::diff(texel, color1);
+            let e1 = distance(error1);
 
             if e23 < e1 {
                 // Closest to color23.
-                let error = Rgb32F::diff(rgb, color23);
-                errors.0 += error * e23 * (1.0 / 3.0);
-                errors.1 += error * e23 * (2.0 / 3.0);
+                errors.0 += error23 * (1.0 / 3.0);
+                errors.1 += error23 * (2.0 / 3.0);
                 errors_weight += e23;
             } else {
                 // Closest to color1.
-                let error = Rgb32F::diff(rgb, color0);
-                errors.1 += error * e1;
+                errors.1 += error1;
                 errors_weight += e1;
             }
         }
@@ -196,58 +221,48 @@ fn block_errors(colors: [[Rgb32F; 4]; 4], endpoints: (Rgb565, Rgb565)) -> ((Vec3
     (errors, errors_weight)
 }
 
-fn block_encoding(colors: [[Rgb32F; 4]; 4], endpoints: (Rgb565, Rgb565)) -> u32 {
+fn block_encoding(colors: [[Rgb32F; 4]; 4], endpoints: (Rgb565, Rgb565)) -> [u8; 4] {
     let color0 = endpoints.0.into_f32();
     let color1 = endpoints.1.into_f32();
 
     let color13 = Rgb32F::lerp(color0, color1, 1.0 / 3.0);
     let color23 = Rgb32F::lerp(color0, color1, 2.0 / 3.0);
 
-    let yiq0 = Yiq32F::from(color0);
-    let yiq13 = Yiq32F::from(color13);
-    let yiq23 = Yiq32F::from(color23);
-    let yiq1 = Yiq32F::from(color1);
-
-    let mut texels = 0;
+    let mut texels = [0; 4];
 
     for i in 0..4 {
         for j in 0..4 {
-            let rgb = colors[i][j];
-            let yiq = Yiq32F::from(rgb);
+            let texel = colors[i][j];
 
-            let e0 = Yiq32F::perceptual_distance(yiq, yiq0);
-            let e13 = Yiq32F::perceptual_distance(yiq, yiq13);
-            // let e0 = Rgb32F::distance_squared(rgb, color0);
-            // let e13 = Rgb32F::distance_squared(rgb, color13);
+            let error0 = Rgb32F::diff(texel, color0);
+            let e0 = distance(error0);
+            let error13 = Rgb32F::diff(texel, color13);
+            let e13 = distance(error13);
 
             if e0 <= e13 {
                 // Closest to color0.
-                texels <<= 2;
-                texels |= 0b00;
+                texels[i] |= 0b00 << (j * 2);
                 continue;
             }
 
-            let e23 = Yiq32F::perceptual_distance(yiq, yiq23);
-            // let e23 = Rgb32F::distance_squared(rgb, color23);
+            let error23 = Rgb32F::diff(texel, color23);
+            let e23 = distance(error23);
 
             if e13 <= e23 {
                 // Closest to color13.
-                texels <<= 2;
-                texels |= 0b01;
+                texels[i] |= 0b01 << (j * 2);
                 continue;
             }
 
-            let e1 = Yiq32F::perceptual_distance(yiq, yiq1);
-            // let e1 = Rgb32F::distance_squared(rgb, color1);
+            let error1 = Rgb32F::diff(texel, color1);
+            let e1 = distance(error1);
 
             if e23 <= e1 {
                 // Closest to color23.
-                texels <<= 2;
-                texels |= 0b10;
+                texels[i] |= 0b10 << (j * 2);
             } else {
                 // Closest to color1.
-                texels <<= 2;
-                texels |= 0b11;
+                texels[i] |= 0b11 << (j * 2);
             }
         }
     }
