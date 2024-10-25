@@ -65,33 +65,31 @@ impl Block {
         let mut colors = [[Rgb32F::BLACK; 4]; 4];
         let texels = self.texels;
 
-        // Check mode.
-        let intermediate = if self.color0.bits() < self.color1.bits() {
+        // Check mode and build palette.
+        let palette = if self.color0.bits() < self.color1.bits() {
             // Interpolate two intermediate colors.
             [
+                color0,
                 Rgb32F::lerp(color0, color1, 1.0 / 3.0),
                 Rgb32F::lerp(color0, color1, 2.0 / 3.0),
+                color1,
             ]
         } else {
             // Interpolate one intermediate color.
-            [Rgb32F::lerp(color0, color1, 1.0 / 2.0), Rgb32F::BLACK]
+            [
+                color0,
+                Rgb32F::lerp(color0, color1, 1.0 / 2.0),
+                color1,
+                Rgb32F::BLACK,
+            ]
         };
-
-        let color0 = color0;
-        let color1 = color1;
 
         // Decode texels.
         for i in 0..4 {
             for j in 0..4 {
                 let index = (texels[i] >> 2 * j) & 0b11;
 
-                colors[i][j] = match index {
-                    0 => color0,
-                    1 => intermediate[0],
-                    2 => intermediate[1],
-                    3 => color1,
-                    _ => unreachable!(),
-                };
+                colors[i][j] = palette[index as usize];
             }
         }
 
@@ -108,46 +106,42 @@ impl Block {
         let mut colors = [[Rgba32F::TRANSPARENT; 4]; 4];
         let texels = self.texels;
 
-        // Check mode.
-        let intermediate = if self.color0.bits() < self.color1.bits() {
+        // Check mode and build palette.
+        let palette = if self.color0.bits() < self.color1.bits() {
             // Interpolate two intermediate colors.
             [
+                color0.with_alpha(1.0),
                 Rgb32F::lerp(color0, color1, 1.0 / 3.0).with_alpha(1.0),
                 Rgb32F::lerp(color0, color1, 2.0 / 3.0).with_alpha(1.0),
+                color1.with_alpha(1.0),
             ]
         } else {
             // Interpolate one intermediate color.
             [
+                color0.with_alpha(1.0),
                 Rgb32F::lerp(color0, color1, 1.0 / 2.0).with_alpha(1.0),
+                color1.with_alpha(1.0),
                 Rgba32F::TRANSPARENT,
             ]
         };
-
-        let color0 = color0.with_alpha(1.0);
-        let color1 = color1.with_alpha(1.0);
 
         // Decode texels.
         for i in 0..4 {
             for j in 0..4 {
                 let index = (texels[i] >> 2 * j) & 0b11;
 
-                colors[i][j] = match index {
-                    0 => color0,
-                    1 => intermediate[0],
-                    2 => intermediate[1],
-                    3 => color1,
-                    _ => unreachable!(),
-                };
+                colors[i][j] = palette[index as usize];
             }
         }
 
         colors
     }
 
-    fn encode_3(
+    fn encode_optimize(
         colors: [[Rgb32F; 4]; 4],
         region: Region3,
         optimize: usize,
+        block_errors: impl Fn([[Rgb32F; 4]; 4], (Rgb32F, Rgb32F)) -> ((Vec3, Vec3), f32),
     ) -> ((Rgb32F, Rgb32F), f32) {
         let mut best_endpoints = (Rgb32F::BLACK, Rgb32F::BLACK);
         let mut best_errors = (Vec3::ZERO, Vec3::ZERO);
@@ -158,7 +152,7 @@ impl Block {
             let color0 = Rgb32F::from(diagonal.0);
             let color1 = Rgb32F::from(diagonal.1);
 
-            let (errors, errors_weight) = block_errors_3(colors, (color0, color1));
+            let (errors, errors_weight) = block_errors(colors, (color0, color1));
 
             if errors_weight < best_errors_weight {
                 best_endpoints = (color0, color1);
@@ -179,7 +173,7 @@ impl Block {
                 0.01 / (i + 1) as f32,
             );
 
-            let (errors, errors_weight) = block_errors_3(colors, best_endpoints);
+            let (errors, errors_weight) = block_errors(colors, best_endpoints);
 
             best_endpoints = endpoints;
             best_errors = errors;
@@ -189,117 +183,74 @@ impl Block {
         (best_endpoints, best_errors_weight)
     }
 
-    fn encode_4(
-        colors: [[Rgb32F; 4]; 4],
-        region: Region3,
-        optimize: usize,
-    ) -> ((Rgb32F, Rgb32F), f32) {
-        let mut best_endpoints = (Rgb32F::BLACK, Rgb32F::BLACK);
-        let mut best_errors = (Vec3::ZERO, Vec3::ZERO);
-        let mut best_errors_weight = f32::INFINITY;
+    pub fn encode(colors: [[Rgb32F; 4]; 4], optimize: usize) -> Self {
+        let region = Region3::new((0..16).map(|i| colors[i / 4][i % 4].into()));
 
-        for diagonal in region.diagonals() {
-            // Convert diagonal to colors, loose precision.
-            let color0 = Rgb32F::from(diagonal.0);
-            let color1 = Rgb32F::from(diagonal.1);
-
-            let (errors, errors_weight) = block_errors_4(colors, (color0, color1));
-
-            if errors_weight < best_errors_weight {
-                best_endpoints = (color0, color1);
-                best_errors = errors;
-                best_errors_weight = errors_weight;
-            }
+        if region.is_singular() {
+            // All colors are the same.
+            let color = colors[0][0];
+            return Block {
+                color0: Rgb565::from_f32(color),
+                color1: Rgb565::from_f32(color),
+                texels: [0; 4],
+            };
         }
 
-        for i in 0..optimize {
-            if best_errors_weight < 1e-6 {
-                break;
-            }
+        let (endpoints_3, errors_weight_3) =
+            Self::encode_optimize(colors, region, optimize, block_errors_3);
+        let (endpoints_4, errors_weight_4) =
+            Self::encode_optimize(colors, region, optimize, block_errors_4);
 
-            let endpoints = optimize_endpoints(
-                best_endpoints,
-                best_errors,
-                best_errors_weight,
-                0.01 / (i + 1) as f32,
+        let (best_565, texels) = if errors_weight_3 < errors_weight_4 {
+            let mut best_565 = (
+                Rgb565::from_f32(endpoints_3.0),
+                Rgb565::from_f32(endpoints_3.1),
             );
 
-            let (errors, errors_weight) = block_errors_4(colors, best_endpoints);
+            if best_565.0 == best_565.1 {
+                return Block {
+                    color0: best_565.0,
+                    color1: best_565.0,
+                    texels: [0; 4],
+                };
+            }
 
-            best_endpoints = endpoints;
-            best_errors = errors;
-            best_errors_weight = errors_weight;
+            if best_565.0.bits() < best_565.1.bits() {
+                core::mem::swap(&mut best_565.0, &mut best_565.1);
+            }
+
+            let texels = block_encoding_3(colors, best_565);
+
+            (best_565, texels)
+        } else {
+            let mut best_565 = (
+                Rgb565::from_f32(endpoints_4.0),
+                Rgb565::from_f32(endpoints_4.1),
+            );
+
+            if best_565.0 == best_565.1 {
+                return Block {
+                    color0: best_565.0,
+                    color1: best_565.0,
+                    texels: [0; 4],
+                };
+            }
+
+            if best_565.0.bits() > best_565.1.bits() {
+                core::mem::swap(&mut best_565.0, &mut best_565.1);
+            }
+
+            let texels = block_encoding_4(colors, best_565);
+
+            (best_565, texels)
+        };
+
+        Block {
+            color0: best_565.0,
+            color1: best_565.1,
+            texels,
         }
-
-        (best_endpoints, best_errors_weight)
     }
-
-    // pub fn encode(colors: [[Rgb32F; 4]; 4], optimize: usize) -> Self {
-    //     let region = Region3::new((0..16).map(|i| colors[i / 4][i % 4].into()));
-
-    //     // if region.is_singular() {
-    //     //     // All colors are the same.
-    //     //     let color = colors[0][0];
-    //     //     return Block {
-    //     //         color0: Rgb565::from_f32(color),
-    //     //         color1: Rgb565::from_f32(color),
-    //     //         texels: [0; 4],
-    //     //     };
-    //     // }
-
-    //     // let (endpoints_3, errors_weight_3) = Self::encode_3(colors, region, optimize);
-    //     let (endpoints_4, errors_weight_4) = Self::encode_4(colors, region, optimize);
-
-    //     // let (best_565, texels) = if errors_weight_3 < errors_weight_4 {
-    //     //     let mut best_565 = (
-    //     //         Rgb565::from_f32(endpoints_3.0),
-    //     //         Rgb565::from_f32(endpoints_3.1),
-    //     //     );
-
-    //     //     if best_565.0 == best_565.1 {
-    //     //         return Block {
-    //     //             color0: best_565.0,
-    //     //             color1: best_565.0,
-    //     //             texels: [0; 4],
-    //     //         };
-    //     //     }
-
-    //     //     if best_565.0.bits() < best_565.1.bits() {
-    //     //         core::mem::swap(&mut best_565.0, &mut best_565.1);
-    //     //     }
-
-    //     //     let texels = block_encoding_4(colors, best_565);
-
-    //     //     (best_565, texels)
-    //     // } else {
-    //     let mut best_565 = (
-    //         Rgb565::from_f32(endpoints_4.0),
-    //         Rgb565::from_f32(endpoints_4.1),
-    //     );
-
-    //     // if best_565.0 == best_565.1 {
-    //     //     return Block {
-    //     //         color0: best_565.0,
-    //     //         color1: best_565.0,
-    //     //         texels: [0; 4],
-    //     //     };
-    //     // }
-
-    //     if best_565.0.bits() >= best_565.1.bits() {
-    //         core::mem::swap(&mut best_565.0, &mut best_565.1);
-    //     }
-
-    //     let texels = block_encoding_3(colors, best_565);
-
-    //     // (best_565, texels)
-    //     // };
-
-    //     Block {
-    //         color0: best_565.0,
-    //         color1: best_565.1,
-    //         texels,
-    //     }
-    // }
 
     pub fn encode_with_alpha(colors: [[Rgba32F; 4]; 4], threshold: f32, optimize: usize) -> Self {
         let mut transparent_pixels = 0;
@@ -400,68 +351,68 @@ impl Block {
         }
     }
 
-    pub fn encode(colors: [[Rgb32F; 4]; 4], optimize: usize) -> Self {
-        let region = Region3::new((0..16).map(|i| Rgb32F::from(colors[i / 4][i % 4]).into()));
+    // pub fn encode(colors: [[Rgb32F; 4]; 4], optimize: usize) -> Self {
+    //     let region = Region3::new((0..16).map(|i| Rgb32F::from(colors[i / 4][i % 4]).into()));
 
-        let mut best_endpoints = (Rgb32F::BLACK, Rgb32F::BLACK);
-        let mut best_errors = (Vec3::ZERO, Vec3::ZERO);
-        let mut best_errors_weight = f32::INFINITY;
+    //     let mut best_endpoints = (Rgb32F::BLACK, Rgb32F::BLACK);
+    //     let mut best_errors = (Vec3::ZERO, Vec3::ZERO);
+    //     let mut best_errors_weight = f32::INFINITY;
 
-        for diagonal in region.diagonals() {
-            // Convert diagonal to colors, loose precision.
-            let color0 = Rgb32F::from(diagonal.0);
-            let color1 = Rgb32F::from(diagonal.1);
+    //     for diagonal in region.diagonals() {
+    //         // Convert diagonal to colors, loose precision.
+    //         let color0 = Rgb32F::from(diagonal.0);
+    //         let color1 = Rgb32F::from(diagonal.1);
 
-            let (errors, errors_weight) = block_errors_4(colors, (color0, color1));
+    //         let (errors, errors_weight) = block_errors_4(colors, (color0, color1));
 
-            if errors_weight < best_errors_weight {
-                best_endpoints = (color0, color1);
-                best_errors = errors;
-                best_errors_weight = errors_weight;
-            }
-        }
+    //         if errors_weight < best_errors_weight {
+    //             best_endpoints = (color0, color1);
+    //             best_errors = errors;
+    //             best_errors_weight = errors_weight;
+    //         }
+    //     }
 
-        for i in 0..optimize {
-            if best_errors_weight < 1e-6 {
-                break;
-            }
+    //     for i in 0..optimize {
+    //         if best_errors_weight < 1e-6 {
+    //             break;
+    //         }
 
-            let endpoints = optimize_endpoints(
-                best_endpoints,
-                best_errors,
-                best_errors_weight,
-                0.01 / (i + 1) as f32,
-            );
+    //         let endpoints = optimize_endpoints(
+    //             best_endpoints,
+    //             best_errors,
+    //             best_errors_weight,
+    //             0.01 / (i + 1) as f32,
+    //         );
 
-            let (errors, errors_weight) = block_errors_4(colors, best_endpoints);
-            // if errors_weight < best_errors_weight {
-            best_endpoints = endpoints;
-            best_errors = errors;
-            best_errors_weight = errors_weight;
+    //         let (errors, errors_weight) = block_errors_4(colors, best_endpoints);
+    //         // if errors_weight < best_errors_weight {
+    //         best_endpoints = endpoints;
+    //         best_errors = errors;
+    //         best_errors_weight = errors_weight;
 
-            //     eprintln!("!!!OPTIMIZED!!!");
-            // } else {
-            //     break;
-            // }
-        }
+    //         //     eprintln!("!!!OPTIMIZED!!!");
+    //         // } else {
+    //         //     break;
+    //         // }
+    //     }
 
-        let mut best_565 = (
-            Rgb565::from_f32(best_endpoints.0),
-            Rgb565::from_f32(best_endpoints.1),
-        );
+    //     let mut best_565 = (
+    //         Rgb565::from_f32(best_endpoints.0),
+    //         Rgb565::from_f32(best_endpoints.1),
+    //     );
 
-        if best_565.0.bits() > best_565.1.bits() {
-            core::mem::swap(&mut best_565.0, &mut best_565.1);
-        }
+    //     if best_565.0.bits() > best_565.1.bits() {
+    //         core::mem::swap(&mut best_565.0, &mut best_565.1);
+    //     }
 
-        let texels = block_encoding_4(colors, best_565);
+    //     let texels = block_encoding_4(colors, best_565);
 
-        Block {
-            color0: best_565.0,
-            color1: best_565.1,
-            texels,
-        }
-    }
+    //     Block {
+    //         color0: best_565.0,
+    //         color1: best_565.1,
+    //         texels,
+    //     }
+    // }
 }
 
 fn optimize_endpoints(
