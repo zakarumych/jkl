@@ -8,13 +8,17 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+hashbrown = "0.15"
+bitvec = "1.0"
+bytemuck = { version = "1.0" }
 
 [package]
-name = "texpak"
-description = "Texture packing tool"
+name = "jkl"
+description = "Texture compression and packing tool"
 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+hashbrown.workspace = true

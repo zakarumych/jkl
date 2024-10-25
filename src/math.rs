@@ -1,6 +1,9 @@
 //! All the math functions are implemented here.
 
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+use std::{
+    hash::{Hash, Hasher},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+};
 
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -2820,6 +2823,7 @@ impl Vec4 {
 }
 
 /// A region in 3D space defined by a points on a diagonal.
+#[derive(Clone, Copy)]
 pub struct Region3 {
     pub min: Vec3,
     pub max: Vec3,
@@ -2846,6 +2850,14 @@ impl Region3 {
 
     pub fn max(&self) -> Vec3 {
         self.max
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.min.x() > self.max.x() || self.min.y() > self.max.y() || self.min.z() > self.max.z()
+    }
+
+    pub fn is_singular(&self) -> bool {
+        self.min == self.max
     }
 
     /// Returns 4 diagonals of the region.
@@ -2876,6 +2888,85 @@ impl Region3 {
     pub fn volume(&self) -> f32 {
         let diff = self.max - self.min;
         diff.x().min(0.0) * diff.y().min(0.0) * diff.z().min(0.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Luma8U(u8);
+
+impl Luma8U {
+    pub const WHITE: Luma8U = Luma8U(255);
+    pub const BLACK: Luma8U = Luma8U(0);
+
+    #[inline(always)]
+    pub const fn new(l: u8) -> Self {
+        Luma8U(l)
+    }
+
+    #[inline(always)]
+    pub const fn l(&self) -> u8 {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn bits(&self) -> u8 {
+        self.0
+    }
+
+    #[inline(always)]
+    pub fn wrapping_add(self, other: Self) -> Self {
+        Luma8U(self.0.wrapping_add(other.0))
+    }
+
+    #[inline(always)]
+    pub fn wrapping_sub(self, other: Self) -> Self {
+        Luma8U(self.0.wrapping_sub(other.0))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
+pub struct Luma32F(f32);
+
+impl Luma32F {
+    pub const WHITE: Luma32F = Luma32F(1.0);
+    pub const BLACK: Luma32F = Luma32F(0.0);
+
+    #[inline(always)]
+    pub const fn new(l: f32) -> Self {
+        Luma32F(l)
+    }
+
+    #[inline(always)]
+    pub const fn l(&self) -> f32 {
+        self.0
+    }
+
+    #[inline(always)]
+    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+        Luma32F(lerp(a.l(), b.l(), t))
+    }
+
+    #[inline(always)]
+    pub const fn diff(a: Self, b: Self) -> f32 {
+        a.l() - b.l()
+    }
+
+    #[inline(always)]
+    pub const fn distance_squared(a: Self, b: Self) -> f32 {
+        let diff = Self::diff(a, b);
+        diff * diff
+    }
+
+    #[inline(always)]
+    pub fn distance(a: Self, b: Self) -> f32 {
+        a.l() - b.l()
+    }
+
+    #[inline(always)]
+    pub const fn offset(self, offset: f32) -> Self {
+        Luma32F(self.l() + offset)
     }
 }
 
@@ -3005,12 +3096,12 @@ impl Rgba32F {
 }
 
 /// An RGB color with 8 bit unsigned normalized integers per channel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Rgb8U([u8; 3]);
 
 /// An RGB color with 5,6 and 5 bits unsigned normalized integers per channel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Rgb565(u16);
 
@@ -3069,6 +3160,24 @@ impl Rgb565 {
     }
 
     #[inline(always)]
+    pub fn set_r(&mut self, r: u8) {
+        assert!(r <= 31, "Red channel must be in range 0..=31");
+        self.0 = (self.0 & 0b00000_111111_11111) | ((r as u16) << 11);
+    }
+
+    #[inline(always)]
+    pub fn set_g(&mut self, g: u8) {
+        assert!(g <= 63, "Green channel must be in range 0..=63");
+        self.0 = (self.0 & 0b11111_000000_11111) | ((g as u16) << 5);
+    }
+
+    #[inline(always)]
+    pub fn set_b(&mut self, b: u8) {
+        assert!(b <= 31, "Blue channel must be in range 0..=31");
+        self.0 = (self.0 & 0b11111_111111_00000) | (b as u16);
+    }
+
+    #[inline(always)]
     pub const fn into_f32(self) -> Rgb32F {
         let r = ((self.0 >> 11) & 0b11111) as f32 / 31.0;
         let g = ((self.0 >> 5) & 0b111111) as f32 / 63.0;
@@ -3083,6 +3192,20 @@ impl Rgb565 {
         let g = (g * 63.0).clamp(0.0, 63.0) as u16;
         let b = (b * 31.0).clamp(0.0, 31.0) as u16;
         Rgb565((r << 11) | (g << 5) | b)
+    }
+
+    pub fn wrapping_add(a: Self, b: Self) -> Self {
+        let r = a.r().wrapping_add(b.r()) & 31;
+        let g = a.g().wrapping_add(b.g()) & 63;
+        let b = a.b().wrapping_add(b.b()) & 31;
+        Rgb565::new(r, g, b)
+    }
+
+    pub fn wrapping_sub(a: Self, b: Self) -> Self {
+        let r = a.r().wrapping_sub(b.r()) & 31;
+        let g = a.g().wrapping_sub(b.g()) & 63;
+        let b = a.b().wrapping_sub(b.b()) & 31;
+        Rgb565::new(r, g, b)
     }
 }
 
@@ -3246,5 +3369,55 @@ impl From<Vec4> for Rgba32F {
     #[inline(always)]
     fn from(value: Vec4) -> Self {
         Rgba32F([value.x(), value.y(), value.z(), value.w()])
+    }
+}
+
+pub(crate) fn predict_color_u8(left: u8, top: u8, top_left: u8) -> u8 {
+    return 0;
+
+    let v_diff = if top_left > left {
+        top_left - left
+    } else {
+        left - top_left
+    };
+
+    let h_diff = if top_left > top {
+        top_left - top
+    } else {
+        top - top_left
+    };
+
+    // if v_diff > 10 || h_diff > 10 {
+    if top_left > left && top_left > top {
+        if top >= left {
+            top
+        } else {
+            left
+        }
+    } else if top_left < left && top_left < top {
+        if top >= left {
+            left
+        } else {
+            top
+        }
+    } else {
+        left.wrapping_add(top).wrapping_sub(top_left)
+    }
+    // } else {
+    //     left.wrapping_add(top).wrapping_sub(top_left)
+    // }
+}
+
+pub(crate) trait PredictableColor: Copy {
+    fn predict_color(left: Self, top: Self, top_left: Self) -> Self;
+}
+
+impl PredictableColor for Rgb565 {
+    fn predict_color(left: Self, top: Self, top_left: Self) -> Self {
+        Rgb565::new(
+            predict_color_u8(left.r(), top.r(), top_left.r()) & 31,
+            predict_color_u8(left.g(), top.g(), top_left.g()) & 63,
+            predict_color_u8(left.b(), top.b(), top_left.b()) & 31,
+        )
     }
 }

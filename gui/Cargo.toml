@@ -1,11 +1,10 @@
 [package]
-name = "texpak-app"
+name = "jkl-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-texpak = { path = ".." }
+jkl = { path = ".." }
 eframe = "0.29"
 image = "=0.25.2"
-texpresso = "2.0"
