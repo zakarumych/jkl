@@ -1,7 +1,7 @@
 //! BC1 implementation.
 //!
 
-use core::{error, f32};
+use core::f32;
 
 use crate::math::{Region3, Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F};
 

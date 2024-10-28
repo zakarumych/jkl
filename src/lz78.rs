@@ -9,7 +9,10 @@
 
 use std::io::{Read, Write};
 
-use crate::bytes::LeBytes;
+use crate::{
+    bits::{ReadBits, WriteBits},
+    bytes::LeBytes,
+};
 
 pub(crate) trait Element {
     // This parameter is related to the maximum size of the input data.
@@ -47,36 +50,6 @@ struct Entry<T> {
     element: T,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Index {
-    Zero,
-    Short(u8),
-    Long(u16),
-    VeryLong { high: u8, low: u16 },
-}
-
-impl Index {
-    fn write_to(&self, output: &mut impl Write) -> std::io::Result<()> {
-        match self {
-            Index::Zero => {}
-            Index::Short(index) => {
-                output.write_all(&index.to_le_bytes())?;
-            }
-            Index::Long(index) => {
-                output.write_all(&index.to_le_bytes())?;
-            }
-            Index::VeryLong { high, low } => {
-                let mut bytes = [0; 3];
-                bytes[0..2].copy_from_slice(&low.to_le_bytes());
-                bytes[2] = *high;
-                output.write_all(&bytes)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
 pub struct Encoder<T> {
     entires: Vec<Entry<T>>,
     prefix: u32,
@@ -109,22 +82,43 @@ where
         self.entires.push(entry);
     }
 
-    fn index_code(&self, index: u32) -> Index {
-        if self.entires.len() == 0 {
-            Index::Zero
-        } else if self.entires.len() < 256 {
-            Index::Short(index as u8)
-        } else if self.entires.len() < 65536 {
-            Index::Long(index as u16)
-        } else {
-            Index::VeryLong {
-                high: (index >> 16) as u8,
-                low: index as u16,
-            }
-        }
+    fn write(
+        &self,
+        index: u32,
+        input: T,
+        writer: &mut WriteBits<impl Write>,
+    ) -> std::io::Result<()> {
+        let bits = (self.entires.len() + 1)
+            .next_power_of_two()
+            .trailing_zeros();
+
+        debug_assert!(1 << bits > index);
+
+        let index_bytes = index.to_le_bytes();
+        writer.write_bits(&index_bytes, 0, bits as usize)?;
+        <T as LeBytes>::write_to(&input, writer)?;
+
+        Ok(())
     }
 
-    pub fn encode(&mut self, input: T, output: &mut impl Write) -> std::io::Result<()> {
+    fn write_last_index(
+        &self,
+        index: u32,
+        writer: &mut WriteBits<impl Write>,
+    ) -> std::io::Result<()> {
+        let bits = (self.entires.len() + 1)
+            .next_power_of_two()
+            .trailing_zeros();
+
+        debug_assert!(1 << bits > index);
+
+        let index_bytes = index.to_le_bytes();
+        writer.write_bits(&index_bytes, 0, bits as usize)?;
+
+        Ok(())
+    }
+
+    pub fn encode(&mut self, input: T, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
         let entry = Entry {
             prefix: self.prefix,
             element: input,
@@ -133,9 +127,7 @@ where
 
         match index {
             None => {
-                let index = self.index_code(self.prefix);
-                index.write_to(output)?;
-                <T as LeBytes>::write_to(&input, output)?;
+                self.write(self.prefix, input, writer)?;
                 self.insert(entry);
                 self.prefix = 0;
             }
@@ -147,25 +139,30 @@ where
         Ok(())
     }
 
-    pub fn finish(self, output: &mut impl Write) -> std::io::Result<()> {
-        let index = self.index_code(self.prefix);
-        index.write_to(output)?;
+    pub fn finish(self, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
+        self.write_last_index(self.prefix, writer)?;
         Ok(())
     }
 }
 
 pub struct Decoder<T> {
     scratch: Vec<T>,
-    substrings: Vec<(u32, u32)>,
-    output_range: (u32, u32),
+    entires: Vec<(u32, u32)>,
+    output: (u32, u32),
 }
 
 impl<T> Decoder<T> {
     pub fn new() -> Self {
         Decoder {
             scratch: Vec::new(),
-            substrings: Vec::new(),
-            output_range: (0, 0),
+            entires: Vec::new(),
+            output: (0, 0),
+        }
+    }
+
+    pub fn finish(&self) {
+        if self.output.0 != self.output.1 {
+            panic!("Decoder output was not consumed.");
         }
     }
 }
@@ -187,36 +184,39 @@ impl<T> Decoder<T>
 where
     T: Copy + Eq + LeBytes,
 {
-    fn read_index(&self, read: &mut impl Read) -> std::io::Result<u32> {
-        if self.substrings.len() == 0 {
-            Ok(0)
-        } else if self.substrings.len() < 256 {
-            let mut bytes = [0u8];
-            read.read_exact(&mut bytes)?;
-            Ok(u8::from_le_bytes(bytes) as u32)
-        } else if self.substrings.len() < 65536 {
-            let mut bytes = [0; 2];
-            read.read_exact(&mut bytes)?;
-            Ok(u16::from_le_bytes(bytes) as u32)
-        } else {
-            let mut bytes = [0; 4];
-            read.read_exact(&mut bytes[0..3])?;
-            Ok(u32::from_le_bytes(bytes))
-        }
+    fn read(&self, reader: &mut ReadBits<impl Read>) -> std::io::Result<(u32, Option<T>)> {
+        let bits = (self.entires.len() + 1)
+            .next_power_of_two()
+            .trailing_zeros();
+
+        let mut index_bytes = [0; 4];
+        reader.read_bits(&mut index_bytes, 0, bits as usize)?;
+        let index = u32::from_le_bytes(index_bytes);
+
+        let element = match <T as LeBytes>::read_from(reader) {
+            Ok(element) => Some(element),
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+                // Last piece.
+                None
+            }
+            Err(err) => return Err(err),
+        };
+
+        Ok((index, element))
     }
 
     fn decode_next_range<'a>(
         &'a mut self,
-        input: &mut impl Read,
+        reader: &mut ReadBits<impl Read>,
     ) -> Result<(u32, u32), DecodeError> {
-        let index = self.read_index(input)?;
+        let (index, element) = self.read(reader)?;
 
         // Add the new substring to the cache.
         let (prefix_start, prefix_end) = if index > 0 {
-            if index as usize > self.substrings.len() {
+            if index as usize > self.entires.len() {
                 return Err(DecodeError::InvalidIndex);
             }
-            self.substrings[(index - 1) as usize]
+            self.entires[(index - 1) as usize]
         } else {
             (0, 0)
         };
@@ -224,19 +224,18 @@ where
         debug_assert!(prefix_end >= prefix_start);
         let prefix_len = prefix_end - prefix_start;
 
-        let element = match <T as LeBytes>::read_from(input) {
-            Ok(element) => element,
-            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof && prefix_len != 0 => {
+        let element = match element {
+            Some(element) => element,
+            None => {
                 // Last piece.
                 return Ok((prefix_start, prefix_end));
             }
-            Err(err) => return Err(DecodeError::Io(err)),
         };
 
-        let end = if self.substrings.is_empty() {
+        let end = if self.entires.is_empty() {
             0
         } else {
-            let (_start, end) = *self.substrings.last().unwrap();
+            let (_start, end) = *self.entires.last().unwrap();
             end
         };
 
@@ -249,31 +248,31 @@ where
         let new_start = end;
         let new_end = new_start + prefix_len + 1;
 
-        self.substrings.push((new_start, new_end));
+        self.entires.push((new_start, new_end));
 
         Ok((new_start, new_end))
     }
 
     pub fn decode_next_slice<'a>(
         &'a mut self,
-        input: &mut impl Read,
+        input: &mut ReadBits<impl Read>,
     ) -> Result<&'a [T], DecodeError> {
-        if self.output_range.0 >= self.output_range.1 {
-            self.output_range = self.decode_next_range(input)?;
+        if self.output.0 >= self.output.1 {
+            self.output = self.decode_next_range(input)?;
         }
 
-        let slice = &self.scratch[self.output_range.0 as usize..self.output_range.1 as usize];
-        self.output_range.0 = self.output_range.1;
+        let slice = &self.scratch[self.output.0 as usize..self.output.1 as usize];
+        self.output.0 = self.output.1;
         Ok(slice)
     }
 
-    pub fn decode_next(&mut self, input: &mut impl Read) -> Result<&T, DecodeError> {
-        if self.output_range.0 >= self.output_range.1 {
-            self.output_range = self.decode_next_range(input)?;
+    pub fn decode_next(&mut self, input: &mut ReadBits<impl Read>) -> Result<T, DecodeError> {
+        if self.output.0 >= self.output.1 {
+            self.output = self.decode_next_range(input)?;
         }
 
-        let element = &self.scratch[self.output_range.0 as usize];
-        self.output_range.0 += 1;
+        let element = self.scratch[self.output.0 as usize];
+        self.output.0 += 1;
         Ok(element)
     }
 }
@@ -287,15 +286,18 @@ fn test_u16() {
         1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2,
     ];
 
+    let mut writer = WriteBits::new(&mut compressed);
+
     for byte in data {
-        encoder.encode(byte, &mut compressed).unwrap();
+        encoder.encode(byte, &mut writer).unwrap();
     }
 
-    encoder.finish(&mut compressed).unwrap();
+    encoder.finish(&mut writer).unwrap();
+    writer.finish().unwrap();
 
     let mut decoder = Decoder::<u16>::new();
 
-    let mut input = &compressed[..];
+    let mut input = ReadBits::new(&compressed[..]);
     let mut decoded = 0;
 
     while decoded < data.len() {

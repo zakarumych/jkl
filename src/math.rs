@@ -3373,19 +3373,51 @@ impl From<Vec4> for Rgba32F {
 }
 
 pub(crate) fn predict_color_u8(left: u8, top: u8, top_left: u8) -> u8 {
-    return 0;
+    // let target = left.wrapping_add(top).wrapping_sub(top_left);
 
-    let v_diff = if top_left > left {
-        top_left - left
-    } else {
-        left - top_left
-    };
+    // let left_dist = if left > target {
+    //     left - target
+    // } else {
+    //     target - left
+    // };
 
-    let h_diff = if top_left > top {
-        top_left - top
-    } else {
-        top - top_left
-    };
+    // let top_dist = if top > target {
+    //     top - target
+    // } else {
+    //     target - top
+    // };
+
+    // let top_left = if top_left > target {
+    //     top_left - target
+    // } else {
+    //     target - top_left
+    // };
+
+    // if left_dist < top_dist {
+    //     if left_dist < top_left {
+    //         return left;
+    //     } else {
+    //         return top_left;
+    //     }
+    // } else {
+    //     if top_dist < top_left {
+    //         return top;
+    //     } else {
+    //         return top_left;
+    //     }
+    // }
+
+    // let v_diff = if top_left > left {
+    //     top_left - left
+    // } else {
+    //     left - top_left
+    // };
+
+    // let h_diff = if top_left > top {
+    //     top_left - top
+    // } else {
+    //     top - top_left
+    // };
 
     // if v_diff > 10 || h_diff > 10 {
     if top_left > left && top_left > top {
