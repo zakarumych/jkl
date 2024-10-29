@@ -3,9 +3,9 @@
 // It is hybrid compression algorithm designed to work on blocks that have
 // color data and indices.
 // Color data is compressed using combination of run-length, hash and diff encoding.
-// Indices are compressed by LZ77 algorithm with parameters predefined for each block format.
+// Indices are compressed by LZW algorithm with parameters predefined for each block format.
 //
-// MOK format compresses super-blocks (blocks of blocks) independently.
+// Jackal format compresses super-blocks (blocks of blocks) independently.
 // This allows parallel processing of super-blocks on multi-core CPU and GPU.
 // Although small textures may have just one super-block.
 
@@ -20,7 +20,8 @@ use crate::{
     bytes::LeBytes,
     lzw,
     math::{predict_color_u8, PredictableColor, Rgb565},
-    nn::Model,
+    nn::{self, Model},
+    z_curve::BoundZCurve,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -279,10 +280,12 @@ pub struct JackalHeader {
 
     /// Extent of the image. Decoded based on dimensions.
     extent: Extent,
+
+    model: nn::Model,
 }
 
 impl JackalHeader {
-    const BYTES_SIZE: usize = 20;
+    const BYTES_SIZE: usize = 20 + nn::Model::BYTES_SIZE;
 
     fn write_to(&self, mut write: impl Write) -> std::io::Result<()> {
         let dimensions = self.extent.dimensions();
@@ -295,17 +298,19 @@ impl JackalHeader {
             footprint: self.footprint,
         };
 
-        let mut bytes = [0; Self::BYTES_SIZE];
+        let mut bytes = [0; 20];
         bytes[0..4].copy_from_slice(&MAGIC_VER_0.to_le_bytes());
         bytes[4..8].copy_from_slice(&config.encode().to_le_bytes());
         bytes[8..12].copy_from_slice(&raw_size[0].to_le_bytes());
         bytes[12..16].copy_from_slice(&raw_size[1].to_le_bytes());
         bytes[16..20].copy_from_slice(&raw_size[2].to_le_bytes());
-        write.write_all(&bytes)
+        write.write_all(&bytes)?;
+        self.model.write_to(&mut write)?;
+        Ok(())
     }
 
     fn read_from(mut read: impl Read) -> Result<Self, DecompressError> {
-        let mut bytes = [0; Self::BYTES_SIZE];
+        let mut bytes = [0; 20];
         read.read_exact(&mut bytes)?;
 
         let mut magic_bytes = [0; 4];
@@ -330,11 +335,14 @@ impl JackalHeader {
         let raw_size = [width, height, depth];
         let extent = Extent::from_raw_size(raw_size, config.dimensions)?;
 
+        let model = nn::Model::read_from(&mut read)?;
+
         Ok(JackalHeader {
             levels: config.levels,
             format: config.format,
             footprint: config.footprint,
             extent,
+            model,
         })
     }
 
@@ -534,8 +542,8 @@ trait AnyBlock: Copy + 'static + Sized {
     /// Compress one block aspect.
     fn compress<'a, const ASPECT: usize>(
         &self,
-        predictor: &mut Model,
-        kernel: [Option<&'a Self>; 8],
+        predictor: &Model,
+        kernel: [Option<&'a Self>; 15],
         encoder: &mut lzw::Encoder<Self::EncoderElement>,
         write: &mut WriteBits<impl Write>,
     ) -> std::io::Result<()>;
@@ -543,136 +551,80 @@ trait AnyBlock: Copy + 'static + Sized {
     /// Decompress one block aspect.
     fn decompress<'a, const ASPECT: usize>(
         &mut self,
-        predictor: &mut Model,
-        kernel: [Option<&'a Self>; 8],
+        predictor: &Model,
+        kernel: [Option<&'a Self>; 15],
         decoder: &mut lzw::Decoder<Self::EncoderElement>,
         read: &mut ReadBits<impl Read>,
     ) -> Result<(), DecompressError>;
 }
 
 impl AnyBlock for bc1::Block {
-    const ASPECTS: usize = 7;
+    const ASPECTS: usize = 3;
     type EncoderElement = u8;
 
     fn compress<'a, const ASPECT: usize>(
         &self,
-        predictor: &mut Model,
-        kernel: [Option<&'a Self>; 8],
+        predictor: &Model,
+        kernel: [Option<&'a Self>; 15],
         encoder: &mut lzw::Encoder<u8>,
         write: &mut WriteBits<impl Write>,
     ) -> std::io::Result<()> {
         match ASPECT {
             0 => {
-                // Color0-red
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color0.r() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color0.r()));
-                let color = self.color0.r();
+                // Color0
+                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.r() as f32 / 31.0));
+                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.g() as f32 / 63.0));
+                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.b() as f32 / 31.0));
 
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let diff_color = color.wrapping_sub(predicted_color) & 31;
+                let mut kernel = [0.0; 45];
+                kernel[0..15].copy_from_slice(&red_kernel);
+                kernel[15..30].copy_from_slice(&green_kernel);
+                kernel[30..45].copy_from_slice(&blue_kernel);
 
                 let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let diff_color = u8::wrapping_sub(color, predicted_color) & 31;
+                let output = signals.output();
+                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
+                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
+                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
 
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                predictor.backward(signals, color as f32 / 31.0);
+                let r_diff = self.color0.r().wrapping_sub(r_pred) & 31;
+                let g_diff = self.color0.g().wrapping_sub(g_pred) & 63;
+                let b_diff = self.color0.b().wrapping_sub(b_pred) & 31;
 
-                encoder.encode(diff_color, write)?;
+                let diff = self.color0; //Rgb565::new(r_diff, g_diff, b_diff);
+                let [low, high] = diff.bits().to_le_bytes();
+
+                encoder.encode(low, write)?;
+                encoder.encode(high, write)?;
             }
             1 => {
-                // Color0-green
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color0.g() as f32) / 63.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color0.g()));
-                let color = self.color0.g();
+                // Color1
+                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.r() as f32 / 31.0));
+                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.g() as f32 / 63.0));
+                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.b() as f32 / 31.0));
 
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let diff_color = color.wrapping_sub(predicted_color) & 63;
+                let mut kernel = [0.0; 45];
+                kernel[0..15].copy_from_slice(&red_kernel);
+                kernel[15..30].copy_from_slice(&green_kernel);
+                kernel[30..45].copy_from_slice(&blue_kernel);
 
                 let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 63.0).rem_euclid(63.0) as u8;
-                let diff_color = u8::wrapping_sub(color, predicted_color) & 63;
+                let output = signals.output();
+                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
+                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
+                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
 
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                predictor.backward(signals, color as f32 / 63.0);
+                let r_diff = self.color1.r().wrapping_sub(r_pred) & 31;
+                let g_diff = self.color1.g().wrapping_sub(g_pred) & 63;
+                let b_diff = self.color1.b().wrapping_sub(b_pred) & 31;
 
-                encoder.encode(diff_color, write)?;
+                let diff = self.color1; //Rgb565::new(r_diff, g_diff, b_diff);
+                let [low, high] = diff.bits().to_le_bytes();
+
+                encoder.encode(low, write)?;
+                encoder.encode(high, write)?;
             }
             2 => {
-                // Color0-blue
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color0.b() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color0.b()));
-                let color = self.color0.b();
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let diff_color = color.wrapping_sub(predicted_color) & 31;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let diff_color = u8::wrapping_sub(color, predicted_color) & 31;
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                predictor.backward(signals, color as f32 / 31.0);
-                encoder.encode(diff_color, write)?;
-            }
-            3 => {
-                // Color1-red
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color1.r() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color1.r()));
-                let color = self.color1.r();
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let diff_color = color.wrapping_sub(predicted_color) & 31;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let diff_color = u8::wrapping_sub(color, predicted_color) & 31;
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                predictor.backward(signals, color as f32 / 31.0);
-                encoder.encode(diff_color, write)?;
-            }
-            4 => {
-                // Color1-green
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color1.g() as f32) / 63.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color1.g()));
-                let color = self.color1.g();
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let diff_color = color.wrapping_sub(predicted_color) & 63;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 63.0).rem_euclid(63.0) as u8;
-                let diff_color = u8::wrapping_sub(color, predicted_color) & 63;
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                predictor.backward(signals, color as f32 / 63.0);
-                encoder.encode(diff_color, write)?;
-            }
-            5 => {
-                // Color1-blue
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color1.b() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color1.b()));
-                let color = self.color1.b();
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let diff_color = color.wrapping_sub(predicted_color) & 31;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let diff_color = u8::wrapping_sub(color, predicted_color) & 31;
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                predictor.backward(signals, color as f32 / 31.0);
-                encoder.encode(diff_color, write)?;
-            }
-            6 => {
                 // Texels
                 encoder.encode(self.texels[0], write)?;
                 encoder.encode(self.texels[1], write)?;
@@ -687,139 +639,89 @@ impl AnyBlock for bc1::Block {
 
     fn decompress<'a, const ASPECT: usize>(
         &mut self,
-        predictor: &mut Model,
-        kernel: [Option<&'a Self>; 8],
+        predictor: &Model,
+        kernel: [Option<&'a Self>; 15],
         decoder: &mut lzw::Decoder<u8>,
         read: &mut ReadBits<impl Read>,
     ) -> Result<(), DecompressError> {
         match ASPECT {
             0 => {
-                // Color0-red
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color0.r() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color0.r()));
-
-                let diff_color = decoder
+                // Color0
+                let low = decoder
+                    .decode_next(read)
+                    .map_err(lz78_decode_to_decompress_error)?;
+                let high = decoder
                     .decode_next(read)
                     .map_err(lz78_decode_to_decompress_error)?;
 
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let color = predicted_color.wrapping_add(diff_color) & 31;
+                let diff = Rgb565::from_bits(u16::from_le_bytes([low, high]));
+
+                let r_diff = diff.r();
+                let g_diff = diff.g();
+                let b_diff = diff.b();
+
+                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.r() as f32 / 31.0));
+                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.g() as f32 / 63.0));
+                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.b() as f32 / 31.0));
+
+                let mut kernel = [0.0; 45];
+                kernel[0..15].copy_from_slice(&red_kernel);
+                kernel[15..30].copy_from_slice(&green_kernel);
+                kernel[30..45].copy_from_slice(&blue_kernel);
 
                 let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let color = diff_color.wrapping_add(predicted_color) & 31;
-                predictor.backward(signals, color as f32 / 31.0);
+                let output = signals.output();
+                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
+                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
+                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
 
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                self.color0.set_r(color);
+                let r = r_diff.wrapping_add(r_pred) & 31;
+                let g = g_diff.wrapping_add(g_pred) & 63;
+                let b = b_diff.wrapping_add(b_pred) & 31;
+
+                self.color0.set_r(r_diff);
+                self.color0.set_g(g_diff);
+                self.color0.set_b(b_diff);
             }
             1 => {
-                // Color0-green
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color0.g() as f32) / 63.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color0.g()));
-
-                let diff_color = decoder
+                // Color1
+                let low = decoder
+                    .decode_next(read)
+                    .map_err(lz78_decode_to_decompress_error)?;
+                let high = decoder
                     .decode_next(read)
                     .map_err(lz78_decode_to_decompress_error)?;
 
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let color = predicted_color.wrapping_add(diff_color) & 63;
+                let diff = Rgb565::from_bits(u16::from_le_bytes([low, high]));
+
+                let r_diff = diff.r();
+                let g_diff = diff.g();
+                let b_diff = diff.b();
+
+                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.r() as f32 / 31.0));
+                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.g() as f32 / 63.0));
+                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.b() as f32 / 31.0));
+
+                let mut kernel = [0.0; 45];
+                kernel[0..15].copy_from_slice(&red_kernel);
+                kernel[15..30].copy_from_slice(&green_kernel);
+                kernel[30..45].copy_from_slice(&blue_kernel);
 
                 let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 63.0).rem_euclid(63.0) as u8;
-                let color = diff_color.wrapping_add(predicted_color) & 63;
-                predictor.backward(signals, color as f32 / 63.0);
+                let output = signals.output();
+                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
+                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
+                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
 
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                self.color0.set_g(color);
+                let r = r_diff.wrapping_add(r_pred) & 31;
+                let g = g_diff.wrapping_add(g_pred) & 63;
+                let b = b_diff.wrapping_add(b_pred) & 31;
+
+                self.color1.set_r(r_diff);
+                self.color1.set_g(g_diff);
+                self.color1.set_b(b_diff);
             }
             2 => {
-                // Color0-blue
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color0.b() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color0.b()));
-
-                let diff_color = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let color = predicted_color.wrapping_add(diff_color) & 31;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let color = diff_color.wrapping_add(predicted_color) & 31;
-                predictor.backward(signals, color as f32 / 31.0);
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                self.color0.set_b(color);
-            }
-            3 => {
-                // Color1-red
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color1.r() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color1.r()));
-
-                let diff_color = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let color = predicted_color.wrapping_add(diff_color) & 31;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let color = diff_color.wrapping_add(predicted_color) & 31;
-                predictor.backward(signals, color as f32 / 31.0);
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                self.color1.set_r(color);
-            }
-            4 => {
-                // Color1-green
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color1.g() as f32) / 63.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color1.g()));
-
-                let diff_color = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let color = predicted_color.wrapping_add(diff_color) & 63;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 63.0).rem_euclid(63.0) as u8;
-                let color = diff_color.wrapping_add(predicted_color) & 63;
-                predictor.backward(signals, color as f32 / 63.0);
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                self.color1.set_g(color);
-            }
-            5 => {
-                // Color1-blue
-                let kernel = kernel.map(|b| b.map_or(0.0, |b| (b.color1.b() as f32) / 31.0));
-                // let kernel = kernel.map(|b| b.map_or(0, |b| b.color1.b()));
-
-                let diff_color = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-
-                // let predicted_color = predict_color_u8(kernel[0], kernel[2], kernel[6]);
-                // let color = predicted_color.wrapping_add(diff_color) & 31;
-
-                let signals = predictor.forward(kernel);
-                let predicted_color = (signals.output() * 31.0).rem_euclid(31.0) as u8;
-                let color = diff_color.wrapping_add(predicted_color) & 31;
-                predictor.backward(signals, color as f32 / 31.0);
-
-                // eprintln!("PRED: {}", predicted_color);
-                // eprintln!("DIFF: {}", diff_color);
-                self.color1.set_b(color);
-            }
-            6 => {
                 // Texels
                 self.texels[0] = decoder
                     .decode_next(read)
@@ -842,14 +744,16 @@ impl AnyBlock for bc1::Block {
 }
 
 pub fn compress_bc1_texture(
+    predictor: &Model,
     extent: Extent,
     blocks: &[bc1::Block],
     write: (impl Write + Seek),
 ) -> std::io::Result<()> {
-    compress_texture(extent, blocks, write)
+    compress_texture(predictor, extent, blocks, write)
 }
 
 fn compress_texture<B>(
+    predictor: &Model,
     extent: Extent,
     blocks: &[B],
     mut write: (impl Write + Seek),
@@ -868,6 +772,7 @@ where
         format: Format::BC1,
         footprint,
         extent,
+        model: *predictor,
     };
 
     let start = write.seek(SeekFrom::Current(0))?;
@@ -912,7 +817,7 @@ where
 
                 write.seek(SeekFrom::Start(next_data_pos))?;
                 compress_any_block::<B>(
-                    x_start, x_end, y_start, y_end, z, raw_size, blocks, &mut write,
+                    predictor, x_start, x_end, y_start, y_end, z, raw_size, blocks, &mut write,
                 )?;
                 next_data_pos = write.seek(SeekFrom::Current(0))?;
             }
@@ -923,7 +828,8 @@ where
 }
 
 pub fn compress_bc1_blocks(
-    header: JackalHeader,
+    predictor: &Model,
+    header: &JackalHeader,
     super_pos: [u32; 3],
     jackal_block: JackalBlock,
     blocks: &[bc1::Block],
@@ -948,10 +854,13 @@ pub fn compress_bc1_blocks(
     let z = super_pos[2];
 
     write.seek(SeekFrom::Start(jackal_block.offset))?;
-    compress_any_block(x_start, x_end, y_start, y_end, z, raw_size, blocks, write)
+    compress_any_block(
+        predictor, x_start, x_end, y_start, y_end, z, raw_size, blocks, write,
+    )
 }
 
 fn compress_any_block<B>(
+    predictor: &Model,
     x_start: u32,
     x_end: u32,
     y_start: u32,
@@ -964,7 +873,6 @@ fn compress_any_block<B>(
 where
     B: AnyBlock,
 {
-    let mut predictor = Model::new();
     let mut encoder = lzw::Encoder::<B::EncoderElement>::new();
     let mut write = WriteBits::new(write);
 
@@ -976,7 +884,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -989,7 +897,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -1002,7 +910,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -1015,7 +923,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -1028,7 +936,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -1041,7 +949,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -1054,7 +962,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -1067,7 +975,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        predictor,
         &mut encoder,
         &mut write,
     )?;
@@ -1086,7 +994,7 @@ fn compress_any_block_aspect<B, const ASPECT: usize>(
     z: u32,
     blocks: &[B],
     raw_size: [u32; 3],
-    predictor: &mut Model,
+    predictor: &Model,
     encoder: &mut lzw::Encoder<B::EncoderElement>,
     write: &mut WriteBits<impl Write>,
 ) -> std::io::Result<()>
@@ -1097,50 +1005,48 @@ where
         return Ok(());
     }
 
-    for y in y_start..y_end {
-        for x in x_start..x_end {
-            let index = x + y * raw_size[0] + z * raw_size[0] * raw_size[1];
-            let block = &blocks[index as usize];
+    let width = x_end - x_start;
+    let height = y_end - y_start;
 
-            let mut kernel = [None; 8];
+    debug_assert!(width <= u16::MAX as u32);
+    debug_assert!(height <= u16::MAX as u32);
 
-            if x > 0 {
-                kernel[0] = Some(&blocks[index as usize - 1]);
-            }
-            if x > 1 {
-                kernel[1] = Some(&blocks[index as usize - 2]);
-            } else {
-                kernel[1] = kernel[0];
-            }
-            if y > 0 {
-                kernel[2] = Some(&blocks[index as usize - raw_size[0] as usize])
-            }
-            if y > 1 {
-                kernel[3] = Some(&blocks[index as usize - (raw_size[0] as usize) * 2])
-            } else {
-                kernel[3] = kernel[2];
-            }
-            if x > 0 && y > 0 {
-                kernel[4] = Some(&blocks[index as usize - raw_size[0] as usize - 1]);
-            }
-            if x > 1 && y > 0 {
-                kernel[5] = Some(&blocks[index as usize - raw_size[0] as usize - 2]);
-            } else {
-                kernel[5] = kernel[4];
-            }
-            if x > 0 && y > 1 {
-                kernel[6] = Some(&blocks[index as usize - (raw_size[0] as usize) * 2 - 1]);
-            } else {
-                kernel[6] = kernel[4];
-            }
-            if x > 1 && y > 1 {
-                kernel[7] = Some(&blocks[index as usize - (raw_size[0] as usize) * 2 - 2]);
-            } else {
-                kernel[7] = kernel[4];
-            }
+    let bound_curve = BoundZCurve::new(width as u16, height as u16);
+    // let bound_curve = (0..height * width).map(|index| {
+    //     let x = index % width;
+    //     let y = index / width;
+    //     (x, y)
+    // });
 
-            block.compress::<ASPECT>(predictor, kernel, encoder, write)?;
+    for (x0, y0) in bound_curve {
+        let x = x_start + x0 as u32;
+        let y = y_start + y0 as u32;
+        let width = raw_size[0] as usize;
+        let height = raw_size[1] as usize;
+        let index = x as usize + y as usize * width + z as usize * width * height;
+        let block = &blocks[index as usize];
+
+        let mut kernel: [Option<&B>; 15] = [None; 15];
+
+        let mut ki = 0;
+        for dx in 0..4 {
+            for dy in 0..4 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+
+                let kx = x.saturating_sub(dx);
+                let ky = y.saturating_sub(dy);
+
+                if kx != x || ky != y {
+                    kernel[ki] = Some(&blocks[ky as usize * width + kx as usize]);
+                }
+
+                ki += 1;
+            }
         }
+
+        block.compress::<ASPECT>(predictor, kernel, encoder, write)?;
     }
 
     Ok(())
@@ -1197,7 +1103,7 @@ pub fn read_jackal_blocks(
 /// `jackal_block` is jackal_block data.
 /// `blocks` array of pre-allocated blocks of all jackal_blocks.
 pub fn decompress_bc1_blocks(
-    header: JackalHeader,
+    header: &JackalHeader,
     super_pos: [u32; 3],
     jackal_block: JackalBlock,
     blocks: &mut [bc1::Block],
@@ -1207,7 +1113,7 @@ pub fn decompress_bc1_blocks(
 }
 
 fn decompress_any_block<B>(
-    header: JackalHeader,
+    header: &JackalHeader,
     super_pos: [u32; 3],
     jackal_block: JackalBlock,
     blocks: &mut [B],
@@ -1236,7 +1142,6 @@ where
 
     read.seek(SeekFrom::Start(jackal_block.offset))?;
 
-    let mut predictor = Model::new();
     let mut decoder = lzw::Decoder::<B::EncoderElement>::new();
     let mut read = ReadBits::new(read);
 
@@ -1248,7 +1153,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1261,7 +1166,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1274,7 +1179,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1287,7 +1192,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1300,7 +1205,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1313,7 +1218,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1326,7 +1231,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1339,7 +1244,7 @@ where
         z,
         blocks,
         raw_size,
-        &mut predictor,
+        &header.model,
         &mut decoder,
         &mut read,
     )?;
@@ -1357,7 +1262,7 @@ fn decompress_any_block_aspect<B, const ASPECT: usize>(
     z: u32,
     blocks: &mut [B],
     raw_size: [u32; 3],
-    predictor: &mut Model,
+    predictor: &Model,
     decoder: &mut lzw::Decoder<B::EncoderElement>,
     read: &mut ReadBits<impl Read>,
 ) -> Result<(), DecompressError>
@@ -1368,42 +1273,50 @@ where
         return Ok(());
     }
 
-    for y in y_start..y_end {
-        for x in x_start..x_end {
-            let index = x + y * raw_size[0] + z * raw_size[0] * raw_size[1];
-            let mut block = blocks[index as usize];
+    let width = x_end - x_start;
+    let height = y_end - y_start;
 
-            let mut kernel = [None; 8];
+    debug_assert!(width <= u16::MAX as u32);
+    debug_assert!(height <= u16::MAX as u32);
 
-            if x > 0 {
-                kernel[0] = Some(&blocks[index as usize - 1]);
-            }
-            if x > 1 {
-                kernel[1] = Some(&blocks[index as usize - 2]);
-            }
-            if y > 0 {
-                kernel[2] = Some(&blocks[index as usize - raw_size[0] as usize])
-            }
-            if y > 1 {
-                kernel[3] = Some(&blocks[index as usize - (raw_size[0] as usize) * 2])
-            }
-            if x > 0 && y > 0 {
-                kernel[4] = Some(&blocks[index as usize - raw_size[0] as usize - 1]);
-            }
-            if x > 1 && y > 0 {
-                kernel[5] = Some(&blocks[index as usize - raw_size[0] as usize - 2]);
-            }
-            if x > 0 && y > 1 {
-                kernel[6] = Some(&blocks[index as usize - (raw_size[0] as usize) * 2 - 1]);
-            }
-            if x > 1 && y > 1 {
-                kernel[7] = Some(&blocks[index as usize - (raw_size[0] as usize) * 2 - 2]);
-            }
+    let bound_curve = BoundZCurve::new(width as u16, height as u16);
+    // let bound_curve = (0..height * width).map(|index| {
+    //     let x = index % width;
+    //     let y = index / width;
+    //     (x, y)
+    // });
 
-            block.decompress::<ASPECT>(predictor, kernel, decoder, read)?;
+    for (x0, y0) in bound_curve {
+        let x = x_start + x0 as u32;
+        let y = y_start + y0 as u32;
+        let width = raw_size[0] as usize;
+        let height = raw_size[1] as usize;
+        let index = x as usize + y as usize * width + z as usize * width * height;
+        let mut block = blocks[index];
 
-            blocks[index as usize] = block;
+        let mut kernel: [Option<&B>; 15] = [None; 15];
+
+        let mut ki = 0;
+        for dx in 0..4 {
+            for dy in 0..4 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+
+                let kx = x.saturating_sub(dx);
+                let ky = y.saturating_sub(dy);
+
+                if kx != x || ky != y {
+                    kernel[ki] = Some(&blocks[ky as usize * width + kx as usize]);
+                }
+
+                ki += 1;
+            }
         }
+
+        block.decompress::<ASPECT>(predictor, kernel, decoder, read)?;
+
+        blocks[index as usize] = block;
     }
 
     Ok(())
@@ -1424,7 +1337,7 @@ pub fn decompress_bc1_texture(
         for y in 0..jackal_blocks_extent[1] {
             for x in 0..jackal_blocks_extent[0] {
                 decompress_bc1_blocks(
-                    header,
+                    &header,
                     [x, y, z],
                     jackal_blocks[(x
                         + y * jackal_blocks_extent[0]
@@ -1459,8 +1372,11 @@ fn roundtrip() {
 
     // eprintln!("\n\nCompress");
 
+    let predictor = nn::Model::new();
+
     let mut output = Vec::new();
     compress_bc1_texture(
+        &predictor,
         Extent::D2 {
             width: 2,
             height: 1,

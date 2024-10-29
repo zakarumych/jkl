@@ -5,4 +5,5 @@ pub mod jackal;
 mod lz78;
 mod lzw;
 pub mod math;
-mod nn;
+pub mod nn;
+pub mod z_curve;

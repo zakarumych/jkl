@@ -8,3 +8,4 @@ license.workspace = true
 jkl = { path = ".." }
 eframe = "0.29"
 image = "=0.25.2"
+rand = "0.8"
