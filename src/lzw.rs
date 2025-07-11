@@ -24,6 +24,8 @@ pub(crate) trait Element: Copy + Eq {
     fn into_u32(self) -> u32;
 
     fn from_u32(value: u32) -> Self;
+
+    fn close(&self, rhs: &Self) -> bool;
 }
 
 impl Element for u8 {
@@ -43,6 +45,10 @@ impl Element for u8 {
     fn from_u32(value: u32) -> Self {
         debug_assert!(value <= u8::MAX as u32);
         value as u8
+    }
+
+    fn close(&self, rhs: &Self) -> bool {
+        self.wrapping_sub(*rhs).wrapping_add(1) < 2
     }
 }
 
@@ -64,6 +70,10 @@ impl Element for u16 {
         debug_assert!(value <= u16::MAX as u32);
         value as u16
     }
+
+    fn close(&self, rhs: &Self) -> bool {
+        self.wrapping_sub(*rhs).wrapping_add(2) < 4
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -75,6 +85,8 @@ struct Entry<T> {
 pub struct Encoder<T> {
     entries: Vec<Entry<T>>,
     prefix: Option<u32>,
+    subbits: u128,
+    subbits_magnitude: u128,
 }
 
 impl<T> Encoder<T> {
@@ -82,6 +94,8 @@ impl<T> Encoder<T> {
         Encoder {
             entries: Vec::new(),
             prefix: None,
+            subbits: 0,
+            subbits_magnitude: 1,
         }
     }
 }
@@ -97,6 +111,12 @@ where
             if self.entries[i as usize] == entry {
                 return Some(i + Self::T_ENTRIES);
             }
+
+            // if self.entries[i as usize] == entry
+            //     && self.entries[i as usize].element.close(&entry.element)
+            // {
+            //     return Some(i + Self::T_ENTRIES);
+            // }
         }
 
         None
@@ -104,6 +124,18 @@ where
 
     fn insert(&mut self, entry: Entry<T>) {
         self.entries.push(entry);
+    }
+
+    fn flush_subbits(&mut self, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
+        if self.subbits_magnitude > 0 {
+            let bits = 128 - self.subbits_magnitude.leading_zeros();
+            let subbit_bytes = self.subbits.to_le_bytes();
+            writer.write_bits(&subbit_bytes, 0, bits as usize)?;
+
+            self.subbits_magnitude = 1;
+            self.subbits = 0;
+        }
+        Ok(())
     }
 
     fn write(&mut self, index: u32, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
@@ -121,9 +153,29 @@ where
         Ok(())
     }
 
-    pub fn encode(&mut self, input: T, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
-        // eprintln!("{}", input.into_u32());
+    fn write2(&mut self, index: u32, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
+        let size = self.entries.len() as u128 + Self::T_ENTRIES as u128;
+        debug_assert!((index as u128) < size);
 
+        match size.checked_mul(self.subbits_magnitude) {
+            None => {
+                self.flush_subbits(writer)?;
+                self.subbits = index as u128;
+                self.subbits_magnitude = size;
+            }
+            Some(next_magnitude) => {
+                self.subbits *= size;
+                self.subbits += index as u128;
+                self.subbits_magnitude = next_magnitude;
+            }
+        }
+
+        // eprintln!("{} - {}", bits, index);
+
+        Ok(())
+    }
+
+    pub fn encode(&mut self, input: T, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
         let Some(prefix) = self.prefix else {
             self.prefix = Some(input.into_u32());
             return Ok(());
@@ -137,7 +189,7 @@ where
 
         match index {
             None => {
-                self.write(prefix, writer)?;
+                self.write2(prefix, writer)?;
                 self.insert(entry);
                 self.prefix = Some(input.into_u32());
             }
@@ -153,7 +205,8 @@ where
         let Some(prefix) = self.prefix else {
             return Ok(());
         };
-        self.write(prefix, writer)?;
+        self.write2(prefix, writer)?;
+        self.flush_subbits(writer)?;
         Ok(())
     }
 }

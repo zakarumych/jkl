@@ -1,7 +1,7 @@
 //! All the math functions are implemented here.
 
 use std::{
-    hash::{Hash, Hasher},
+    hash::Hash,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
@@ -3109,7 +3109,7 @@ impl Rgb565 {
     pub const WHITE: Rgb565 = Rgb565(0b11111_111111_11111);
     pub const BLACK: Rgb565 = Rgb565(0);
 
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
         assert!(r <= 31, "Red channel must be in range 0..=31");
         assert!(g <= 63, "Green channel must be in range 0..=63");
         assert!(b <= 31, "Blue channel must be in range 0..=31");
@@ -3132,6 +3132,58 @@ impl Rgb565 {
         Rgb565(bits)
     }
 
+    pub const fn bits_interleaved(&self) -> u16 {
+        let r = self.r() as u16;
+        let g = self.g() as u16;
+        let b = self.b() as u16;
+
+        let mut bits = 0;
+
+        bits |= (g & 0b1) << 0;
+        bits |= (b & 0b1) << 1;
+        bits |= (r & 0b1) << 2;
+        bits |= (g & 0b10) << 2;
+        bits |= (b & 0b10) << 3;
+        bits |= (r & 0b10) << 4;
+        bits |= (g & 0b100) << 4;
+        bits |= (b & 0b100) << 5;
+        bits |= (r & 0b100) << 6;
+        bits |= (g & 0b1000) << 6;
+        bits |= (b & 0b1000) << 7;
+        bits |= (r & 0b1000) << 8;
+        bits |= (g & 0b10000) << 8;
+        bits |= (b & 0b10000) << 9;
+        bits |= (r & 0b10000) << 10;
+        bits |= (g & 0b100000) << 10;
+
+        bits
+    }
+
+    pub const fn from_bits_interleaved(bits: u16) -> Self {
+        let mut r = 0;
+        let mut g = 0;
+        let mut b = 0;
+
+        g |= (bits & 0b1) >> 0;
+        b |= (bits & 0b10) >> 1;
+        r |= (bits & 0b100) >> 2;
+        g |= (bits & 0b1000) >> 2;
+        b |= (bits & 0b10000) >> 3;
+        r |= (bits & 0b100000) >> 4;
+        g |= (bits & 0b1000000) >> 4;
+        b |= (bits & 0b10000000) >> 5;
+        r |= (bits & 0b100000000) >> 6;
+        g |= (bits & 0b1000000000) >> 6;
+        b |= (bits & 0b10000000000) >> 7;
+        r |= (bits & 0b100000000000) >> 8;
+        g |= (bits & 0b1000000000000) >> 8;
+        b |= (bits & 0b10000000000000) >> 9;
+        r |= (bits & 0b100000000000000) >> 10;
+        g |= (bits & 0b1000000000000000) >> 10;
+
+        Rgb565::new(r as u8, g as u8, b as u8)
+    }
+
     /// Return color from raw bytes.
     #[inline(always)]
     pub const fn from_bytes(bytes: [u8; 2]) -> Self {
@@ -3145,17 +3197,17 @@ impl Rgb565 {
     }
 
     #[inline(always)]
-    pub fn r(&self) -> u8 {
+    pub const fn r(&self) -> u8 {
         (self.0 >> 11) as u8
     }
 
     #[inline(always)]
-    pub fn g(&self) -> u8 {
+    pub const fn g(&self) -> u8 {
         ((self.0 >> 5) & 0b111111) as u8
     }
 
     #[inline(always)]
-    pub fn b(&self) -> u8 {
+    pub const fn b(&self) -> u8 {
         (self.0 & 0b11111) as u8
     }
 
@@ -3372,84 +3424,84 @@ impl From<Vec4> for Rgba32F {
     }
 }
 
-pub(crate) fn predict_color_u8(left: u8, top: u8, top_left: u8) -> u8 {
-    // let target = left.wrapping_add(top).wrapping_sub(top_left);
+// pub(crate) fn predict_color_u8(left: u8, top: u8, top_left: u8) -> u8 {
+//     // let target = left.wrapping_add(top).wrapping_sub(top_left);
 
-    // let left_dist = if left > target {
-    //     left - target
-    // } else {
-    //     target - left
-    // };
+//     // let left_dist = if left > target {
+//     //     left - target
+//     // } else {
+//     //     target - left
+//     // };
 
-    // let top_dist = if top > target {
-    //     top - target
-    // } else {
-    //     target - top
-    // };
+//     // let top_dist = if top > target {
+//     //     top - target
+//     // } else {
+//     //     target - top
+//     // };
 
-    // let top_left = if top_left > target {
-    //     top_left - target
-    // } else {
-    //     target - top_left
-    // };
+//     // let top_left = if top_left > target {
+//     //     top_left - target
+//     // } else {
+//     //     target - top_left
+//     // };
 
-    // if left_dist < top_dist {
-    //     if left_dist < top_left {
-    //         return left;
-    //     } else {
-    //         return top_left;
-    //     }
-    // } else {
-    //     if top_dist < top_left {
-    //         return top;
-    //     } else {
-    //         return top_left;
-    //     }
-    // }
+//     // if left_dist < top_dist {
+//     //     if left_dist < top_left {
+//     //         return left;
+//     //     } else {
+//     //         return top_left;
+//     //     }
+//     // } else {
+//     //     if top_dist < top_left {
+//     //         return top;
+//     //     } else {
+//     //         return top_left;
+//     //     }
+//     // }
 
-    // let v_diff = if top_left > left {
-    //     top_left - left
-    // } else {
-    //     left - top_left
-    // };
+//     // let v_diff = if top_left > left {
+//     //     top_left - left
+//     // } else {
+//     //     left - top_left
+//     // };
 
-    // let h_diff = if top_left > top {
-    //     top_left - top
-    // } else {
-    //     top - top_left
-    // };
+//     // let h_diff = if top_left > top {
+//     //     top_left - top
+//     // } else {
+//     //     top - top_left
+//     // };
 
-    // if v_diff > 10 || h_diff > 10 {
-    if top_left > left && top_left > top {
-        if top >= left {
-            top
-        } else {
-            left
-        }
-    } else if top_left < left && top_left < top {
-        if top >= left {
-            left
-        } else {
-            top
-        }
-    } else {
-        left.wrapping_add(top).wrapping_sub(top_left)
-    }
-    // } else {
-    //     left.wrapping_add(top).wrapping_sub(top_left)
-    // }
-}
+//     // if v_diff > 10 || h_diff > 10 {
+//     if top_left > left && top_left > top {
+//         if top >= left {
+//             top
+//         } else {
+//             left
+//         }
+//     } else if top_left < left && top_left < top {
+//         if top >= left {
+//             left
+//         } else {
+//             top
+//         }
+//     } else {
+//         left.wrapping_add(top).wrapping_sub(top_left)
+//     }
+//     // } else {
+//     //     left.wrapping_add(top).wrapping_sub(top_left)
+//     // }
+// }
 
-pub(crate) trait PredictableColor: Copy {
-    fn predict_color(left: Self, top: Self, top_left: Self) -> Self;
-}
+// pub(crate) trait PredictableColor: Copy {
+//     fn predict_color(left: Self, top: Self, top_left: Self) -> Self;
+// }
 
-impl PredictableColor for Rgb565 {
-    fn predict_color(left: Self, top: Self, top_left: Self) -> Self {
-        Rgb565::new(
-            predict_color_u8(left.r(), top.r(), top_left.r()) & 31,
-            predict_color_u8(left.g(), top.g(), top_left.g()) & 63,
-            predict_color_u8(left.b(), top.b(), top_left.b()) & 31,
-        )
-    }
-}
+// impl PredictableColor for Rgb565 {
+//     fn predict_color(left: Self, top: Self, top_left: Self) -> Self {
+//         Rgb565::new(
+//             predict_color_u8(left.r(), top.r(), top_left.r()) & 31,
+//             predict_color_u8(left.g(), top.g(), top_left.g()) & 63,
+//             predict_color_u8(left.b(), top.b(), top_left.b()) & 31,
+//         )
+//     }
+// }

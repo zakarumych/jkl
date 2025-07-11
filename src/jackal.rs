@@ -14,15 +14,7 @@ use std::{
     u32,
 };
 
-use crate::{
-    bc1,
-    bits::{ReadBits, WriteBits},
-    bytes::LeBytes,
-    lzw,
-    math::{predict_color_u8, PredictableColor, Rgb565},
-    nn::{self, Model},
-    z_curve::BoundZCurve,
-};
+use crate::{bc1, math::Rgb565};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DecodeError {
@@ -48,37 +40,39 @@ pub enum DecodeError {
 pub struct Footprint(u16, u16);
 
 fn footprint_from_size(size: u32) -> u16 {
-    return 1024;
+    // return 1024;
     match size {
         0 => unreachable!(),
         1..64 => 16,
-        64..256 => 32,
-        256..1024 => 64,
-        1024..4096 => 128,
-        _ => 256,
+        64..128 => 32,
+        128..256 => 64,
+        256..512 => 128,
+        512..1024 => 256,
+        _ => 512,
     }
 }
 
 impl Footprint {
-    const COUNT: u32 = 25;
+    const COUNT: u32 = 36;
 
     fn encode(&self) -> u32 {
-        return 0;
+        // return 0;
         let size = |x| match x {
             16 => 0,
             32 => 1,
             64 => 2,
             128 => 3,
             256 => 4,
+            512 => 5,
             _ => unreachable!(),
         };
 
-        size(self.0) * 5 + size(self.1)
+        size(self.0) * 6 + size(self.1)
     }
 
     fn decode(id: u32) -> Self {
         assert!(id < Self::COUNT);
-        return Footprint(1024, 1024);
+        // return Footprint(1024, 1024);
 
         let size = |x| match x {
             0 => 16,
@@ -86,10 +80,11 @@ impl Footprint {
             2 => 64,
             3 => 128,
             4 => 256,
+            5 => 512,
             _ => unreachable!(),
         };
 
-        Footprint(size(id / 5), size(id % 5))
+        Footprint(size(id / 6), size(id % 6))
     }
 
     fn from_size(width: u32, height: u32) -> Self {
@@ -280,12 +275,10 @@ pub struct JackalHeader {
 
     /// Extent of the image. Decoded based on dimensions.
     extent: Extent,
-
-    model: nn::Model,
 }
 
 impl JackalHeader {
-    const BYTES_SIZE: usize = 20 + nn::Model::BYTES_SIZE;
+    const BYTES_SIZE: usize = 20;
 
     fn write_to(&self, mut write: impl Write) -> std::io::Result<()> {
         let dimensions = self.extent.dimensions();
@@ -305,7 +298,6 @@ impl JackalHeader {
         bytes[12..16].copy_from_slice(&raw_size[1].to_le_bytes());
         bytes[16..20].copy_from_slice(&raw_size[2].to_le_bytes());
         write.write_all(&bytes)?;
-        self.model.write_to(&mut write)?;
         Ok(())
     }
 
@@ -335,14 +327,11 @@ impl JackalHeader {
         let raw_size = [width, height, depth];
         let extent = Extent::from_raw_size(raw_size, config.dimensions)?;
 
-        let model = nn::Model::read_from(&mut read)?;
-
         Ok(JackalHeader {
             levels: config.levels,
             format: config.format,
             footprint: config.footprint,
             extent,
-            model,
         })
     }
 
@@ -426,7 +415,7 @@ pub enum Extent {
 }
 
 impl Extent {
-    fn width(&self) -> u32 {
+    pub fn width(&self) -> u32 {
         match *self {
             Extent::D1 { width } => width,
             Extent::D2 { width, .. } => width,
@@ -436,7 +425,7 @@ impl Extent {
         }
     }
 
-    fn height(&self) -> u32 {
+    pub fn height(&self) -> u32 {
         match *self {
             Extent::D1 { .. } => 1,
             Extent::D2 { height, .. } => height,
@@ -446,7 +435,7 @@ impl Extent {
         }
     }
 
-    fn depth(&self) -> u32 {
+    pub fn depth(&self) -> u32 {
         match *self {
             Extent::D1 { .. } => 1,
             Extent::D2 { .. } => 1,
@@ -456,7 +445,7 @@ impl Extent {
         }
     }
 
-    fn layers(&self) -> u32 {
+    pub fn layers(&self) -> u32 {
         match *self {
             Extent::D1 { .. } => 1,
             Extent::D2 { .. } => 1,
@@ -476,7 +465,7 @@ impl Extent {
         }
     }
 
-    fn raw_size(self) -> [u32; 3] {
+    pub fn raw_size(self) -> [u32; 3] {
         match self {
             Extent::D1 { width } => [width, 1, 1],
             Extent::D2 { width, height } => [width, height, 1],
@@ -537,99 +526,40 @@ impl Extent {
 trait AnyBlock: Copy + 'static + Sized {
     const ASPECTS: usize;
 
-    type EncoderElement: Copy + Eq + LeBytes + lzw::Element;
-
     /// Compress one block aspect.
     fn compress<'a, const ASPECT: usize>(
         &self,
-        predictor: &Model,
-        kernel: [Option<&'a Self>; 15],
-        encoder: &mut lzw::Encoder<Self::EncoderElement>,
-        write: &mut WriteBits<impl Write>,
+        encoder: &mut brotli::CompressorWriter<impl Write>,
     ) -> std::io::Result<()>;
 
     /// Decompress one block aspect.
     fn decompress<'a, const ASPECT: usize>(
         &mut self,
-        predictor: &Model,
-        kernel: [Option<&'a Self>; 15],
-        decoder: &mut lzw::Decoder<Self::EncoderElement>,
-        read: &mut ReadBits<impl Read>,
+        decoder: &mut brotli::reader::Decompressor<impl Read>,
     ) -> Result<(), DecompressError>;
 }
 
 impl AnyBlock for bc1::Block {
     const ASPECTS: usize = 3;
-    type EncoderElement = u8;
 
     fn compress<'a, const ASPECT: usize>(
         &self,
-        predictor: &Model,
-        kernel: [Option<&'a Self>; 15],
-        encoder: &mut lzw::Encoder<u8>,
-        write: &mut WriteBits<impl Write>,
+        encoder: &mut brotli::CompressorWriter<impl Write>,
     ) -> std::io::Result<()> {
         match ASPECT {
             0 => {
                 // Color0
-                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.r() as f32 / 31.0));
-                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.g() as f32 / 63.0));
-                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.b() as f32 / 31.0));
-
-                let mut kernel = [0.0; 45];
-                kernel[0..15].copy_from_slice(&red_kernel);
-                kernel[15..30].copy_from_slice(&green_kernel);
-                kernel[30..45].copy_from_slice(&blue_kernel);
-
-                let signals = predictor.forward(kernel);
-                let output = signals.output();
-                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
-                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
-                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
-
-                let r_diff = self.color0.r().wrapping_sub(r_pred) & 31;
-                let g_diff = self.color0.g().wrapping_sub(g_pred) & 63;
-                let b_diff = self.color0.b().wrapping_sub(b_pred) & 31;
-
-                let diff = self.color0; //Rgb565::new(r_diff, g_diff, b_diff);
-                let [low, high] = diff.bits().to_le_bytes();
-
-                encoder.encode(low, write)?;
-                encoder.encode(high, write)?;
+                let bytes = self.color0.bits().to_le_bytes();
+                encoder.write_all(&bytes)?;
             }
             1 => {
                 // Color1
-                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.r() as f32 / 31.0));
-                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.g() as f32 / 63.0));
-                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.b() as f32 / 31.0));
-
-                let mut kernel = [0.0; 45];
-                kernel[0..15].copy_from_slice(&red_kernel);
-                kernel[15..30].copy_from_slice(&green_kernel);
-                kernel[30..45].copy_from_slice(&blue_kernel);
-
-                let signals = predictor.forward(kernel);
-                let output = signals.output();
-                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
-                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
-                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
-
-                let r_diff = self.color1.r().wrapping_sub(r_pred) & 31;
-                let g_diff = self.color1.g().wrapping_sub(g_pred) & 63;
-                let b_diff = self.color1.b().wrapping_sub(b_pred) & 31;
-
-                let diff = self.color1; //Rgb565::new(r_diff, g_diff, b_diff);
-                let [low, high] = diff.bits().to_le_bytes();
-
-                encoder.encode(low, write)?;
-                encoder.encode(high, write)?;
+                let bytes = self.color1.bits().to_le_bytes();
+                encoder.write_all(&bytes)?;
             }
             2 => {
                 // Texels
-                encoder.encode(self.texels[0], write)?;
-                encoder.encode(self.texels[1], write)?;
-                encoder.encode(self.texels[2], write)?;
-                encoder.encode(self.texels[3], write)?;
+                encoder.write_all(&self.texels)?;
             }
             _ => unreachable!(),
         }
@@ -639,102 +569,26 @@ impl AnyBlock for bc1::Block {
 
     fn decompress<'a, const ASPECT: usize>(
         &mut self,
-        predictor: &Model,
-        kernel: [Option<&'a Self>; 15],
-        decoder: &mut lzw::Decoder<u8>,
-        read: &mut ReadBits<impl Read>,
+        decoder: &mut brotli::reader::Decompressor<impl Read>,
     ) -> Result<(), DecompressError> {
         match ASPECT {
             0 => {
                 // Color0
-                let low = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-                let high = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
+                let mut bytes = [0; 2];
+                decoder.read_exact(&mut bytes)?;
 
-                let diff = Rgb565::from_bits(u16::from_le_bytes([low, high]));
-
-                let r_diff = diff.r();
-                let g_diff = diff.g();
-                let b_diff = diff.b();
-
-                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.r() as f32 / 31.0));
-                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.g() as f32 / 63.0));
-                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color0.b() as f32 / 31.0));
-
-                let mut kernel = [0.0; 45];
-                kernel[0..15].copy_from_slice(&red_kernel);
-                kernel[15..30].copy_from_slice(&green_kernel);
-                kernel[30..45].copy_from_slice(&blue_kernel);
-
-                let signals = predictor.forward(kernel);
-                let output = signals.output();
-                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
-                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
-                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
-
-                let r = r_diff.wrapping_add(r_pred) & 31;
-                let g = g_diff.wrapping_add(g_pred) & 63;
-                let b = b_diff.wrapping_add(b_pred) & 31;
-
-                self.color0.set_r(r_diff);
-                self.color0.set_g(g_diff);
-                self.color0.set_b(b_diff);
+                self.color0 = Rgb565::from_bits_interleaved(u16::from_le_bytes(bytes));
             }
             1 => {
                 // Color1
-                let low = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-                let high = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
+                let mut bytes = [0; 2];
+                decoder.read_exact(&mut bytes)?;
 
-                let diff = Rgb565::from_bits(u16::from_le_bytes([low, high]));
-
-                let r_diff = diff.r();
-                let g_diff = diff.g();
-                let b_diff = diff.b();
-
-                let red_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.r() as f32 / 31.0));
-                let green_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.g() as f32 / 63.0));
-                let blue_kernel = kernel.map(|b| b.map_or(0.0, |b| b.color1.b() as f32 / 31.0));
-
-                let mut kernel = [0.0; 45];
-                kernel[0..15].copy_from_slice(&red_kernel);
-                kernel[15..30].copy_from_slice(&green_kernel);
-                kernel[30..45].copy_from_slice(&blue_kernel);
-
-                let signals = predictor.forward(kernel);
-                let output = signals.output();
-                let r_pred = (output[0] * 31.0).clamp(0.0, 31.0) as u8;
-                let g_pred = (output[1] * 63.0).clamp(0.0, 63.0) as u8;
-                let b_pred = (output[2] * 31.0).clamp(0.0, 31.0) as u8;
-
-                let r = r_diff.wrapping_add(r_pred) & 31;
-                let g = g_diff.wrapping_add(g_pred) & 63;
-                let b = b_diff.wrapping_add(b_pred) & 31;
-
-                self.color1.set_r(r_diff);
-                self.color1.set_g(g_diff);
-                self.color1.set_b(b_diff);
+                self.color1 = Rgb565::from_bits_interleaved(u16::from_le_bytes(bytes));
             }
             2 => {
                 // Texels
-                self.texels[0] = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-                self.texels[1] = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-                self.texels[2] = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
-                self.texels[3] = decoder
-                    .decode_next(read)
-                    .map_err(lz78_decode_to_decompress_error)?;
+                decoder.read_exact(&mut self.texels)?;
             }
             _ => unreachable!(),
         }
@@ -744,16 +598,14 @@ impl AnyBlock for bc1::Block {
 }
 
 pub fn compress_bc1_texture(
-    predictor: &Model,
     extent: Extent,
     blocks: &[bc1::Block],
     write: (impl Write + Seek),
 ) -> std::io::Result<()> {
-    compress_texture(predictor, extent, blocks, write)
+    compress_texture(extent, blocks, write)
 }
 
 fn compress_texture<B>(
-    predictor: &Model,
     extent: Extent,
     blocks: &[B],
     mut write: (impl Write + Seek),
@@ -772,7 +624,6 @@ where
         format: Format::BC1,
         footprint,
         extent,
-        model: *predictor,
     };
 
     let start = write.seek(SeekFrom::Current(0))?;
@@ -817,7 +668,7 @@ where
 
                 write.seek(SeekFrom::Start(next_data_pos))?;
                 compress_any_block::<B>(
-                    predictor, x_start, x_end, y_start, y_end, z, raw_size, blocks, &mut write,
+                    x_start, x_end, y_start, y_end, z, raw_size, blocks, &mut write,
                 )?;
                 next_data_pos = write.seek(SeekFrom::Current(0))?;
             }
@@ -828,7 +679,6 @@ where
 }
 
 pub fn compress_bc1_blocks(
-    predictor: &Model,
     header: &JackalHeader,
     super_pos: [u32; 3],
     jackal_block: JackalBlock,
@@ -854,13 +704,10 @@ pub fn compress_bc1_blocks(
     let z = super_pos[2];
 
     write.seek(SeekFrom::Start(jackal_block.offset))?;
-    compress_any_block(
-        predictor, x_start, x_end, y_start, y_end, z, raw_size, blocks, write,
-    )
+    compress_any_block(x_start, x_end, y_start, y_end, z, raw_size, blocks, write)
 }
 
 fn compress_any_block<B>(
-    predictor: &Model,
     x_start: u32,
     x_end: u32,
     y_start: u32,
@@ -873,8 +720,9 @@ fn compress_any_block<B>(
 where
     B: AnyBlock,
 {
-    let mut encoder = lzw::Encoder::<B::EncoderElement>::new();
-    let mut write = WriteBits::new(write);
+    // let mut encoder = lzw::Encoder::<B::EncoderElement>::new();
+    // let mut write = WriteBits::new(write);
+    let mut encoder = brotli::CompressorWriter::new(write, 4096, 11, 22);
 
     compress_any_block_aspect::<B, 0>(
         x_start,
@@ -884,9 +732,8 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
     compress_any_block_aspect::<B, 1>(
@@ -897,9 +744,8 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
     compress_any_block_aspect::<B, 2>(
@@ -910,9 +756,8 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
     compress_any_block_aspect::<B, 3>(
@@ -923,9 +768,8 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
     compress_any_block_aspect::<B, 4>(
@@ -936,9 +780,8 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
     compress_any_block_aspect::<B, 5>(
@@ -949,9 +792,8 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
     compress_any_block_aspect::<B, 6>(
@@ -962,9 +804,8 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
     compress_any_block_aspect::<B, 7>(
@@ -975,13 +816,14 @@ where
         z,
         blocks,
         raw_size,
-        predictor,
         &mut encoder,
-        &mut write,
+        // &mut write,
     )?;
 
-    encoder.finish(&mut write)?;
-    write.finish()?;
+    // encoder.finish(&mut write)?;
+    // write.finish()?;
+
+    encoder.flush()?;
 
     Ok(())
 }
@@ -994,9 +836,9 @@ fn compress_any_block_aspect<B, const ASPECT: usize>(
     z: u32,
     blocks: &[B],
     raw_size: [u32; 3],
-    predictor: &Model,
-    encoder: &mut lzw::Encoder<B::EncoderElement>,
-    write: &mut WriteBits<impl Write>,
+    // encoder: &mut lzw::Encoder<B::EncoderElement>,
+    // write: &mut WriteBits<impl Write>,
+    encoder: &mut brotli::CompressorWriter<impl Write>,
 ) -> std::io::Result<()>
 where
     B: AnyBlock,
@@ -1011,12 +853,12 @@ where
     debug_assert!(width <= u16::MAX as u32);
     debug_assert!(height <= u16::MAX as u32);
 
-    let bound_curve = BoundZCurve::new(width as u16, height as u16);
-    // let bound_curve = (0..height * width).map(|index| {
-    //     let x = index % width;
-    //     let y = index / width;
-    //     (x, y)
-    // });
+    // let bound_curve = BoundZCurve::new(width as u16, height as u16);
+    let bound_curve = (0..height * width).map(|index| {
+        let x = index % width;
+        let y = index / width;
+        (x, y)
+    });
 
     for (x0, y0) in bound_curve {
         let x = x_start + x0 as u32;
@@ -1026,27 +868,7 @@ where
         let index = x as usize + y as usize * width + z as usize * width * height;
         let block = &blocks[index as usize];
 
-        let mut kernel: [Option<&B>; 15] = [None; 15];
-
-        let mut ki = 0;
-        for dx in 0..4 {
-            for dy in 0..4 {
-                if dx == 0 && dy == 0 {
-                    continue;
-                }
-
-                let kx = x.saturating_sub(dx);
-                let ky = y.saturating_sub(dy);
-
-                if kx != x || ky != y {
-                    kernel[ki] = Some(&blocks[ky as usize * width + kx as usize]);
-                }
-
-                ki += 1;
-            }
-        }
-
-        block.compress::<ASPECT>(predictor, kernel, encoder, write)?;
+        block.compress::<ASPECT>(encoder)?;
     }
 
     Ok(())
@@ -1058,12 +880,12 @@ pub enum DecompressError {
     Decode(DecodeError),
 }
 
-fn lz78_decode_to_decompress_error(err: lzw::DecodeError) -> DecompressError {
-    match err {
-        lzw::DecodeError::InvalidIndex => DecodeError::InvalidData.into(),
-        lzw::DecodeError::Io(err) => DecompressError::Io(err),
-    }
-}
+// fn lz78_decode_to_decompress_error(err: lzw::DecodeError) -> DecompressError {
+//     match err {
+//         lzw::DecodeError::InvalidIndex => DecodeError::InvalidData.into(),
+//         lzw::DecodeError::Io(err) => DecompressError::Io(err),
+//     }
+// }
 
 impl From<std::io::Error> for DecompressError {
     #[inline(always)]
@@ -1142,8 +964,9 @@ where
 
     read.seek(SeekFrom::Start(jackal_block.offset))?;
 
-    let mut decoder = lzw::Decoder::<B::EncoderElement>::new();
-    let mut read = ReadBits::new(read);
+    // let mut decoder = lzw::Decoder::<B::EncoderElement>::new();
+    // let mut read = ReadBits::new(read);
+    let mut decoder = brotli::reader::Decompressor::new(read, 4096);
 
     decompress_any_block_aspect::<B, 0>(
         x_start,
@@ -1153,9 +976,8 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
     decompress_any_block_aspect::<B, 1>(
@@ -1166,9 +988,8 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
     decompress_any_block_aspect::<B, 2>(
@@ -1179,9 +1000,8 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
     decompress_any_block_aspect::<B, 3>(
@@ -1192,9 +1012,8 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
     decompress_any_block_aspect::<B, 4>(
@@ -1205,9 +1024,8 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
     decompress_any_block_aspect::<B, 5>(
@@ -1218,9 +1036,8 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
     decompress_any_block_aspect::<B, 6>(
@@ -1231,9 +1048,8 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
     decompress_any_block_aspect::<B, 7>(
@@ -1244,12 +1060,11 @@ where
         z,
         blocks,
         raw_size,
-        &header.model,
         &mut decoder,
-        &mut read,
+        // &mut read,
     )?;
 
-    decoder.finish();
+    // decoder.finish();
 
     Ok(())
 }
@@ -1262,9 +1077,9 @@ fn decompress_any_block_aspect<B, const ASPECT: usize>(
     z: u32,
     blocks: &mut [B],
     raw_size: [u32; 3],
-    predictor: &Model,
-    decoder: &mut lzw::Decoder<B::EncoderElement>,
-    read: &mut ReadBits<impl Read>,
+    // decoder: &mut lzw::Decoder<B::EncoderElement>,
+    // read: &mut ReadBits<impl Read>,
+    decoder: &mut brotli::reader::Decompressor<impl Read>,
 ) -> Result<(), DecompressError>
 where
     B: AnyBlock,
@@ -1279,12 +1094,12 @@ where
     debug_assert!(width <= u16::MAX as u32);
     debug_assert!(height <= u16::MAX as u32);
 
-    let bound_curve = BoundZCurve::new(width as u16, height as u16);
-    // let bound_curve = (0..height * width).map(|index| {
-    //     let x = index % width;
-    //     let y = index / width;
-    //     (x, y)
-    // });
+    // let bound_curve = BoundZCurve::new(width as u16, height as u16);
+    let bound_curve = (0..height * width).map(|index| {
+        let x = index % width;
+        let y = index / width;
+        (x, y)
+    });
 
     for (x0, y0) in bound_curve {
         let x = x_start + x0 as u32;
@@ -1294,27 +1109,7 @@ where
         let index = x as usize + y as usize * width + z as usize * width * height;
         let mut block = blocks[index];
 
-        let mut kernel: [Option<&B>; 15] = [None; 15];
-
-        let mut ki = 0;
-        for dx in 0..4 {
-            for dy in 0..4 {
-                if dx == 0 && dy == 0 {
-                    continue;
-                }
-
-                let kx = x.saturating_sub(dx);
-                let ky = y.saturating_sub(dy);
-
-                if kx != x || ky != y {
-                    kernel[ki] = Some(&blocks[ky as usize * width + kx as usize]);
-                }
-
-                ki += 1;
-            }
-        }
-
-        block.decompress::<ASPECT>(predictor, kernel, decoder, read)?;
+        block.decompress::<ASPECT>(decoder)?;
 
         blocks[index as usize] = block;
     }
@@ -1372,11 +1167,8 @@ fn roundtrip() {
 
     // eprintln!("\n\nCompress");
 
-    let predictor = nn::Model::new();
-
     let mut output = Vec::new();
     compress_bc1_texture(
-        &predictor,
         Extent::D2 {
             width: 2,
             height: 1,

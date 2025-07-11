@@ -13,6 +13,7 @@ bitvec = "1.0"
 bytemuck = { version = "1.0" }
 rand = "0.8"
 rand_chacha = "0.3"
+brotli = "7.0"
 
 [package]
 name = "jkl"
@@ -26,3 +27,4 @@ license.workspace = true
 hashbrown.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
+brotli.workspace = true

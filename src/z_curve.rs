@@ -92,7 +92,7 @@ impl Iterator for BoundZCurve {
                 let mask = msb - 1;
                 let until_next = msb - (index & mask);
 
-                // Skip until next y = 0
+                // Skip until next y < height
                 self.next_index += until_next as u32;
                 continue;
             }
