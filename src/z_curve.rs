@@ -35,6 +35,7 @@ fn test_even_odd_split_squash() {
     );
 }
 
+/// Iterator that outputs 2D coordinates in z-order.
 pub struct BoundZCurve {
     width: u16,
     height: u16,

@@ -16,10 +16,27 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     }
 }
 
+/// Trait to create additive identity element.
+pub trait Zero {
+    fn zero() -> Self;
+}
+
+impl Zero for f32 {
+    fn zero() -> Self {
+        0.0
+    }
+}
+
 /// A 2D vector.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Vec2([f32; 2]);
+
+impl Zero for Vec2 {
+    fn zero() -> Self {
+        Vec2::ZERO
+    }
+}
 
 impl Add for Vec2 {
     type Output = Vec2;
@@ -109,7 +126,22 @@ impl Vec2 {
 
     #[inline(always)]
     pub fn length(&self) -> f32 {
-        self.dot(*self).sqrt()
+        self.length_squared().sqrt()
+    }
+
+    #[inline(always)]
+    pub fn length_squared(&self) -> f32 {
+        self.dot(*self)
+    }
+
+    #[inline(always)]
+    pub fn norm(self) -> Self {
+        let length = self.length();
+        if length != 0.0 {
+            self / length
+        } else {
+            Vec2([1.0, 0.0])
+        }
     }
 
     #[inline(always)]
@@ -283,6 +315,12 @@ impl Vec2 {
 #[repr(transparent)]
 pub struct Vec3([f32; 3]);
 
+impl Zero for Vec3 {
+    fn zero() -> Self {
+        Vec3::ZERO
+    }
+}
+
 impl Add for Vec3 {
     type Output = Vec3;
 
@@ -374,7 +412,22 @@ impl Vec3 {
 
     #[inline(always)]
     pub fn length(&self) -> f32 {
-        self.dot(*self).sqrt()
+        self.length_squared().sqrt()
+    }
+
+    #[inline(always)]
+    pub fn length_squared(&self) -> f32 {
+        self.dot(*self)
+    }
+
+    #[inline(always)]
+    pub fn norm(self) -> Self {
+        let length = self.length();
+        if length != 0.0 {
+            self / length
+        } else {
+            Vec3([1.0, 0.0, 0.0])
+        }
     }
 
     #[inline(always)]
@@ -997,6 +1050,12 @@ impl Vec3 {
 #[repr(transparent)]
 pub struct Vec4([f32; 4]);
 
+impl Zero for Vec4 {
+    fn zero() -> Self {
+        Vec4::ZERO
+    }
+}
+
 impl Add for Vec4 {
     type Output = Vec4;
 
@@ -1113,7 +1172,22 @@ impl Vec4 {
 
     #[inline(always)]
     pub fn length(&self) -> f32 {
-        self.dot(*self).sqrt()
+        self.length_squared().sqrt()
+    }
+
+    #[inline(always)]
+    pub fn length_squared(&self) -> f32 {
+        self.dot(*self)
+    }
+
+    #[inline(always)]
+    pub fn norm(self) -> Self {
+        let length = self.length();
+        if length != 0.0 {
+            self / length
+        } else {
+            Vec4([1.0, 0.0, 0.0, 0.0])
+        }
     }
 
     #[inline(always)]
@@ -2860,6 +2934,10 @@ impl Region3 {
         self.min == self.max
     }
 
+    pub fn center(&self) -> Vec3 {
+        (self.min + self.max) * 0.5
+    }
+
     /// Returns 4 diagonals of the region.
     pub fn diagonals(&self) -> [(Vec3, Vec3); 4] {
         let diagonals = [
@@ -2879,6 +2957,38 @@ impl Region3 {
         ];
 
         diagonals
+    }
+
+    /// Returns 4 normalized diagonal axes of the region.
+    pub fn diagonal_axes(&self) -> [Vec3; 4] {
+        let axes = [
+            Vec3([
+                self.max.x() - self.min.x(),
+                self.max.y() - self.min.y(),
+                self.max.z() - self.min.z(),
+            ])
+            .norm(),
+            Vec3([
+                self.max.x() - self.min.x(),
+                self.max.y() - self.min.y(),
+                self.min.z() - self.max.z(),
+            ])
+            .norm(),
+            Vec3([
+                self.max.x() - self.min.x(),
+                self.min.y() - self.max.y(),
+                self.max.z() - self.min.z(),
+            ])
+            .norm(),
+            Vec3([
+                self.min.x() - self.max.x(),
+                self.max.y() - self.min.y(),
+                self.max.z() - self.min.z(),
+            ])
+            .norm(),
+        ];
+
+        axes
     }
 
     pub fn is_real(&self) -> bool {
@@ -3246,6 +3356,7 @@ impl Rgb565 {
         Rgb565((r << 11) | (g << 5) | b)
     }
 
+    #[inline(always)]
     pub fn wrapping_add(a: Self, b: Self) -> Self {
         let r = a.r().wrapping_add(b.r()) & 31;
         let g = a.g().wrapping_add(b.g()) & 63;
@@ -3253,6 +3364,7 @@ impl Rgb565 {
         Rgb565::new(r, g, b)
     }
 
+    #[inline(always)]
     pub fn wrapping_sub(a: Self, b: Self) -> Self {
         let r = a.r().wrapping_sub(b.r()) & 31;
         let g = a.g().wrapping_sub(b.g()) & 63;
@@ -3424,84 +3536,72 @@ impl From<Vec4> for Rgba32F {
     }
 }
 
-// pub(crate) fn predict_color_u8(left: u8, top: u8, top_left: u8) -> u8 {
-//     // let target = left.wrapping_add(top).wrapping_sub(top_left);
+pub fn max_variance_diagonal_axis(samples: &[Vec3]) -> Vec3 {
+    let region = Region3::new(samples.iter().copied());
+    let center = region.center();
+    let diagonals = region.diagonal_axes();
 
-//     // let left_dist = if left > target {
-//     //     left - target
-//     // } else {
-//     //     target - left
-//     // };
+    let mut best_diagonal = Vec3::ZERO;
+    let mut best_var = -1.0f32;
 
-//     // let top_dist = if top > target {
-//     //     top - target
-//     // } else {
-//     //     target - top
-//     // };
+    for &diagonal in &diagonals[0..] {
+        let mut var = 0.0f32;
+        for &v in samples {
+            let t = (v - center).dot(diagonal);
+            var += t * t;
+        }
+        if var > best_var {
+            best_var = var;
+            best_diagonal = diagonal;
+        }
+    }
 
-//     // let top_left = if top_left > target {
-//     //     top_left - target
-//     // } else {
-//     //     target - top_left
-//     // };
+    best_diagonal
+}
 
-//     // if left_dist < top_dist {
-//     //     if left_dist < top_left {
-//     //         return left;
-//     //     } else {
-//     //         return top_left;
-//     //     }
-//     // } else {
-//     //     if top_dist < top_left {
-//     //         return top;
-//     //     } else {
-//     //         return top_left;
-//     //     }
-//     // }
+pub fn pca_axis(v: &[Vec3]) -> Vec3 {
+    let n = v.len() as f32;
+    let mut mean = Vec3::ZERO;
+    for p in v {
+        mean += *p;
+    }
+    mean /= n;
 
-//     // let v_diff = if top_left > left {
-//     //     top_left - left
-//     // } else {
-//     //     left - top_left
-//     // };
+    let mut cov = [[0.0; 3]; 3];
+    for p in v {
+        let d = *p - mean;
+        for i in 0..3 {
+            for j in 0..3 {
+                cov[i][j] += d.0[i] * d.0[j];
+            }
+        }
+    }
+    for i in 0..3 {
+        for j in 0..3 {
+            cov[i][j] /= n;
+        }
+    }
 
-//     // let h_diff = if top_left > top {
-//     //     top_left - top
-//     // } else {
-//     //     top - top_left
-//     // };
+    let diagonal = max_variance_diagonal_axis(v);
 
-//     // if v_diff > 10 || h_diff > 10 {
-//     if top_left > left && top_left > top {
-//         if top >= left {
-//             top
-//         } else {
-//             left
-//         }
-//     } else if top_left < left && top_left < top {
-//         if top >= left {
-//             left
-//         } else {
-//             top
-//         }
-//     } else {
-//         left.wrapping_add(top).wrapping_sub(top_left)
-//     }
-//     // } else {
-//     //     left.wrapping_add(top).wrapping_sub(top_left)
-//     // }
-// }
+    // Power iteration to find the principal component
+    let mut axis = diagonal;
+    for _ in 0..10 {
+        let mut next_axis = Vec3::ZERO;
+        for i in 0..3 {
+            for j in 0..3 {
+                next_axis.0[i] += cov[i][j] * axis.0[j];
+            }
+        }
 
-// pub(crate) trait PredictableColor: Copy {
-//     fn predict_color(left: Self, top: Self, top_left: Self) -> Self;
-// }
+        let len = next_axis.length();
+        if len > 1.0e-6 {
+            next_axis /= len;
+        } else {
+            next_axis = diagonal;
+        }
+        axis = next_axis;
+    }
 
-// impl PredictableColor for Rgb565 {
-//     fn predict_color(left: Self, top: Self, top_left: Self) -> Self {
-//         Rgb565::new(
-//             predict_color_u8(left.r(), top.r(), top_left.r()) & 31,
-//             predict_color_u8(left.g(), top.g(), top_left.g()) & 63,
-//             predict_color_u8(left.b(), top.b(), top_left.b()) & 31,
-//         )
-//     }
-// }
+    axis
+}

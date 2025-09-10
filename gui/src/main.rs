@@ -1,5 +1,8 @@
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
-use jkl::{bc1, math::Rgb32F};
+use jkl::{
+    bc1,
+    math::{Rgb32F, Yiq32F},
+};
 
 fn main() {
     let native_options = eframe::NativeOptions::default();
@@ -12,7 +15,6 @@ fn main() {
 }
 
 struct Jackal {
-    opt: usize,
     image: Option<image::RgbImage>,
     original_image: Option<TextureHandle>,
 
@@ -28,7 +30,6 @@ struct Jackal {
 impl Jackal {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Jackal {
-            opt: 0,
             image: None,
             original_image: None,
 
@@ -60,28 +61,13 @@ impl eframe::App for Jackal {
                     self.decompressed_jkl_image = None;
                 }
 
-                ui.label("Opt:");
-                let r = ui.add(
-                    egui::DragValue::new(&mut self.opt)
-                        .range(0..=1000)
-                        .clamp_existing_to_range(true),
-                );
-
-                if r.changed() {
-                    self.compressed_image.clear();
-                    self.decompressed_image = None;
-                    self.jkl_image.clear();
-                    self.jkl_image_blocks.clear();
-                    self.decompressed_jkl_image = None;
-                }
-
                 let r = ui.button("Press me");
 
                 show_original_over_compressed = r.is_pointer_button_down_on();
                 ui.separator();
 
                 ui.label("Total error:");
-                ui.strong(format!("{:.4}", self.total_error));
+                ui.strong(format!("{:.4}%", self.total_error * 100.0));
 
                 ui.separator();
 
@@ -207,7 +193,7 @@ impl eframe::App for Jackal {
                             ],
                         ];
 
-                        let block = bc1::Block::encode(block, self.opt);
+                        let block = bc1::Block::encode(block);
                         self.compressed_image.push(block);
                     }
                 }
@@ -245,9 +231,16 @@ impl eframe::App for Jackal {
                     for x in 0..image.width() {
                         let o = rgb_image_to_texpak(*image.get_pixel(x, y));
                         let d = rgb_egui_to_texpak(pixels[(y * image.width() + x) as usize]);
-                        self.total_error += Rgb32F::distance(o, d);
+
+                        let o = Yiq32F::from_rgb(o);
+                        let d = Yiq32F::from_rgb(d);
+
+                        self.total_error += Yiq32F::perceptual_distance(o, d);
                     }
                 }
+
+                self.total_error /= image.height() as f32 * image.width() as f32;
+                self.total_error /= (3.0f32).sqrt();
 
                 self.decompressed_image = Some(ctx.load_texture(
                     "Decompressed",
@@ -269,7 +262,7 @@ impl eframe::App for Jackal {
                 let blocks = &self.compressed_image[..];
                 let mut output = Vec::new();
                 jkl::jackal::compress_bc1_texture(
-                    jkl::jackal::Extent::D2 {
+                    jkl::Extent::D2 {
                         width: (image.width() + 3) / 4,
                         height: (image.height() + 3) / 4,
                     },
