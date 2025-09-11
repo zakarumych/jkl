@@ -17,15 +17,15 @@ pub struct Block {
 
 impl Block {
     pub const BLACK: Block = Block {
-        color0: Rgb565::BLACK,
+        color0: Rgb565::WHITE,
         color1: Rgb565::BLACK,
-        texels: [0; 4],
+        texels: [0xFF; 4],
     };
 
     pub const WHITE: Block = Block {
         color0: Rgb565::WHITE,
         color1: Rgb565::BLACK,
-        texels: [0xFF; 4],
+        texels: [0x00; 4],
     };
 
     pub const TRANSPARENT: Block = Block {
@@ -183,8 +183,8 @@ impl Block {
         }
 
         Block {
-            color0: Rgb32F::from(color0).into(),
-            color1: Rgb32F::from(color1).into(),
+            color0: Rgb565::from_f32(Rgb32F::from(color0)),
+            color1: Rgb565::from_f32(Rgb32F::from(color1)),
             texels,
         }
     }
@@ -252,8 +252,8 @@ impl Block {
                 }
 
                 Block {
-                    color0: Rgb32F::from(color0).into(),
-                    color1: Rgb32F::from(color1).into(),
+                    color0: Rgb565::from_f32(Rgb32F::from(color0)),
+                    color1: Rgb565::from_f32(Rgb32F::from(color1)),
                     texels,
                 }
             }
@@ -294,8 +294,8 @@ impl Block {
                 }
 
                 Block {
-                    color0: Rgb32F::from(color0).into(),
-                    color1: Rgb32F::from(color1).into(),
+                    color0: Rgb565::from_f32(Rgb32F::from(color0)),
+                    color1: Rgb565::from_f32(Rgb32F::from(color1)),
                     texels,
                 }
             }

@@ -8,6 +8,7 @@ use std::{
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     // This lerp is monotonic and produces exactly a for t = 0 and b for t = 1.
+    // If t is constant the branch will be optimized out.
 
     if t < 0.5 {
         (b - a).mul_add(t, a)
@@ -3003,19 +3004,19 @@ impl Region3 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct Luma8U(u8);
+pub struct R8U(u8);
 
-impl Luma8U {
-    pub const WHITE: Luma8U = Luma8U(255);
-    pub const BLACK: Luma8U = Luma8U(0);
+impl R8U {
+    pub const WHITE: R8U = R8U(255);
+    pub const BLACK: R8U = R8U(0);
 
     #[inline(always)]
-    pub const fn new(l: u8) -> Self {
-        Luma8U(l)
+    pub const fn new(r: u8) -> Self {
+        R8U(r)
     }
 
     #[inline(always)]
-    pub const fn l(&self) -> u8 {
+    pub const fn r(&self) -> u8 {
         self.0
     }
 
@@ -3025,42 +3026,64 @@ impl Luma8U {
     }
 
     #[inline(always)]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    #[inline(always)]
+    pub const fn into_f32(self) -> R32F {
+        R32F(self.0 as f32 / 255.0)
+    }
+
+    #[inline(always)]
+    pub const fn from_f32(luma: R32F) -> R8U {
+        let clamped = (luma.r() * 255.0).clamp(0.0, 255.0);
+        R8U(clamped as u8)
+    }
+
+    #[inline(always)]
     pub fn wrapping_add(self, other: Self) -> Self {
-        Luma8U(self.0.wrapping_add(other.0))
+        R8U(self.0.wrapping_add(other.0))
     }
 
     #[inline(always)]
     pub fn wrapping_sub(self, other: Self) -> Self {
-        Luma8U(self.0.wrapping_sub(other.0))
+        R8U(self.0.wrapping_sub(other.0))
     }
 }
 
+/// An RGB color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Luma32F(f32);
+pub struct R32F(f32);
 
-impl Luma32F {
-    pub const WHITE: Luma32F = Luma32F(1.0);
-    pub const BLACK: Luma32F = Luma32F(0.0);
+impl R32F {
+    pub const WHITE: R32F = R32F(1.0);
+    pub const BLACK: R32F = R32F(0.0);
 
     #[inline(always)]
-    pub const fn new(l: f32) -> Self {
-        Luma32F(l)
+    pub const fn new(r: f32) -> Self {
+        R32F(r)
     }
 
     #[inline(always)]
-    pub const fn l(&self) -> f32 {
+    pub const fn r(&self) -> f32 {
         self.0
     }
 
     #[inline(always)]
+    pub const fn with_g(self, g: f32) -> Rg32F {
+        Rg32F([self.r(), g])
+    }
+
+    #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
-        Luma32F(lerp(a.l(), b.l(), t))
+        R32F(lerp(a.r(), b.r(), t))
     }
 
     #[inline(always)]
     pub const fn diff(a: Self, b: Self) -> f32 {
-        a.l() - b.l()
+        a.r() - b.r()
     }
 
     #[inline(always)]
@@ -3071,12 +3094,68 @@ impl Luma32F {
 
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
-        a.l() - b.l()
+        Self::diff(a, b)
     }
 
     #[inline(always)]
     pub const fn offset(self, offset: f32) -> Self {
-        Luma32F(self.l() + offset)
+        R32F(self.r() + offset)
+    }
+}
+
+/// An RGB color represented as 3 floats.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
+pub struct Rg32F([f32; 2]);
+
+impl Rg32F {
+    pub const WHITE: Rg32F = Rg32F([1.0, 1.0]);
+    pub const BLACK: Rg32F = Rg32F([0.0, 0.0]);
+
+    #[inline(always)]
+    pub const fn new(r: f32, g: f32) -> Self {
+        Rg32F([r, g])
+    }
+
+    #[inline(always)]
+    pub const fn r(&self) -> f32 {
+        self.0[0]
+    }
+
+    #[inline(always)]
+    pub const fn g(&self) -> f32 {
+        self.0[1]
+    }
+
+    #[inline(always)]
+    pub const fn with_b(self, b: f32) -> Rgb32F {
+        Rgb32F([self.r(), self.g(), b])
+    }
+
+    #[inline(always)]
+    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+        Rg32F([lerp(a.r(), b.r(), t), lerp(a.g(), b.g(), t)])
+    }
+
+    #[inline(always)]
+    pub const fn diff(a: Self, b: Self) -> Vec2 {
+        Vec2([a.r() - b.r(), a.g() - b.g()])
+    }
+
+    #[inline(always)]
+    pub const fn distance_squared(a: Self, b: Self) -> f32 {
+        let diff = Self::diff(a, b);
+        diff.dot(diff)
+    }
+
+    #[inline(always)]
+    pub fn distance(a: Self, b: Self) -> f32 {
+        Self::distance_squared(a, b).sqrt()
+    }
+
+    #[inline(always)]
+    pub const fn offset(self, offset: Vec2) -> Self {
+        Rg32F([self.r() + offset.x(), self.g() + offset.y()])
     }
 }
 
@@ -3370,20 +3449,6 @@ impl Rgb565 {
         let g = a.g().wrapping_sub(b.g()) & 63;
         let b = a.b().wrapping_sub(b.b()) & 31;
         Rgb565::new(r, g, b)
-    }
-}
-
-impl From<Rgb565> for Rgb32F {
-    #[inline(always)]
-    fn from(rgb: Rgb565) -> Self {
-        rgb.into_f32()
-    }
-}
-
-impl From<Rgb32F> for Rgb565 {
-    #[inline(always)]
-    fn from(rgb: Rgb32F) -> Self {
-        Rgb565::from_f32(rgb)
     }
 }
 
