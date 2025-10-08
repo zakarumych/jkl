@@ -23,7 +23,6 @@ pub use self::{
 
 mod block;
 mod header;
-mod preprocess;
 
 #[derive(Clone, Copy, Debug)]
 pub enum DecodeError {
@@ -42,7 +41,7 @@ pub enum DecodeError {
 pub fn compress_bc1_texture(
     extent: Extent,
     blocks: &[bc1::Block],
-    write: (impl Write + Seek),
+    write: impl Write + Seek,
 ) -> std::io::Result<()> {
     compress_texture(extent, blocks, write)
 }
@@ -50,7 +49,7 @@ pub fn compress_bc1_texture(
 fn compress_texture<B>(
     extent: Extent,
     blocks: &[B],
-    mut write: (impl Write + Seek),
+    mut write: impl Write + Seek,
 ) -> std::io::Result<()>
 where
     B: AnyBlock,
@@ -312,7 +311,7 @@ where
         let index = x as usize + y as usize * width + z as usize * width * height;
         let block = &blocks[index as usize];
 
-        block.compress::<ASPECT>(encoder)?;
+        block.compress::<ASPECT>(&mut *encoder)?;
     }
 
     Ok(())
@@ -546,7 +545,7 @@ where
         let index = x as usize + y as usize * width + z as usize * width * height;
         let mut block = blocks[index];
 
-        block.decompress::<ASPECT>(decoder)?;
+        block.decompress::<ASPECT>(&mut *decoder)?;
 
         blocks[index as usize] = block;
     }

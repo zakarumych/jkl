@@ -3050,6 +3050,22 @@ impl R8U {
     pub fn wrapping_sub(self, other: Self) -> Self {
         R8U(self.0.wrapping_sub(other.0))
     }
+
+    #[inline(always)]
+    pub const fn diff(a: Self, b: Self) -> f32 {
+        a.r() as f32 - b.r() as f32
+    }
+
+    #[inline(always)]
+    pub const fn distance_squared(a: Self, b: Self) -> f32 {
+        let diff = Self::diff(a, b);
+        diff * diff
+    }
+
+    #[inline(always)]
+    pub fn distance(a: Self, b: Self) -> f32 {
+        Self::diff(a, b)
+    }
 }
 
 /// An RGB color represented as 3 floats.
@@ -3159,6 +3175,122 @@ impl Rg32F {
     }
 }
 
+/// An RGB color with 8 bit unsigned normalized integers per channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Rgb8U([u8; 3]);
+
+impl Rgb8U {
+    pub const WHITE: Rgb8U = Rgb8U([255, 255, 255]);
+    pub const BLACK: Rgb8U = Rgb8U([0, 0, 0]);
+
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Rgb8U([r, g, b])
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn from_bytes(bytes: [u8; 3]) -> Self {
+        Rgb8U(bytes)
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn bytes(&self) -> [u8; 3] {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn r(&self) -> u8 {
+        self.0[0]
+    }
+
+    #[inline(always)]
+    pub const fn g(&self) -> u8 {
+        self.0[1]
+    }
+
+    #[inline(always)]
+    pub const fn b(&self) -> u8 {
+        self.0[2]
+    }
+
+    #[inline(always)]
+    pub fn set_r(&mut self, r: u8) {
+        self.0[0] = r;
+    }
+
+    #[inline(always)]
+    pub fn set_g(&mut self, g: u8) {
+        self.0[1] = g;
+    }
+
+    #[inline(always)]
+    pub fn set_b(&mut self, b: u8) {
+        self.0[2] = b;
+    }
+
+    #[inline(always)]
+    pub const fn with_alpha(self, a: u8) -> Rgba8U {
+        Rgba8U([self.r(), self.g(), self.b(), a])
+    }
+
+    #[inline(always)]
+    pub const fn into_opaque(self) -> Rgba8U {
+        Rgba8U([self.r(), self.g(), self.b(), 255])
+    }
+
+    #[inline(always)]
+    pub const fn into_f32(self) -> Rgb32F {
+        let [r, g, b] = self.0;
+        Rgb32F([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
+    }
+
+    #[inline(always)]
+    pub fn from_f32(rgb: Rgb32F) -> Self {
+        let r = (rgb.r() * 255.0).clamp(0.0, 255.0) as u8;
+        let g = (rgb.g() * 255.0).clamp(0.0, 255.0) as u8;
+        let b = (rgb.b() * 255.0).clamp(0.0, 255.0) as u8;
+        Rgb8U::new(r, g, b)
+    }
+
+    #[inline(always)]
+    pub fn wrapping_add(lhs: Self, rhs: Self) -> Self {
+        let r = lhs.r().wrapping_add(rhs.r());
+        let g = lhs.g().wrapping_add(rhs.g());
+        let b = lhs.b().wrapping_add(rhs.b());
+        Rgb8U::new(r, g, b)
+    }
+
+    #[inline(always)]
+    pub fn wrapping_sub(lhs: Self, rhs: Self) -> Self {
+        let r = lhs.r().wrapping_sub(rhs.r());
+        let g = lhs.g().wrapping_sub(rhs.g());
+        let b = lhs.b().wrapping_sub(rhs.b());
+        Rgb8U::new(r, g, b)
+    }
+
+    #[inline(always)]
+    pub const fn diff(lhs: Self, rhs: Self) -> Vec3 {
+        Vec3([
+            lhs.r() as f32 - rhs.r() as f32,
+            lhs.g() as f32 - rhs.g() as f32,
+            lhs.b() as f32 - rhs.b() as f32,
+        ])
+    }
+
+    #[inline(always)]
+    pub const fn distance_squared(lhs: Self, rhs: Self) -> f32 {
+        let diff = Self::diff(lhs, rhs);
+        diff.dot(diff)
+    }
+
+    #[inline(always)]
+    pub fn distance(lhs: Self, rhs: Self) -> f32 {
+        Self::distance_squared(lhs, rhs).sqrt()
+    }
+}
+
 /// An RGB color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
@@ -3199,28 +3331,28 @@ impl Rgb32F {
     }
 
     #[inline(always)]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(lhs: Self, rhs: Self, t: f32) -> Self {
         Rgb32F([
-            lerp(a.r(), b.r(), t),
-            lerp(a.g(), b.g(), t),
-            lerp(a.b(), b.b(), t),
+            lerp(lhs.r(), rhs.r(), t),
+            lerp(lhs.g(), rhs.g(), t),
+            lerp(lhs.b(), rhs.b(), t),
         ])
     }
 
     #[inline(always)]
-    pub const fn diff(a: Self, b: Self) -> Vec3 {
-        Vec3([a.r() - b.r(), a.g() - b.g(), a.b() - b.b()])
+    pub const fn diff(lhs: Self, rhs: Self) -> Vec3 {
+        Vec3([lhs.r() - rhs.r(), lhs.g() - rhs.g(), lhs.b() - rhs.b()])
     }
 
     #[inline(always)]
-    pub const fn distance_squared(a: Self, b: Self) -> f32 {
-        let diff = Self::diff(a, b);
+    pub const fn distance_squared(lhs: Self, rhs: Self) -> f32 {
+        let diff = Self::diff(lhs, rhs);
         diff.dot(diff)
     }
 
     #[inline(always)]
-    pub fn distance(a: Self, b: Self) -> f32 {
-        Self::distance_squared(a, b).sqrt()
+    pub fn distance(lhs: Self, rhs: Self) -> f32 {
+        Self::distance_squared(lhs, rhs).sqrt()
     }
 
     #[inline(always)]
@@ -3230,6 +3362,117 @@ impl Rgb32F {
             self.g() + offset.y(),
             self.b() + offset.z(),
         ])
+    }
+}
+
+/// An RGBA color with 8 bit unsigned normalized integers per channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Rgba8U([u8; 4]);
+
+impl Rgba8U {
+    pub const WHITE: Rgba8U = Rgba8U([255, 255, 255, 255]);
+    pub const BLACK: Rgba8U = Rgba8U([0, 0, 0, 255]);
+    pub const TRANSPARENT: Rgba8U = Rgba8U([0, 0, 0, 0]);
+
+    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Rgba8U([r, g, b, a])
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn from_bytes(bytes: [u8; 4]) -> Self {
+        Rgba8U(bytes)
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn bytes(&self) -> [u8; 4] {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn r(&self) -> u8 {
+        self.0[0]
+    }
+
+    #[inline(always)]
+    pub const fn g(&self) -> u8 {
+        self.0[1]
+    }
+
+    #[inline(always)]
+    pub const fn b(&self) -> u8 {
+        self.0[2]
+    }
+
+    #[inline(always)]
+    pub const fn a(&self) -> u8 {
+        self.0[3]
+    }
+
+    #[inline(always)]
+    pub fn set_r(&mut self, r: u8) {
+        self.0[0] = r;
+    }
+
+    #[inline(always)]
+    pub fn set_g(&mut self, g: u8) {
+        self.0[1] = g;
+    }
+
+    #[inline(always)]
+    pub fn set_b(&mut self, b: u8) {
+        self.0[2] = b;
+    }
+
+    #[inline(always)]
+    pub fn set_a(&mut self, a: u8) {
+        self.0[3] = a;
+    }
+
+    #[inline(always)]
+    pub const fn into_f32(self) -> Rgba32F {
+        let [r, g, b, a] = self.0;
+        Rgba32F([
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            a as f32 / 255.0,
+        ])
+    }
+
+    #[inline(always)]
+    pub fn from_f32(rgb: Rgba32F) -> Self {
+        let r = (rgb.r() * 255.0).clamp(0.0, 255.0) as u8;
+        let g = (rgb.g() * 255.0).clamp(0.0, 255.0) as u8;
+        let b = (rgb.b() * 255.0).clamp(0.0, 255.0) as u8;
+        let a = (rgb.a() * 255.0).clamp(0.0, 255.0) as u8;
+        Rgba8U::new(r, g, b, a)
+    }
+
+    #[inline(always)]
+    pub const fn rgb(&self) -> Rgb8U {
+        Rgb8U::new(self.r(), self.g(), self.b())
+    }
+
+    #[inline(always)]
+    pub fn wrapping_add(lhs: Self, rhs: Self) -> Self {
+        let r = lhs.r().wrapping_add(rhs.r());
+        let g = lhs.g().wrapping_add(rhs.g());
+        let b = lhs.b().wrapping_add(rhs.b());
+        let a = lhs.a().wrapping_add(rhs.a());
+        Rgba8U::new(r, g, b, a)
+    }
+
+    #[inline(always)]
+    pub fn wrapping_sub(lhs: Self, rhs: Self) -> Self {
+        let r = lhs.r().wrapping_sub(rhs.r());
+        let g = lhs.g().wrapping_sub(rhs.g());
+        let b = lhs.b().wrapping_sub(rhs.b());
+        let a = lhs.a().wrapping_sub(rhs.a());
+
+        Rgba8U::new(r, g, b, a)
     }
 }
 
@@ -3283,11 +3526,6 @@ impl Rgba32F {
         ])
     }
 }
-
-/// An RGB color with 8 bit unsigned normalized integers per channel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct Rgb8U([u8; 3]);
 
 /// An RGB color with 5,6 and 5 bits unsigned normalized integers per channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
+use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions, Vec2};
 use jkl::{
     bc1,
     math::{Rgb32F, Yiq32F},
@@ -106,6 +106,7 @@ impl eframe::App for Jackal {
                     "Original",
                     ColorImage {
                         size: [image.width() as usize, image.height() as usize],
+                        source_size: Vec2::new(image.width() as f32, image.height() as f32),
                         pixels: image.pixels().map(|&p| rgb_image_to_egui(p)).collect(),
                     },
                     TextureOptions::NEAREST,
@@ -246,6 +247,7 @@ impl eframe::App for Jackal {
                     "Decompressed",
                     ColorImage {
                         size: [image.width() as usize, image.height() as usize],
+                        source_size: Vec2::new(image.width() as f32, image.height() as f32),
                         pixels,
                     },
                     TextureOptions::NEAREST,

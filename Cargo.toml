@@ -1,5 +1,5 @@
 [workspace]
-members = ["cli", "gui"]
+members = ["cli", "gui", "experiments"]
 resolver = "2"
 
 [workspace.package]

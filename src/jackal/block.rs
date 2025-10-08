@@ -5,40 +5,38 @@ use crate::{bc1, jackal::DecompressError, math::Rgb565};
 pub trait AnyBlock: Copy + 'static + Sized {
     const ASPECTS: usize;
 
-    /// Compress one block aspect.
-    fn compress<'a, const ASPECT: usize>(
-        &self,
-        encoder: &mut brotli::CompressorWriter<impl Write>,
-    ) -> std::io::Result<()>;
+    /// Compress specific block aspect.
+    ///
+    /// Writes compressed data into `writer`
+    fn compress<'a, const ASPECT: usize>(&self, writer: impl Write) -> std::io::Result<()>;
 
     /// Decompress one block aspect.
+    ///
+    /// Reads compressed data from `reader`
     fn decompress<'a, const ASPECT: usize>(
         &mut self,
-        decoder: &mut brotli::reader::Decompressor<impl Read>,
+        reader: impl Read,
     ) -> Result<(), DecompressError>;
 }
 
 impl AnyBlock for bc1::Block {
     const ASPECTS: usize = 3;
 
-    fn compress<'a, const ASPECT: usize>(
-        &self,
-        encoder: &mut brotli::CompressorWriter<impl Write>,
-    ) -> std::io::Result<()> {
+    fn compress<'a, const ASPECT: usize>(&self, mut writer: impl Write) -> std::io::Result<()> {
         match ASPECT {
             0 => {
                 // Color0
                 let bytes = self.color0.bits().to_le_bytes();
-                encoder.write_all(&bytes)?;
+                writer.write_all(&bytes)?;
             }
             1 => {
                 // Color1
                 let bytes = self.color1.bits().to_le_bytes();
-                encoder.write_all(&bytes)?;
+                writer.write_all(&bytes)?;
             }
             2 => {
                 // Texels
-                encoder.write_all(&self.texels)?;
+                writer.write_all(&self.texels)?;
             }
             _ => unreachable!(),
         }
@@ -48,7 +46,7 @@ impl AnyBlock for bc1::Block {
 
     fn decompress<'a, const ASPECT: usize>(
         &mut self,
-        decoder: &mut brotli::reader::Decompressor<impl Read>,
+        mut decoder: impl Read,
     ) -> Result<(), DecompressError> {
         match ASPECT {
             0 => {
