@@ -14,36 +14,6 @@ use crate::{
     bytes::LeBytes,
 };
 
-pub(crate) trait Element {
-    // This parameter is related to the maximum size of the input data.
-    // With maximum superblock size of 256x256 there's 65536 entries per block field.
-    //
-    // Now consider worst case scenario where dictionary grows as fast as possible.
-    // This requires all symbols from the alphabet appear once,
-    // then all possible pairs, then all possible triples, etc.
-    const MAX_INPUT_SIZE: usize;
-}
-
-impl Element for u8 {
-    // With 8-bit fields and maximum input size 256x256x16,
-    // There can be all symbols, pairs, triples, quadruples, quintuples and some sextuples.
-    // This means that the dictionary upper bound size is 2^8 * 6;
-    const MAX_INPUT_SIZE: usize = 6 * 1 << 8;
-}
-
-impl Element for u16 {
-    // With 16-bit fields and maximum input size 256x256x8,
-    // there can be all symbols, pairs, triples and some quadruples at the end.
-    // This means that the dictionary upper bound size is 2^16 * 4;
-    const MAX_INPUT_SIZE: usize = 4 * 1 << 16;
-}
-
-impl Element for u32 {
-    // With 32-bit fields and maximum input size 256x256x4,
-    // there can be all some symbols.
-    const MAX_INPUT_SIZE: usize = 4 * 1 << 16;
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Entry<T> {
     prefix: u32,

@@ -6,10 +6,10 @@ license.workspace = true
 
 [dependencies]
 jkl = { path = ".." }
-eframe = "0.32"
-image = "=0.25.2"
-rand = "0.8"
-egui = "0.32"
+eframe = { workspace = true, features = ["persistence"] }
+image.workspace = true
+rand.workspace = true
+egui.workspace = true
 
 egui-snarl = { version = "0.8", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

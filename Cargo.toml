@@ -8,12 +8,15 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-hashbrown = "0.15"
+hashbrown = "0.16"
 bitvec = "1.0"
 bytemuck = { version = "1.0" }
-rand = "0.8"
-rand_chacha = "0.3"
-brotli = "7.0"
+rand = "0.9"
+rand_chacha = "0.9"
+brotli = "8.0"
+egui = "0.32"
+eframe = "0.32"
+image = "0.25.8"
 
 [package]
 name = "jkl"

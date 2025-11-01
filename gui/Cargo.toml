@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 jkl = { path = ".." }
-eframe = "0.32"
-image = "=0.25.2"
-rand = "0.8"
+eframe = { workspace = true, features = ["persistence"] }
+image.workspace = true
+rand.workspace = true
+egui.workspace = true
