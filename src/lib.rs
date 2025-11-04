@@ -9,6 +9,7 @@ pub mod cluster_fit;
 pub mod encoder;
 pub mod filter;
 pub mod jackal;
+pub mod lz77;
 pub mod lz78;
 pub mod math;
 pub mod z_curve;
