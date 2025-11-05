@@ -146,8 +146,25 @@ impl<T> Entry<T> {
     where
         T: LeBytes,
     {
-        (self.distance as u16).write_to(&mut writer)?;
-        (self.length as u16).write_to(&mut writer)?;
+        let dl = (usize::min(self.distance, 15) << 4 | usize::min(self.length, 15)) as u8;
+        dl.write_to(&mut writer)?;
+
+        if self.distance >= 15 {
+            (usize::min(self.distance - 15, 255) as u8).write_to(&mut writer)?;
+
+            if self.distance >= 270 {
+                (usize::min(self.distance - 270, 65535) as u16).write_to(&mut writer)?;
+            }
+        }
+
+        if self.length >= 15 {
+            (usize::min(self.length - 15, 255) as u8).write_to(&mut writer)?;
+
+            if self.length >= 270 {
+                (usize::min(self.length - 270, 65535) as u16).write_to(&mut writer)?;
+            }
+        }
+
         self.value.write_to(&mut writer)?;
 
         Ok(())
@@ -157,9 +174,31 @@ impl<T> Entry<T> {
     where
         T: LeBytes,
     {
-        let distance = u16::read_from(&mut reader)? as usize;
-        let length = u16::read_from(&mut reader)? as usize;
+        let dl = u8::read_from(&mut reader)?;
+
+        let mut distance = (dl >> 4) as usize;
+        let mut length = (dl & 0x0F) as usize;
+
+        if distance == 15 {
+            let d = u8::read_from(&mut reader)?;
+            distance += d as usize;
+            if d == 255 {
+                let d = u16::read_from(&mut reader)?;
+                distance += d as usize;
+            }
+        }
+
+        if length == 15 {
+            let l = u8::read_from(&mut reader)?;
+            length += l as usize;
+            while l == 255 {
+                let l = u16::read_from(&mut reader)?;
+                length += l as usize;
+            }
+        }
+
         let value = T::read_from(&mut reader)?;
+
         Ok(Entry {
             distance,
             length,
@@ -168,7 +207,7 @@ impl<T> Entry<T> {
     }
 }
 
-struct Encoder<T> {
+pub struct Encoder<T> {
     window: Window<T>,
     distance: usize,
     length: usize,
@@ -186,7 +225,7 @@ where
         }
     }
 
-    pub fn encode(&mut self, input: T, mut writer: impl Write) -> std::io::Result<()> {
+    pub fn encode(&mut self, input: T, writer: impl Write) -> std::io::Result<()> {
         if self.length == 0 {
             match self.window.find_elem(0, &input) {
                 None => {
@@ -268,7 +307,7 @@ where
     }
 }
 
-struct Decoder<T> {
+pub struct Decoder<T> {
     window: Window<T>,
     entry: Option<Entry<T>>,
 }
@@ -287,22 +326,20 @@ where
     fn decode_next(&mut self, mut reader: impl Read) -> io::Result<T> {
         match &mut self.entry {
             None => {
-                let distance = u16::read_from(&mut reader)? as usize;
-                let length = u16::read_from(&mut reader)? as usize;
-                let value = T::read_from(&mut reader)?;
+                let entry = Entry::read_from(&mut reader)?;
 
-                if length == 0 {
-                    self.window.push(value);
-                    return Ok(value);
+                if entry.length == 0 {
+                    self.window.push(entry.value);
+                    return Ok(entry.value);
                 }
 
-                let first = *self.window.get(distance);
+                let first = *self.window.get(entry.distance);
                 self.window.push(first);
 
                 self.entry = Some(Entry {
-                    distance: distance,
-                    length: length - 1,
-                    value,
+                    distance: entry.distance,
+                    length: entry.length - 1,
+                    value: entry.value,
                 });
 
                 Ok(first)

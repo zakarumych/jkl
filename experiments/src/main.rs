@@ -231,6 +231,12 @@ impl SnarlViewer<JackalNode> for JackalViewer {
                 snarl.insert_node(pos, JackalNode::LZPCalculator(LZPCalculatorNode::new()));
             }
 
+            let r = ui.button("Add LZ77 calculator Node");
+            let r = r.on_hover_text("Add an LZ77 calculator node");
+            if r.clicked() {
+                snarl.insert_node(pos, JackalNode::LZ77Calculator(LZ77CalculatorNode::new()));
+            }
+
             let r = ui.button("Add LZ78 calculator Node");
             let r = r.on_hover_text("Add an LZ78 calculator node");
             if r.clicked() {
@@ -415,6 +421,7 @@ enum JackalNode {
     Filter(FilterNode),
     SizeOf(SizeOfNode),
     LZPCalculator(LZPCalculatorNode),
+    LZ77Calculator(LZ77CalculatorNode),
     LZ78Calculator(LZ78CalculatorNode),
 }
 
@@ -425,6 +432,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.title(),
             JackalNode::Filter(node) => node.title(),
             JackalNode::LZPCalculator(node) => node.title(),
+            JackalNode::LZ77Calculator(node) => node.title(),
             JackalNode::LZ78Calculator(node) => node.title(),
             JackalNode::SizeOf(node) => node.title(),
         }
@@ -436,6 +444,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.inputs(),
             JackalNode::Filter(node) => node.inputs(),
             JackalNode::LZPCalculator(node) => node.inputs(),
+            JackalNode::LZ77Calculator(node) => node.inputs(),
             JackalNode::LZ78Calculator(node) => node.inputs(),
             JackalNode::SizeOf(node) => node.inputs(),
         }
@@ -451,6 +460,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.set_input_ty(input, ty),
             JackalNode::Filter(node) => node.set_input_ty(input, ty),
             JackalNode::LZPCalculator(node) => node.set_input_ty(input, ty),
+            JackalNode::LZ77Calculator(node) => node.set_input_ty(input, ty),
             JackalNode::LZ78Calculator(node) => node.set_input_ty(input, ty),
             JackalNode::SizeOf(node) => node.set_input_ty(input, ty),
         }
@@ -465,6 +475,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.input_ty(input),
             JackalNode::Filter(node) => node.input_ty(input),
             JackalNode::LZPCalculator(node) => node.input_ty(input),
+            JackalNode::LZ77Calculator(node) => node.input_ty(input),
             JackalNode::LZ78Calculator(node) => node.input_ty(input),
             JackalNode::SizeOf(node) => node.input_ty(input),
         }
@@ -479,6 +490,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.input_ui(input, ui),
             JackalNode::Filter(node) => node.input_ui(input, ui),
             JackalNode::LZPCalculator(node) => node.input_ui(input, ui),
+            JackalNode::LZ77Calculator(node) => node.input_ui(input, ui),
             JackalNode::LZ78Calculator(node) => node.input_ui(input, ui),
             JackalNode::SizeOf(node) => node.input_ui(input, ui),
         }
@@ -490,6 +502,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.outputs(),
             JackalNode::Filter(node) => node.outputs(),
             JackalNode::LZPCalculator(node) => node.outputs(),
+            JackalNode::LZ77Calculator(node) => node.outputs(),
             JackalNode::LZ78Calculator(node) => node.outputs(),
             JackalNode::SizeOf(node) => node.outputs(),
         }
@@ -504,6 +517,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.output_ty(output),
             JackalNode::Filter(node) => node.output_ty(output),
             JackalNode::LZPCalculator(node) => node.output_ty(output),
+            JackalNode::LZ77Calculator(node) => node.output_ty(output),
             JackalNode::LZ78Calculator(node) => node.output_ty(output),
             JackalNode::SizeOf(node) => node.output_ty(output),
         }
@@ -518,6 +532,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.output_ui(output, ui),
             JackalNode::Filter(node) => node.output_ui(output, ui),
             JackalNode::LZPCalculator(node) => node.output_ui(output, ui),
+            JackalNode::LZ77Calculator(node) => node.output_ui(output, ui),
             JackalNode::LZ78Calculator(node) => node.output_ui(output, ui),
             JackalNode::SizeOf(node) => node.output_ui(output, ui),
         }
@@ -529,6 +544,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.has_body(),
             JackalNode::Filter(node) => node.has_body(),
             JackalNode::LZPCalculator(node) => node.has_body(),
+            JackalNode::LZ77Calculator(node) => node.has_body(),
             JackalNode::LZ78Calculator(node) => node.has_body(),
             JackalNode::SizeOf(node) => node.has_body(),
         }
@@ -540,6 +556,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.body_ui(ui),
             JackalNode::Filter(node) => node.body_ui(ui),
             JackalNode::LZPCalculator(node) => node.body_ui(ui),
+            JackalNode::LZ77Calculator(node) => node.body_ui(ui),
             JackalNode::LZ78Calculator(node) => node.body_ui(ui),
             JackalNode::SizeOf(node) => node.body_ui(ui),
         }
@@ -554,6 +571,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.get_output(output),
             JackalNode::Filter(node) => node.get_output(output),
             JackalNode::LZPCalculator(node) => node.get_output(output),
+            JackalNode::LZ77Calculator(node) => node.get_output(output),
             JackalNode::LZ78Calculator(node) => node.get_output(output),
             JackalNode::SizeOf(node) => node.get_output(output),
         }
@@ -568,6 +586,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.set_input(input, data),
             JackalNode::Filter(node) => node.set_input(input, data),
             JackalNode::LZPCalculator(node) => node.set_input(input, data),
+            JackalNode::LZ77Calculator(node) => node.set_input(input, data),
             JackalNode::LZ78Calculator(node) => node.set_input(input, data),
             JackalNode::SizeOf(node) => node.set_input(input, data),
         }
@@ -579,6 +598,7 @@ impl JackalNode {
             JackalNode::SourceImage(node) => node.prepare(ctx),
             JackalNode::Filter(node) => node.prepare(ctx),
             JackalNode::LZPCalculator(node) => node.prepare(ctx),
+            JackalNode::LZ77Calculator(node) => node.prepare(ctx),
             JackalNode::LZ78Calculator(node) => node.prepare(ctx),
             JackalNode::SizeOf(node) => node.prepare(ctx),
         }
@@ -1449,10 +1469,10 @@ impl<'de> serde::Deserialize<'de> for SizeOfNode {
 
 fn human_readable_bits(bits: u64) -> String {
     match bits {
-        ..0x400 => format!("{} bit", bits),
-        ..0x100000 => format!("{} Kbit", bits / 0x400),
-        ..0x40000000 => format!("{} Mbit", bits / 0x100000),
-        ..0x10000000000 => format!("{} Gbit", bits / 0x40000000),
+        ..0x1000 => format!("{} bit", bits),
+        ..0x400000 => format!("{} Kbit", bits / 0x400),
+        ..0x100000000 => format!("{} Mbit", bits / 0x100000),
+        ..0x40000000000 => format!("{} Gbit", bits / 0x40000000),
         _ => format!("{} Tbits", bits / 0x10000000000),
     }
 }
@@ -1647,5 +1667,182 @@ impl<'de> serde::Deserialize<'de> for LZ78CalculatorNode {
     {
         <() as Deserialize<'de>>::deserialize(deserializer)?;
         Ok(LZ78CalculatorNode::new())
+    }
+}
+
+/// Calculates output size of LZP compression.
+struct LZ77CalculatorNode {
+    input: Option<PixelType>,
+    lz77_size: u64,
+}
+
+impl LZ77CalculatorNode {
+    fn new() -> Self {
+        LZ77CalculatorNode {
+            input: None,
+            lz77_size: 0,
+        }
+    }
+
+    fn prepare(&mut self, _ctx: &egui::Context) {}
+
+    fn title(&self) -> String {
+        "LZ77 calculator".to_owned()
+    }
+
+    fn inputs(&self) -> usize {
+        1
+    }
+
+    fn set_input_ty(&mut self, input: usize, ty: JackalType) -> bool {
+        match input {
+            0 => match ty {
+                JackalType::Null => {
+                    self.input = None;
+                    true
+                }
+                JackalType::Image(pixel_type) => {
+                    self.input = Some(pixel_type);
+                    true
+                }
+                _ => false,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn input_ty(&self, input: usize) -> JackalType {
+        match input {
+            0 => match self.input {
+                None => JackalType::Null,
+                Some(pixel_type) => JackalType::Image(pixel_type),
+            },
+            1 | 2 => JackalType::Uint,
+            _ => unreachable!(),
+        }
+    }
+
+    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
+        match input {
+            0 => {}
+            _ => unreachable!(),
+        }
+    }
+
+    fn set_input(&mut self, input: usize, value: JackalValue) {
+        match input {
+            0 => {
+                self.lz77_size = 0;
+
+                let image = match value {
+                    JackalValue::Null => return,
+                    JackalValue::Image(image) => {
+                        assert_eq!(Some(image.pixel_ty()), self.input);
+                        image
+                    }
+                    _ => unreachable!(),
+                };
+
+                let mut write_size = WriteSize::new();
+                let mut writer = &mut write_size;
+
+                for x in (0..image.width()).step_by(256) {
+                    for y in (0..image.height()).step_by(256) {
+                        match self.input {
+                            None => {}
+                            Some(PixelType::Rgb8U) => {
+                                let mut encoder =
+                                    jkl::lz77::Encoder::<Rgb8U>::new(Rgb8U::BLACK, 2048);
+
+                                for dx in x..u32::min(x + 256, image.width()) {
+                                    for dy in y..u32::min(y + 256, image.height()) {
+                                        let p = image.get(dx, dy);
+
+                                        match p {
+                                            PixelValue::Rgb8U(rgb) => {
+                                                encoder.encode(rgb, &mut writer).unwrap();
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            Some(PixelType::Rgba8U) => {
+                                let mut encoder =
+                                    jkl::lz77::Encoder::<Rgba8U>::new(Rgba8U::BLACK, 2048);
+
+                                for dx in x..u32::min(x + 256, image.width()) {
+                                    for dy in y..u32::min(y + 256, image.height()) {
+                                        let p = image.get(dx, dy);
+
+                                        match p {
+                                            PixelValue::Rgba8U(rgba) => {
+                                                encoder.encode(rgba, &mut writer).unwrap();
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                self.lz77_size = (write_size.size() as u64) * 8;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn outputs(&self) -> usize {
+        1
+    }
+
+    fn output_ty(&self, output: usize) -> JackalType {
+        assert_eq!(output, 0);
+        JackalType::Uint
+    }
+
+    fn output_ui(&mut self, output: usize, ui: &mut Ui) {
+        assert_eq!(output, 0);
+
+        let human_readable = human_readable_bits(self.lz77_size);
+        let r = ui.label(human_readable);
+        r.on_hover_text(format!("{} bit", self.lz77_size));
+    }
+
+    fn get_output(&self, output: usize) -> JackalValue {
+        assert_eq!(output, 0);
+        match &self.input {
+            Some(_) => JackalValue::Uint(self.lz77_size),
+            None => JackalValue::Null,
+        }
+    }
+
+    fn has_body(&self) -> bool {
+        false
+    }
+
+    fn body_ui(&mut self, _ui: &mut Ui) {
+        unreachable!()
+    }
+}
+
+impl serde::Serialize for LZ77CalculatorNode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_unit()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LZ77CalculatorNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        Ok(LZ77CalculatorNode::new())
     }
 }

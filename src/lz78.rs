@@ -253,7 +253,7 @@ fn test_u16() {
     let mut compressed = Vec::new();
 
     let data = [
-        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 2, 1, 1, 3, 3, 1, 1, 1, 2,
     ];
 
     let mut writer = WriteBits::new(&mut compressed);

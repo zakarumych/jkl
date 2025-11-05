@@ -2,8 +2,11 @@
 
 use std::{
     hash::Hash,
+    io,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
+
+use crate::bytes::LeBytes;
 
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -3291,6 +3294,22 @@ impl Rgb8U {
     }
 }
 
+impl LeBytes for Rgb8U {
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn write_to(&self, writer: &mut impl io::Write) -> Result<(), io::Error> {
+        writer.write_all(&self.0)
+    }
+
+    fn read_from(input: &mut impl io::Read) -> Result<Self, io::Error> {
+        let mut bytes = [0u8; 3];
+        input.read_exact(&mut bytes)?;
+        Ok(Rgb8U(bytes))
+    }
+}
+
 /// An RGB color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
@@ -3473,6 +3492,22 @@ impl Rgba8U {
         let a = lhs.a().wrapping_sub(rhs.a());
 
         Rgba8U::new(r, g, b, a)
+    }
+}
+
+impl LeBytes for Rgba8U {
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn write_to(&self, writer: &mut impl io::Write) -> Result<(), io::Error> {
+        writer.write_all(&self.0)
+    }
+
+    fn read_from(input: &mut impl io::Read) -> Result<Self, io::Error> {
+        let mut bytes = [0u8; 4];
+        input.read_exact(&mut bytes)?;
+        Ok(Rgba8U(bytes))
     }
 }
 
