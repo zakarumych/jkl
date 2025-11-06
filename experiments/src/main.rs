@@ -1648,9 +1648,11 @@ impl LZ77CalculatorNode {
                     _ => unreachable!(),
                 };
 
+                let mut ebs = ExtendLZ77U8BitsSize(&mut self.lz77_size);
+
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut encoder = jkl::lz77::Encoder::<u8>::new(0, 256);
+                        let mut encoder = jkl::lz77::Encoder::<u8>::new(0, 2048);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -1658,29 +1660,15 @@ impl LZ77CalculatorNode {
 
                                 match p {
                                     PixelValue::Rgb8U(rgb) => {
-                                        if let Some(_) = encoder.encode(rgb.r()) {
-                                            self.lz77_size += 32;
-                                        }
-                                        if let Some(_) = encoder.encode(rgb.g()) {
-                                            self.lz77_size += 32;
-                                        }
-                                        if let Some(_) = encoder.encode(rgb.b()) {
-                                            self.lz77_size += 32;
-                                        }
+                                        encoder.encode(rgb.r(), &mut ebs);
+                                        encoder.encode(rgb.g(), &mut ebs);
+                                        encoder.encode(rgb.b(), &mut ebs);
                                     }
                                     PixelValue::Rgba8U(rgba) => {
-                                        if let Some(_) = encoder.encode(rgba.r()) {
-                                            self.lz77_size += 32;
-                                        }
-                                        if let Some(_) = encoder.encode(rgba.g()) {
-                                            self.lz77_size += 32;
-                                        }
-                                        if let Some(_) = encoder.encode(rgba.b()) {
-                                            self.lz77_size += 32;
-                                        }
-                                        if let Some(_) = encoder.encode(rgba.a()) {
-                                            self.lz77_size += 32;
-                                        }
+                                        encoder.encode(rgba.r(), &mut ebs);
+                                        encoder.encode(rgba.g(), &mut ebs);
+                                        encoder.encode(rgba.b(), &mut ebs);
+                                        encoder.encode(rgba.a(), &mut ebs);
                                     }
                                     _ => {}
                                 }
@@ -2223,30 +2211,18 @@ impl LZ77RansCalculatorNode {
 
                                 match p {
                                     PixelValue::Rgb8U(rgb) => {
-                                        if let Some(t) = lz77.encode(rgb.r()) {
-                                            buffer.push(t);
-                                        }
-                                        if let Some(t) = lz77.encode(rgb.g()) {
-                                            buffer.push(t);
-                                        }
-                                        if let Some(t) = lz77.encode(rgb.b()) {
-                                            buffer.push(t);
-                                        }
+                                        lz77.encode(rgb.r(), &mut buffer);
+                                        lz77.encode(rgb.g(), &mut buffer);
+                                        lz77.encode(rgb.b(), &mut buffer);
                                     }
                                     _ => {}
                                 }
                             }
                         }
 
-                        if let Some(t) = lz77.finish() {
-                            buffer.push(t);
-                        }
+                        lz77.finish(&mut buffer);
                     }
                 }
-
-                let total_length = buffer.iter().fold(0, |acc, t| acc + t.length);
-                let length_ratio = total_length as f32 / buffer.len() as f32;
-                println!("Length Ratio: {}", length_ratio);
 
                 let ctx = jkl::ans::Context::new(buffer.iter().copied());
 
@@ -2270,29 +2246,23 @@ impl LZ77RansCalculatorNode {
 
                                 match p {
                                     PixelValue::Rgb8U(rgb) => {
-                                        if let Some(t) = lz77.encode(rgb.r()) {
-                                            buffer.push(t);
-                                        }
-                                        if let Some(t) = lz77.encode(rgb.g()) {
-                                            buffer.push(t);
-                                        }
-                                        if let Some(t) = lz77.encode(rgb.b()) {
-                                            buffer.push(t);
-                                        }
+                                        lz77.encode(rgb.r(), &mut buffer);
+                                        lz77.encode(rgb.g(), &mut buffer);
+                                        lz77.encode(rgb.b(), &mut buffer);
                                     }
                                     _ => {}
                                 }
                             }
                         }
 
-                        if let Some(t) = lz77.finish() {
-                            buffer.push(t);
-                        }
+                        lz77.finish(&mut buffer);
+
+                        let tokens_size = buffer.iter().fold(0, |acc, t| lz77_token_size(*t) + acc);
 
                         println!(
                             "LZ77 Tokens {} -> {}",
                             buffer.len(),
-                            human_readable_bits(buffer.len() as u64 * 32)
+                            human_readable_bits(tokens_size)
                         );
 
                         let mut rans = jkl::ans::Encoder::new(&ctx);
@@ -2605,3 +2575,69 @@ impl<'de> serde::Deserialize<'de> for LZ78RansCalculatorNode {
         Ok(LZ78RansCalculatorNode::new())
     }
 }
+
+fn lz77_token_size(token: jkl::lz77::Token<u8>) -> u64 {
+    let mut size = 0;
+
+    match token {
+        jkl::lz77::Token::Reference { distance, length } => {
+            size += 8;
+            if distance > 15 {
+                size += 8;
+                if distance > 270 {
+                    size += 16;
+                }
+            }
+            if length > 15 {
+                size += 8;
+                if length > 270 {
+                    size += 16;
+                }
+            }
+        }
+        jkl::lz77::Token::Literal { .. } => {
+            size += 8;
+        }
+    }
+
+    size
+}
+
+struct ExtendLZ77U8BitsSize<'a>(&'a mut u64);
+
+impl Extend<jkl::lz77::Token<u8>> for ExtendLZ77U8BitsSize<'_> {
+    fn extend<T: IntoIterator<Item = jkl::lz77::Token<u8>>>(&mut self, iter: T) {
+        for token in iter {
+            *self.0 += lz77_token_size(token);
+        }
+    }
+}
+
+struct ExtendLZ78U8BitsSize<'a>(&'a mut u64);
+
+// impl Extend<jkl::lz78::Token<u8>> for ExtendLZ78U8BitsSize<'_> {
+//     fn extend<T: IntoIterator<Item = jkl::lz78::Token<u8>>>(&mut self, iter: T) {
+//         for token in iter {
+//             match token {
+//                 jkl::lz77::Token::Reference { distance, length } => {
+//                     *self.0 += 8;
+//                     if distance > 15 {
+//                         *self.0 += 8;
+//                         if distance > 270 {
+//                             *self.0 += 16;
+//                         }
+//                     }
+//                     if length > 15 {
+//                         *self.0 += 8;
+//                         if length > 270 {
+//                             *self.0 += 16;
+//                         }
+//                     }
+//                 }
+//                 jkl::lz77::Token::Literal { .. } => {
+//                     *self.0 += 8;
+//                 }
+//             }
+//         }
+//     }
+// }

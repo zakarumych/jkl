@@ -1,12 +1,9 @@
-use std::io::{self, Read, Write};
-
 use crate::bytes::LeBytes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Token<T> {
-    pub distance: usize,
-    pub length: usize,
-    pub literal: T,
+pub enum Token<T> {
+    Reference { distance: usize, length: usize },
+    Literal { literal: T },
 }
 
 struct Window<T> {
@@ -153,59 +150,63 @@ where
         }
     }
 
-    pub fn encode(&mut self, input: T) -> Option<Token<T>> {
+    pub fn encode(&mut self, input: T, output: &mut impl Extend<Token<T>>) {
         if self.length == 0 {
             match self.window.find_elem(0, &input) {
                 None => {
-                    let emit = Token {
-                        distance: 0,
-                        length: 0,
-                        literal: input,
-                    };
+                    let emit = Token::Literal { literal: input };
                     self.window.push(input);
                     self.distance = 0;
                     self.length = 0;
-                    return Some(emit);
+                    output.extend(Some(emit));
+                    return;
                 }
                 Some(pos) => {
                     self.distance = pos;
                     self.length = 1;
-                    return None;
+                    return;
                 }
             }
         } else {
             if *self.window.get(distance_index(self.distance, self.length)) == input {
                 self.length += 1;
-                return None;
+                return;
             }
 
             let mut offset = self.distance;
             loop {
                 match self.window.find_range(offset, self.distance, self.length) {
                     None => {
-                        let emit = Token {
-                            distance: self.distance,
-                            length: self.length,
-                            literal: input,
-                        };
+                        if self.length >= 4 {
+                            output.extend(Some(Token::Reference {
+                                distance: self.distance,
+                                length: self.length,
+                            }));
+                        }
 
                         for i in 0..self.length {
                             let elem = *self.window.get(distance_index(self.distance, i));
                             self.window.push(elem);
                             self.distance += 1;
+
+                            if self.length < 4 {
+                                output.extend(Some(Token::Literal { literal: elem }));
+                            }
                         }
+
+                        output.extend(Some(Token::Literal { literal: input }));
 
                         self.window.push(input);
                         self.distance = 0;
                         self.length = 0;
 
-                        return Some(emit);
+                        return;
                     }
                     Some(pos) => {
                         if *self.window.get(distance_index(pos, self.length)) == input {
                             self.distance = pos;
                             self.length += 1;
-                            return None;
+                            return;
                         }
 
                         offset = pos;
@@ -215,32 +216,30 @@ where
         }
     }
 
-    pub fn finish(self) -> Option<Token<T>> {
-        if self.length != 0 {
-            let elem = self
-                .window
-                .get(distance_index(self.distance, self.length - 1));
-
-            Some(Token {
-                distance: self.distance,
-                length: self.length - 1,
-                literal: *elem,
-            })
+    pub fn finish(mut self, output: &mut impl Extend<Token<T>>) {
+        if self.length < 4 {
+            for i in 0..self.length {
+                let elem = *self.window.get(distance_index(self.distance, i));
+                self.distance += 1;
+                output.extend(Some(Token::Literal { literal: elem }));
+            }
         } else {
-            None
+            output.extend(Some(Token::Reference {
+                distance: self.distance,
+                length: self.length,
+            }));
         }
     }
 }
 
-struct Entry<T> {
+struct Entry {
     distance: usize,
     length: usize,
-    literal: T,
 }
 
 pub struct Decoder<T> {
     window: Window<T>,
-    entry: Option<Entry<T>>,
+    entry: Option<Entry>,
 }
 
 impl<T> Decoder<T>
@@ -254,39 +253,38 @@ where
         }
     }
 
-    fn decode_next(&mut self, mut next_token: impl FnMut() -> Option<Token<T>>) -> Option<T> {
+    fn decode(&mut self, tokens: &mut impl Iterator<Item = Token<T>>) -> Option<T> {
         match &mut self.entry {
             None => {
-                let token = next_token()?;
+                let token = tokens.next()?;
 
-                if token.length == 0 {
-                    self.window.push(token.literal);
-                    return Some(token.literal);
+                match token {
+                    Token::Reference { distance, length } => {
+                        let first = *self.window.get(distance);
+                        self.window.push(first);
+
+                        self.entry = Some(Entry {
+                            distance: distance,
+                            length: length - 1,
+                        });
+
+                        Some(first)
+                    }
+                    Token::Literal { literal } => {
+                        self.window.push(literal);
+                        return Some(literal);
+                    }
                 }
-
-                let first = *self.window.get(token.distance);
-                self.window.push(first);
-
-                self.entry = Some(Entry {
-                    distance: token.distance,
-                    length: token.length - 1,
-                    literal: token.literal,
-                });
-
-                Some(first)
             }
             Some(entry) => {
+                debug_assert!(entry.length > 0);
+                let first = *self.window.get(entry.distance);
+                self.window.push(first);
+                entry.length -= 1;
                 if entry.length == 0 {
-                    let literal = entry.literal;
                     self.entry = None;
-                    self.window.push(literal);
-                    Some(literal)
-                } else {
-                    let first = *self.window.get(entry.distance);
-                    entry.length -= 1;
-                    self.window.push(first);
-                    Some(first)
                 }
+                Some(first)
             }
         }
     }
@@ -310,19 +308,20 @@ fn test_u16() {
     ];
 
     for byte in data {
-        compressed.extend(encoder.encode(byte));
+        encoder.encode(byte, &mut compressed);
     }
 
-    compressed.extend(encoder.finish());
+    encoder.finish(&mut compressed);
 
     let mut decoder = Decoder::<u16>::new(0, 256);
 
     let mut input = compressed.iter().copied();
-    let mut decoded = 0;
+    let mut decoded = Vec::new();
 
-    while decoded < data.len() {
-        let elem = decoder.decode_next(|| input.next()).unwrap();
-        assert_eq!(data[decoded], elem);
-        decoded += 1;
+    while decoded.len() < data.len() {
+        let elem = decoder.decode(&mut input).unwrap();
+        decoded.push(elem);
     }
+
+    assert_eq!(data[..], decoded[..]);
 }
