@@ -1,12 +1,13 @@
-use std::{
-    io::{self, Read, Write},
-    ops::Range,
-};
-
-use brotli::enc::histogram::HistogramDistanceScratch;
-use rand::rand_core::le;
+use std::io::{self, Read, Write};
 
 use crate::bytes::LeBytes;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Token<T> {
+    pub distance: usize,
+    pub length: usize,
+    pub literal: T,
+}
 
 struct Window<T> {
     buffer: Vec<T>,
@@ -134,41 +135,7 @@ fn distance_index(distance: usize, index: usize) -> usize {
     distance - (index % (distance + 1))
 }
 
-#[derive(Clone, Copy)]
-struct Entry<T> {
-    distance: usize,
-    length: usize,
-    value: T,
-}
-
-impl<T> Entry<T> {
-    fn write_to(self, mut writer: impl Write) -> io::Result<()>
-    where
-        T: LeBytes,
-    {
-        (self.distance as u16).write_to(&mut writer)?;
-        (self.length as u16).write_to(&mut writer)?;
-        self.value.write_to(&mut writer)?;
-
-        Ok(())
-    }
-
-    fn read_from(mut reader: impl Read) -> io::Result<Self>
-    where
-        T: LeBytes,
-    {
-        let distance = u16::read_from(&mut reader)? as usize;
-        let length = u16::read_from(&mut reader)? as usize;
-        let value = T::read_from(&mut reader)?;
-        Ok(Entry {
-            distance,
-            length,
-            value,
-        })
-    }
-}
-
-struct Encoder<T> {
+pub struct Encoder<T> {
     window: Window<T>,
     distance: usize,
     length: usize,
@@ -186,43 +153,41 @@ where
         }
     }
 
-    pub fn encode(&mut self, input: T, mut writer: impl Write) -> std::io::Result<()> {
+    pub fn encode(&mut self, input: T) -> Option<Token<T>> {
         if self.length == 0 {
             match self.window.find_elem(0, &input) {
                 None => {
-                    Entry {
+                    let emit = Token {
                         distance: 0,
                         length: 0,
-                        value: input,
-                    }
-                    .write_to(writer)?;
+                        literal: input,
+                    };
                     self.window.push(input);
                     self.distance = 0;
                     self.length = 0;
-                    return Ok(());
+                    return Some(emit);
                 }
                 Some(pos) => {
                     self.distance = pos;
                     self.length = 1;
-                    return Ok(());
+                    return None;
                 }
             }
         } else {
             if *self.window.get(distance_index(self.distance, self.length)) == input {
                 self.length += 1;
-                return Ok(());
+                return None;
             }
 
             let mut offset = self.distance;
             loop {
                 match self.window.find_range(offset, self.distance, self.length) {
                     None => {
-                        Entry {
+                        let emit = Token {
                             distance: self.distance,
                             length: self.length,
-                            value: input,
-                        }
-                        .write_to(writer)?;
+                            literal: input,
+                        };
 
                         for i in 0..self.length {
                             let elem = *self.window.get(distance_index(self.distance, i));
@@ -234,13 +199,13 @@ where
                         self.distance = 0;
                         self.length = 0;
 
-                        return Ok(());
+                        return Some(emit);
                     }
                     Some(pos) => {
                         if *self.window.get(distance_index(pos, self.length)) == input {
                             self.distance = pos;
                             self.length += 1;
-                            return Ok(());
+                            return None;
                         }
 
                         offset = pos;
@@ -250,25 +215,30 @@ where
         }
     }
 
-    pub fn finish(self, writer: impl Write) -> std::io::Result<()> {
+    pub fn finish(self) -> Option<Token<T>> {
         if self.length != 0 {
             let elem = self
                 .window
                 .get(distance_index(self.distance, self.length - 1));
 
-            Entry {
-                value: *elem,
+            Some(Token {
                 distance: self.distance,
                 length: self.length - 1,
-            }
-            .write_to(writer)?;
+                literal: *elem,
+            })
+        } else {
+            None
         }
-
-        Ok(())
     }
 }
 
-struct Decoder<T> {
+struct Entry<T> {
+    distance: usize,
+    length: usize,
+    literal: T,
+}
+
+pub struct Decoder<T> {
     window: Window<T>,
     entry: Option<Entry<T>>,
 }
@@ -284,40 +254,38 @@ where
         }
     }
 
-    fn decode_next(&mut self, mut reader: impl Read) -> io::Result<T> {
+    fn decode_next(&mut self, mut next_token: impl FnMut() -> Option<Token<T>>) -> Option<T> {
         match &mut self.entry {
             None => {
-                let distance = u16::read_from(&mut reader)? as usize;
-                let length = u16::read_from(&mut reader)? as usize;
-                let value = T::read_from(&mut reader)?;
+                let token = next_token()?;
 
-                if length == 0 {
-                    self.window.push(value);
-                    return Ok(value);
+                if token.length == 0 {
+                    self.window.push(token.literal);
+                    return Some(token.literal);
                 }
 
-                let first = *self.window.get(distance);
+                let first = *self.window.get(token.distance);
                 self.window.push(first);
 
                 self.entry = Some(Entry {
-                    distance: distance,
-                    length: length - 1,
-                    value,
+                    distance: token.distance,
+                    length: token.length - 1,
+                    literal: token.literal,
                 });
 
-                Ok(first)
+                Some(first)
             }
             Some(entry) => {
                 if entry.length == 0 {
-                    let value = entry.value;
+                    let literal = entry.literal;
                     self.entry = None;
-                    self.window.push(value);
-                    Ok(value)
+                    self.window.push(literal);
+                    Some(literal)
                 } else {
                     let first = *self.window.get(entry.distance);
                     entry.length -= 1;
                     self.window.push(first);
-                    Ok(first)
+                    Some(first)
                 }
             }
         }
@@ -330,22 +298,30 @@ fn test_u16() {
     let mut compressed = Vec::new();
 
     let data = [
-        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 2, 1, 1, 3, 3, 1, 1, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 3, 1, 1, 1, 2, 2,
+        1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 3, 1,
+        1, 1, 2, 2, 1, 1, 3, 3, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 3,
+        3, 1, 1, 1, 2, 1, 3, 1, 1, 1, 2, 2, 1, 1, 3, 3,
     ];
 
     for byte in data {
-        encoder.encode(byte, &mut compressed).unwrap();
+        compressed.extend(encoder.encode(byte));
     }
 
-    encoder.finish(&mut compressed).unwrap();
+    compressed.extend(encoder.finish());
 
     let mut decoder = Decoder::<u16>::new(0, 256);
 
-    let mut input = &compressed[..];
+    let mut input = compressed.iter().copied();
     let mut decoded = 0;
 
     while decoded < data.len() {
-        let elem = decoder.decode_next(&mut input).unwrap();
+        let elem = decoder.decode_next(|| input.next()).unwrap();
         assert_eq!(data[decoded], elem);
         decoded += 1;
     }

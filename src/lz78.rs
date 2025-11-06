@@ -7,22 +7,23 @@
 //! when 256th entry is added, the index becomes 16bits.
 //!
 
-use std::io::{Read, Write};
+use std::iter::{Fuse, FusedIterator};
 
-use crate::{
-    bits::{ReadBits, WriteBits},
-    bytes::LeBytes,
-};
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Token<T> {
+    pub prefix: usize,
+    pub literal: T,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Entry<T> {
-    prefix: u32,
-    element: T,
+    prefix: usize,
+    literal: T,
 }
 
 pub struct Encoder<T> {
     entires: Vec<Entry<T>>,
-    prefix: u32,
+    prefix: usize,
 }
 
 impl<T> Encoder<T> {
@@ -36,10 +37,10 @@ impl<T> Encoder<T> {
 
 impl<T> Encoder<T>
 where
-    T: Copy + Eq + LeBytes,
+    T: Copy + Eq,
 {
-    fn lookup(&self, entry: Entry<T>) -> Option<u32> {
-        for i in entry.prefix..self.entires.len() as u32 {
+    fn lookup(&self, entry: Entry<T>) -> Option<usize> {
+        for i in entry.prefix..self.entires.len() as usize {
             if self.entires[i as usize] == entry {
                 return Some(i + 1);
             }
@@ -48,77 +49,104 @@ where
         None
     }
 
-    fn insert(&mut self, entry: Entry<T>) {
-        self.entires.push(entry);
-    }
-
-    fn write(
-        &self,
-        index: u32,
-        input: T,
-        writer: &mut WriteBits<impl Write>,
-    ) -> std::io::Result<()> {
-        let bits = (self.entires.len() + 1)
-            .next_power_of_two()
-            .trailing_zeros();
-
-        debug_assert!(1 << bits > index);
-
-        let index_bytes = index.to_le_bytes();
-        writer.write_bits(&index_bytes, 0, bits as usize)?;
-        <T as LeBytes>::write_to(&input, writer)?;
-
-        Ok(())
-    }
-
-    fn write_last_index(
-        &self,
-        index: u32,
-        writer: &mut WriteBits<impl Write>,
-    ) -> std::io::Result<()> {
-        let bits = (self.entires.len() + 1)
-            .next_power_of_two()
-            .trailing_zeros();
-
-        debug_assert!(1 << bits > index);
-
-        let index_bytes = index.to_le_bytes();
-        writer.write_bits(&index_bytes, 0, bits as usize)?;
-
-        Ok(())
-    }
-
-    pub fn encode(&mut self, input: T, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
+    pub fn encode(&mut self, symbol: T) -> Option<Token<T>> {
         let entry = Entry {
             prefix: self.prefix,
-            element: input,
+            literal: symbol,
         };
         let index = self.lookup(entry);
 
         match index {
             None => {
-                self.write(self.prefix, input, writer)?;
-                self.insert(entry);
+                let token = Token {
+                    prefix: self.prefix,
+                    literal: symbol,
+                };
+                self.entires.push(entry);
                 self.prefix = 0;
+                Some(token)
             }
             Some(index) => {
                 self.prefix = index;
+                None
+            }
+        }
+    }
+
+    pub fn finish(self) -> Option<Token<T>> {
+        { self }.finish_mut()
+    }
+
+    fn finish_mut(&mut self) -> Option<Token<T>> {
+        if self.prefix == 0 {
+            return None;
+        }
+
+        let last = &self.entires[self.prefix as usize - 1];
+        self.prefix = 0;
+
+        Some(Token {
+            prefix: last.prefix,
+            literal: last.literal,
+        })
+    }
+
+    pub fn stream<I>(self, input: I) -> EncodeStream<T, I::IntoIter>
+    where
+        I: IntoIterator,
+    {
+        EncodeStream {
+            encoder: self,
+            input: input.into_iter().fuse(),
+        }
+    }
+}
+
+struct EncodeStream<T, I> {
+    encoder: Encoder<T>,
+    input: Fuse<I>,
+}
+
+impl<T, I> Iterator for EncodeStream<T, I>
+where
+    I: Iterator<Item = T>,
+    T: Eq + Copy,
+{
+    type Item = Token<T>;
+
+    fn next(&mut self) -> Option<Token<T>> {
+        while let Some(input) = self.input.next() {
+            if let Some(token) = self.encoder.encode(input) {
+                return Some(token);
             }
         }
 
-        Ok(())
+        self.encoder.finish_mut()
     }
 
-    pub fn finish(self, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
-        self.write_last_index(self.prefix, writer)?;
-        Ok(())
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        self.input
+            .fold(init, |state, input| match self.encoder.encode(input) {
+                None => state,
+                Some(token) => f(state, token),
+            })
     }
+}
+
+impl<T, I> FusedIterator for EncodeStream<T, I>
+where
+    I: Iterator<Item = T>,
+    T: Eq + Copy,
+{
 }
 
 pub struct Decoder<T> {
     scratch: Vec<T>,
-    entires: Vec<(u32, u32)>,
-    output: (u32, u32),
+    entires: Vec<(usize, usize)>,
 }
 
 impl<T> Decoder<T> {
@@ -126,13 +154,6 @@ impl<T> Decoder<T> {
         Decoder {
             scratch: Vec::new(),
             entires: Vec::new(),
-            output: (0, 0),
-        }
-    }
-
-    pub fn finish(&self) {
-        if self.output.0 != self.output.1 {
-            panic!("Decoder output was not consumed.");
         }
     }
 }
@@ -152,41 +173,15 @@ impl From<std::io::Error> for DecodeError {
 
 impl<T> Decoder<T>
 where
-    T: Copy + Eq + LeBytes,
+    T: Copy + Eq,
 {
-    fn read(&self, reader: &mut ReadBits<impl Read>) -> std::io::Result<(u32, Option<T>)> {
-        let bits = (self.entires.len() + 1)
-            .next_power_of_two()
-            .trailing_zeros();
-
-        let mut index_bytes = [0; 4];
-        reader.read_bits(&mut index_bytes, 0, bits as usize)?;
-        let index = u32::from_le_bytes(index_bytes);
-
-        let element = match <T as LeBytes>::read_from(reader) {
-            Ok(element) => Some(element),
-            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
-                // Last piece.
-                None
-            }
-            Err(err) => return Err(err),
-        };
-
-        Ok((index, element))
-    }
-
-    fn decode_next_range<'a>(
-        &'a mut self,
-        reader: &mut ReadBits<impl Read>,
-    ) -> Result<(u32, u32), DecodeError> {
-        let (index, element) = self.read(reader)?;
-
+    fn decode_next_range<'a>(&'a mut self, token: Token<T>) -> Result<(usize, usize), DecodeError> {
         // Add the new substring to the cache.
-        let (prefix_start, prefix_end) = if index > 0 {
-            if index as usize > self.entires.len() {
+        let (prefix_start, prefix_end) = if token.prefix > 0 {
+            if token.prefix as usize > self.entires.len() {
                 return Err(DecodeError::InvalidIndex);
             }
-            self.entires[(index - 1) as usize]
+            self.entires[(token.prefix - 1) as usize]
         } else {
             (0, 0)
         };
@@ -194,13 +189,7 @@ where
         debug_assert!(prefix_end >= prefix_start);
         let prefix_len = prefix_end - prefix_start;
 
-        let element = match element {
-            Some(element) => element,
-            None => {
-                // Last piece.
-                return Ok((prefix_start, prefix_end));
-            }
-        };
+        let element = token.literal;
 
         let end = if self.entires.is_empty() {
             0
@@ -223,27 +212,11 @@ where
         Ok((new_start, new_end))
     }
 
-    pub fn decode_next_slice<'a>(
-        &'a mut self,
-        input: &mut ReadBits<impl Read>,
-    ) -> Result<&'a [T], DecodeError> {
-        if self.output.0 >= self.output.1 {
-            self.output = self.decode_next_range(input)?;
-        }
+    pub fn decode_next_slice<'a>(&'a mut self, token: Token<T>) -> Result<&'a [T], DecodeError> {
+        let output = self.decode_next_range(token)?;
 
-        let slice = &self.scratch[self.output.0 as usize..self.output.1 as usize];
-        self.output.0 = self.output.1;
+        let slice = &self.scratch[output.0 as usize..output.1 as usize];
         Ok(slice)
-    }
-
-    pub fn decode_next(&mut self, input: &mut ReadBits<impl Read>) -> Result<T, DecodeError> {
-        if self.output.0 >= self.output.1 {
-            self.output = self.decode_next_range(input)?;
-        }
-
-        let element = self.scratch[self.output.0 as usize];
-        self.output.0 += 1;
-        Ok(element)
     }
 }
 
@@ -253,25 +226,32 @@ fn test_u16() {
     let mut compressed = Vec::new();
 
     let data = [
-        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
+        1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 3, 1, 1, 1, 2, 2,
+        1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 3, 1,
+        1, 1, 2, 2, 1, 1, 3, 3, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 3,
+        3, 1, 1, 1, 2, 1, 3, 1, 1, 1, 2, 2, 1, 1, 3, 3,
     ];
 
-    let mut writer = WriteBits::new(&mut compressed);
-
-    for byte in data {
-        encoder.encode(byte, &mut writer).unwrap();
+    for symbol in data {
+        if let Some(token) = encoder.encode(symbol) {
+            compressed.push(token);
+        }
     }
 
-    encoder.finish(&mut writer).unwrap();
-    writer.finish().unwrap();
+    if let Some(token) = encoder.finish() {
+        compressed.push(token);
+    }
 
     let mut decoder = Decoder::<u16>::new();
-
-    let mut input = ReadBits::new(&compressed[..]);
     let mut decoded = 0;
 
-    while decoded < data.len() {
-        let slice = decoder.decode_next_slice(&mut input).unwrap();
+    for token in compressed {
+        let slice = decoder.decode_next_slice(token).unwrap();
         assert_eq!(data[decoded..][..slice.len()], *slice);
         decoded += slice.len();
     }
