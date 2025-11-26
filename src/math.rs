@@ -3,7 +3,7 @@
 use std::{
     hash::Hash,
     io,
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, Sub, SubAssign},
 };
 
 use crate::bytes::LeBytes;
@@ -13,7 +13,7 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     // This lerp is monotonic and produces exactly a for t = 0 and b for t = 1.
     // If t is constant the branch will be optimized out.
 
-    if t < 0.5 {
+    if t <= 0.5 {
         (b - a).mul_add(t, a)
     } else {
         (a - b).mul_add(1.0 - t, b)
@@ -28,6 +28,29 @@ pub trait Zero {
 impl Zero for f32 {
     fn zero() -> Self {
         0.0
+    }
+}
+
+impl Zero for u32 {
+    fn zero() -> Self {
+        0
+    }
+}
+
+/// Trait to create additive identity element.
+pub trait One {
+    fn one() -> Self;
+}
+
+impl One for f32 {
+    fn one() -> Self {
+        1.0
+    }
+}
+
+impl One for u32 {
+    fn one() -> Self {
+        1
     }
 }
 
@@ -3942,4 +3965,102 @@ pub fn pca_axis(v: &[Vec3]) -> Vec3 {
     }
 
     axis
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Rect<T> {
+    pub x: T,
+    pub y: T,
+    pub w: T,
+    pub h: T,
+}
+
+impl<T> Rect<T> {
+    pub fn area(&self) -> T
+    where
+        for<'a> &'a T: Mul<&'a T, Output = T>,
+    {
+        &self.w * &self.h
+    }
+
+    pub fn contains_point(&self, x: T, y: T) -> bool
+    where
+        for<'a> &'a T: Add<&'a T, Output = T>,
+        T: PartialOrd,
+    {
+        self.x <= x && (&self.x + &self.w) > x && self.y <= y && (&self.y + &self.h) > y
+    }
+
+    pub fn contains(&self, other: &Rect<T>) -> bool
+    where
+        for<'a> &'a T: Add<&'a T, Output = T>,
+        T: PartialOrd,
+    {
+        self.x <= other.x
+            && self.y <= other.y
+            && (&self.x + &self.w) >= (&other.x + &other.w)
+            && (&self.y + &self.h) >= (&other.y + &other.h)
+    }
+
+    pub fn round_in(&self, x: T, y: T) -> Self
+    where
+        T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + One + Copy,
+    {
+        let ux = round_up(self.x, x);
+        let uy = round_up(self.y, y);
+        let uw = round_down(self.x + self.w, x) - ux;
+        let uh = round_down(self.y + self.h, y) - uy;
+
+        Rect {
+            x: ux,
+            y: uy,
+            w: uw,
+            h: uh,
+        }
+    }
+
+    pub fn round_out(&self, x: T, y: T) -> Self
+    where
+        T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + One + Copy,
+    {
+        let ux = round_down(self.x, x);
+        let uy = round_down(self.y, y);
+        let uw = round_up(self.x + self.w, x) - ux;
+        let uh = round_up(self.y + self.h, y) - uy;
+
+        Rect {
+            x: ux,
+            y: uy,
+            w: uw,
+            h: uh,
+        }
+    }
+}
+
+pub fn round_down<T>(value: T, round: T) -> T
+where
+    T: Sub<Output = T> + Rem<Output = T> + Copy,
+{
+    value - (value % round)
+}
+
+pub fn round_up<T>(value: T, round: T) -> T
+where
+    T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + One + Copy,
+{
+    round_down(value + round - One::one(), round)
+}
+
+#[test]
+fn test_round_down() {
+    assert_eq!(7, round_down(13, 7));
+    assert_eq!(14, round_down(14, 7));
+    assert_eq!(14, round_down(15, 7));
+}
+
+#[test]
+fn test_round_up() {
+    assert_eq!(14, round_up(13, 7));
+    assert_eq!(14, round_up(14, 7));
+    assert_eq!(21, round_up(15, 7));
 }

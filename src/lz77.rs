@@ -253,7 +253,7 @@ where
         }
     }
 
-    fn decode(&mut self, tokens: &mut impl Iterator<Item = Token<T>>) -> Option<T> {
+    pub fn decode(&mut self, tokens: &mut impl Iterator<Item = Token<T>>) -> Option<T> {
         match &mut self.entry {
             None => {
                 let token = tokens.next()?;

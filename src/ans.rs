@@ -1,6 +1,6 @@
-use std::{collections::BTreeSet, hash::Hash};
+use std::hash::Hash;
 
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
 #[derive(Clone, Debug)]
 pub struct Context<T> {
@@ -12,16 +12,16 @@ pub struct Context<T> {
 
 impl<T> Context<T>
 where
-    T: Ord + Hash + Copy,
+    T: Eq + Hash + Copy,
 {
     pub fn new(input: impl IntoIterator<Item = T>) -> Self {
         let mut freqs = HashMap::<T, u64>::new();
-        let mut set = BTreeSet::new();
+        let mut set = HashSet::new();
 
-        for symbol in input {
+        input.into_iter().for_each(|symbol| {
             *freqs.entry(symbol).or_default() += 1;
             set.insert(symbol);
-        }
+        });
 
         let mut cumul = HashMap::<T, u64>::new();
         let mut accum = 0u64;
@@ -67,7 +67,7 @@ pub struct Encoder<'a, T> {
 
 impl<'a, T> Encoder<'a, T>
 where
-    T: Ord + Hash + Copy,
+    T: Eq + Hash + Copy,
 {
     /// Prepare Ans encoder.
     pub fn new(ctx: &'a Context<T>) -> Self {

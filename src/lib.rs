@@ -13,6 +13,8 @@ pub mod jackal;
 pub mod lz77;
 pub mod lz78;
 pub mod math;
+pub mod max_rects;
+pub mod rle;
 pub mod z_curve;
 
 pub use jackal::{DecodeError, DecompressError, Extent};

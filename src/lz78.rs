@@ -102,7 +102,7 @@ where
     }
 }
 
-struct EncodeStream<T, I> {
+pub struct EncodeStream<T, I> {
     encoder: Encoder<T>,
     input: Fuse<I>,
 }
