@@ -1,25 +1,17 @@
-use std::{
-    array,
-    collections::{HashMap, HashSet},
-    convert::identity,
-    io, iter,
-    marker::PhantomData,
-    path::PathBuf,
-    u32,
-};
+use std::{array, io, path::PathBuf, u32};
 
 use egui::{
-    emath::TSTransform, load::SizedTexture, output, CentralPanel, Color32, ColorImage, Pos2,
-    Stroke, TextureHandle, TextureOptions, Ui, Vec2,
+    emath::TSTransform, load::SizedTexture, CentralPanel, Color32, Pos2, Stroke, TextureHandle,
+    TextureOptions, Ui, Vec2,
 };
 use egui_snarl::{
     ui::{self, PinInfo, SnarlViewer, SnarlWidget},
     InPin, OutPin, Snarl,
 };
 use jkl::{
-    math::{Rect, Rgb32F, Rgb8U, Rgba8U, Vec3, Vec4},
+    math::{Rgb32F, Rgb8U, Rgba8U, Vec3},
     max_rects::MaximalRectangles,
-    rle::{rle, rle_power_of_two},
+    rle::{rle_with_cfg, RleCfg},
 };
 use serde::{de, Deserialize};
 
@@ -2924,15 +2916,21 @@ impl<'de> serde::Deserialize<'de> for AtlasNode {
 ///
 /// Calculates output size of LZP compression.
 struct RleRansCalculatorNode {
+    only_power_of_two: bool,
+    unzip: bool,
     input: Option<PixelType>,
     rans_size: u64,
+    image: Option<ImageValue>,
 }
 
 impl RleRansCalculatorNode {
     fn new() -> Self {
         RleRansCalculatorNode {
+            only_power_of_two: false,
+            unzip: false,
             input: None,
             rans_size: 0,
+            image: None,
         }
     }
 
@@ -2974,7 +2972,7 @@ impl RleRansCalculatorNode {
         }
     }
 
-    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
+    fn input_ui(&mut self, input: usize, _ui: &mut Ui) {
         match input {
             0 => {}
             _ => unreachable!(),
@@ -2984,133 +2982,16 @@ impl RleRansCalculatorNode {
     fn set_input(&mut self, input: usize, value: JackalValue) {
         match input {
             0 => {
-                self.rans_size = 0;
-
-                let image = match value {
-                    JackalValue::Null => return,
+                self.image = match value {
+                    JackalValue::Null => None,
                     JackalValue::Image(image) => {
                         assert_eq!(Some(image.pixel_ty()), self.input);
-                        image
+                        Some(image)
                     }
                     _ => unreachable!(),
                 };
 
-                match self.input {
-                    None => {}
-                    Some(PixelType::Rgb8U) => {
-                        let image = &image;
-                        let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
-                            (0..image.height()).step_by(256).flat_map(move |y| {
-                                let data =
-                                    (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                        (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                            let p = image.get(dx, dy);
-
-                                            match p {
-                                                PixelValue::Rgb8U(c) => [c.r(), c.g(), c.b()],
-                                                _ => unreachable!(),
-                                            }
-                                        })
-                                    });
-
-                                rle_power_of_two(data)
-                                // data
-                            })
-                        });
-
-                        let set = HashSet::<_>::from_iter(rle_data.clone());
-                        let mut set2 = HashSet::new();
-                        for rle in rle_data.clone() {
-                            set2.insert(rle);
-                        }
-
-                        dbg!(set2.difference(&set));
-                        dbg!(set.difference(&set2));
-
-                        let ctx = jkl::ans::Context::new(rle_data);
-
-                        self.rans_size += ctx.map().len() as u64 * 48;
-
-                        (0..image.width()).step_by(256).for_each(|x| {
-                            (0..image.height()).step_by(256).for_each(|y| {
-                                let data =
-                                    (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                        (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                            let p = image.get(dx, dy);
-
-                                            match p {
-                                                PixelValue::Rgb8U(c) => [c.r(), c.g(), c.b()],
-                                                _ => unreachable!(),
-                                            }
-                                        })
-                                    });
-
-                                let rle_data = rle_power_of_two(data);
-                                // let rle_data = data;
-
-                                for val in rle_data.clone() {
-                                    if !set.contains(&val) {
-                                        panic!("{:?}", val);
-                                    }
-                                }
-
-                                let mut encoder = jkl::ans::Encoder::new(&ctx);
-
-                                rle_data.for_each(|p| {
-                                    if let Some(_) = encoder.encode(p) {
-                                        self.rans_size += 32;
-                                    }
-                                });
-
-                                self.rans_size += 64;
-                            })
-                        });
-                    }
-
-                    Some(PixelType::Rgba8U) => {
-                        let ctx = jkl::ans::Context::new((0..image.width()).flat_map(|x| {
-                            let image = &image;
-                            (0..image.height()).map(move |y| match image.get(x, y) {
-                                PixelValue::Rgba8U(c) => [c.r(), c.g(), c.b(), c.a()],
-                                _ => unreachable!(),
-                            })
-                        }));
-
-                        self.rans_size += ctx.map().len() as u64 * 64;
-
-                        for x in (0..image.width()).step_by(256) {
-                            for y in (0..image.height()).step_by(256) {
-                                let mut buffer = Vec::new();
-                                buffer.reserve(65536);
-
-                                for dx in x..u32::min(x + 256, image.width()) {
-                                    for dy in y..u32::min(y + 256, image.height()) {
-                                        let p = image.get(dx, dy);
-
-                                        match p {
-                                            PixelValue::Rgba8U(c) => {
-                                                buffer.push([c.r(), c.g(), c.b(), c.a()]);
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                }
-
-                                buffer.reverse();
-
-                                let mut encoder = jkl::ans::Encoder::<[u8; 4]>::new(&ctx);
-
-                                for bytes in buffer.iter() {
-                                    if let Some(_) = encoder.encode(*bytes) {
-                                        self.rans_size += 32;
-                                    }
-                                }
-
-                                self.rans_size += 64;
-                            }
-                        }
-                    }
-                }
+                self.rebuild();
             }
             _ => unreachable!(),
         }
@@ -3142,11 +3023,267 @@ impl RleRansCalculatorNode {
     }
 
     fn has_body(&self) -> bool {
-        false
+        true
     }
 
-    fn body_ui(&mut self, _ui: &mut Ui) {
-        unreachable!()
+    fn body_ui(&mut self, ui: &mut Ui) {
+        let r = ui.toggle_value(&mut self.only_power_of_two, "RLE 2^x");
+        if r.changed() {
+            self.rebuild();
+        }
+
+        let r = ui.toggle_value(&mut self.unzip, "Unzip");
+        if r.changed() {
+            self.rebuild();
+        }
+    }
+
+    fn rebuild(&mut self) {
+        let Some(image) = &self.image else {
+            return;
+        };
+
+        self.rans_size = 0;
+        let rle_cfg = RleCfg {
+            only_power_of_two: self.only_power_of_two,
+            ..Default::default()
+        };
+
+        if self.unzip {
+            match self.input {
+                None => {}
+                Some(PixelType::Rgb8U) => {
+                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+                        (0..image.height()).step_by(256).flat_map(move |y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgb8U(c) => [c.r(), c.g(), c.b()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            rle_with_cfg(data, rle_cfg)
+                            // data
+                        })
+                    });
+
+                    let (rle, color) = rle_data
+                        .map(|rle| (rle.count, rle.value))
+                        .unzip::<_, _, Vec<_>, Vec<_>>();
+
+                    let ctx_rle = jkl::ans::Context::new(rle);
+                    let ctx_color = jkl::ans::Context::new(color);
+
+                    self.rans_size += ctx_rle.map().len() as u64 * 64;
+                    self.rans_size += ctx_color.map().len() as u64 * 48;
+
+                    (0..image.width()).step_by(256).for_each(|x| {
+                        (0..image.height()).step_by(256).for_each(|y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgb8U(c) => [c.r(), c.g(), c.b()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            let rle_data = rle_with_cfg(data, rle_cfg);
+                            // let rle_data = data;
+
+                            let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
+                            let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
+
+                            rle_data.for_each(|p| {
+                                if let Some(_) = encoder_rle.encode(p.count) {
+                                    self.rans_size += 32;
+                                }
+                                if let Some(_) = encoder_color.encode(p.value) {
+                                    self.rans_size += 32;
+                                }
+                            });
+
+                            self.rans_size += 64;
+                        })
+                    });
+                }
+
+                Some(PixelType::Rgba8U) => {
+                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+                        (0..image.height()).step_by(256).flat_map(move |y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgba8U(c) => [c.r(), c.g(), c.b(), c.a()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            rle_with_cfg(data, rle_cfg)
+                            // data
+                        })
+                    });
+
+                    let (rle, color) = rle_data
+                        .map(|rle| (rle.count, rle.value))
+                        .unzip::<_, _, Vec<_>, Vec<_>>();
+
+                    let ctx_rle = jkl::ans::Context::new(rle);
+                    let ctx_color = jkl::ans::Context::new(color);
+
+                    self.rans_size += ctx_rle.map().len() as u64 * 64;
+                    self.rans_size += ctx_color.map().len() as u64 * 64;
+
+                    (0..image.width()).step_by(256).for_each(|x| {
+                        (0..image.height()).step_by(256).for_each(|y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgba8U(c) => [c.r(), c.g(), c.b(), c.a()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            let rle_data = rle_with_cfg(data, rle_cfg);
+                            // let rle_data = data;
+
+                            let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
+                            let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
+
+                            rle_data.for_each(|p| {
+                                if let Some(_) = encoder_rle.encode(p.count) {
+                                    self.rans_size += 32;
+                                }
+                                if let Some(_) = encoder_color.encode(p.value) {
+                                    self.rans_size += 32;
+                                }
+                            });
+
+                            self.rans_size += 64;
+                        })
+                    });
+                }
+            }
+        } else {
+            match self.input {
+                None => {}
+                Some(PixelType::Rgb8U) => {
+                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+                        (0..image.height()).step_by(256).flat_map(move |y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgb8U(c) => [c.r(), c.g(), c.b()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            rle_with_cfg(data, rle_cfg)
+                            // data
+                        })
+                    });
+
+                    let ctx = jkl::ans::Context::new(rle_data);
+
+                    self.rans_size += ctx.map().len() as u64 * 72;
+
+                    (0..image.width()).step_by(256).for_each(|x| {
+                        (0..image.height()).step_by(256).for_each(|y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgb8U(c) => [c.r(), c.g(), c.b()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            let rle_data = rle_with_cfg(data, rle_cfg);
+                            // let rle_data = data;
+
+                            let mut encoder = jkl::ans::Encoder::new(&ctx);
+
+                            rle_data.for_each(|p| {
+                                if let Some(_) = encoder.encode(p) {
+                                    self.rans_size += 32;
+                                }
+                            });
+
+                            self.rans_size += 64;
+                        })
+                    });
+                }
+
+                Some(PixelType::Rgba8U) => {
+                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+                        (0..image.height()).step_by(256).flat_map(move |y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgba8U(c) => [c.r(), c.g(), c.b(), c.a()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            rle_with_cfg(data, rle_cfg)
+                            // data
+                        })
+                    });
+
+                    let ctx = jkl::ans::Context::new(rle_data);
+
+                    self.rans_size += ctx.map().len() as u64 * 96;
+
+                    (0..image.width()).step_by(256).for_each(|x| {
+                        (0..image.height()).step_by(256).for_each(|y| {
+                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
+                                (y..u32::min(y + 256, image.height())).map(move |dy| {
+                                    let p = image.get(dx, dy);
+
+                                    match p {
+                                        PixelValue::Rgba8U(c) => [c.r(), c.g(), c.b(), c.a()],
+                                        _ => unreachable!(),
+                                    }
+                                })
+                            });
+
+                            let rle_data = rle_with_cfg(data, rle_cfg);
+                            // let rle_data = data;
+
+                            let mut encoder = jkl::ans::Encoder::new(&ctx);
+
+                            rle_data.for_each(|p| {
+                                if let Some(_) = encoder.encode(p) {
+                                    self.rans_size += 32;
+                                }
+                            });
+
+                            self.rans_size += 64;
+                        })
+                    });
+                }
+            }
+        }
     }
 }
 
