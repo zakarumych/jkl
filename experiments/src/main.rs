@@ -3200,7 +3200,7 @@ impl RleRansCalculatorNode {
 
                     let ctx = jkl::ans::Context::new(rle_data);
 
-                    self.rans_size += ctx.map().len() as u64 * 72;
+                    self.rans_size += dbg!(ctx.map().len() as u64 * 72);
 
                     (0..image.width()).step_by(256).for_each(|x| {
                         (0..image.height()).step_by(256).for_each(|y| {

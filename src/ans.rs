@@ -58,6 +58,10 @@ where
     pub fn map(&self) -> &[(u64, T)] {
         &self.map
     }
+
+    pub fn freqs(&self) -> impl Iterator<Item = (T, u64)> + '_ {
+        self.freqs.iter().map(|(s, c)| (*s, *c))
+    }
 }
 
 pub struct Encoder<'a, T> {
