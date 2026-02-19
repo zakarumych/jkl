@@ -22,10 +22,6 @@ impl<T> Window<T> {
         }
     }
 
-    fn len(&self) -> usize {
-        self.buffer.len()
-    }
-
     fn idx(&self, index: usize) -> usize {
         (self.head + self.buffer.len() - 1 - index) % self.buffer.len()
     }

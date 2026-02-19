@@ -14,7 +14,7 @@ use std::{
     u32,
 };
 
-use crate::bc1;
+use crate::{bc1, bits::{ReadBits, WriteBits}};
 
 pub use self::{
     block::AnyBlock,
@@ -164,8 +164,8 @@ where
     B: AnyBlock,
 {
     // let mut encoder = lzw::Encoder::<B::EncoderElement>::new();
-    // let mut write = WriteBits::new(write);
-    let mut encoder = brotli::CompressorWriter::new(write, 4096, 11, 22);
+    let mut encoder = WriteBits::new(write);
+    // let mut encoder = brotli::CompressorWriter::new(write, 4096, 11, 22);
 
     compress_any_block_aspect::<B, 0>(
         x_start,
@@ -281,7 +281,7 @@ fn compress_any_block_aspect<B, const ASPECT: usize>(
     raw_size: [u32; 3],
     // encoder: &mut lzw::Encoder<B::EncoderElement>,
     // write: &mut WriteBits<impl Write>,
-    encoder: &mut brotli::CompressorWriter<impl Write>,
+    encoder: &mut WriteBits<impl Write>,
 ) -> std::io::Result<()>
 where
     B: AnyBlock,
@@ -402,7 +402,7 @@ where
 
     // let mut decoder = lzw::Decoder::<B::EncoderElement>::new();
     // let mut read = ReadBits::new(read);
-    let mut decoder = brotli::reader::Decompressor::new(read, 4096);
+    let mut decoder = ReadBits::new(read);
 
     decompress_any_block_aspect::<B, 0>(
         x_start,
@@ -515,7 +515,7 @@ fn decompress_any_block_aspect<B, const ASPECT: usize>(
     raw_size: [u32; 3],
     // decoder: &mut lzw::Decoder<B::EncoderElement>,
     // read: &mut ReadBits<impl Read>,
-    decoder: &mut brotli::reader::Decompressor<impl Read>,
+    decoder: &mut ReadBits<impl Read>,
 ) -> Result<(), DecompressError>
 where
     B: AnyBlock,
