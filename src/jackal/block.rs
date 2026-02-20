@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use crate::{bc1, jackal::DecompressError, math::Rgb565};
 
-pub trait AnyBlock: Copy + 'static + Sized {
+pub(super) trait AnyBlock: Copy + 'static + Sized {
     const ASPECTS: usize;
 
     /// Compress specific block aspect.

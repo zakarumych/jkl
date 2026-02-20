@@ -1,4 +1,4 @@
-use crate::bytes::LeBytes;
+use crate::FixedCode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Token<T> {
@@ -136,7 +136,7 @@ pub struct Encoder<T> {
 
 impl<T> Encoder<T>
 where
-    T: Copy + Eq + LeBytes,
+    T: Copy + Eq + FixedCode,
 {
     pub fn new(init: T, length: usize) -> Self {
         Encoder {
@@ -240,7 +240,7 @@ pub struct Decoder<T> {
 
 impl<T> Decoder<T>
 where
-    T: Copy + Eq + LeBytes,
+    T: Copy + Eq + FixedCode,
 {
     pub fn new(init: T, length: usize) -> Self {
         Decoder {

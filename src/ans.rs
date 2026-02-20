@@ -1,6 +1,11 @@
-use std::hash::Hash;
+use std::{hash::Hash, io};
 
 use hashbrown::{HashMap, HashSet};
+
+use crate::{
+    bits::{ReadBits, WriteBits},
+    vle, FixedCode,
+};
 
 #[derive(Clone, Debug)]
 pub struct Context<T> {
@@ -14,21 +19,25 @@ impl<T> Context<T>
 where
     T: Eq + Hash + Copy,
 {
-    pub fn new(input: impl IntoIterator<Item = T>) -> Self {
-        let mut freqs = HashMap::<T, u64>::new();
-        let mut set = HashSet::new();
-
-        input.into_iter().for_each(|symbol| {
-            *freqs.entry(symbol).or_default() += 1;
-            set.insert(symbol);
-        });
-
+    // Build context from sorted frequencies and frequency map.
+    fn build(
+        freqs_sorted: impl IntoIterator<Item = (T, u64)>,
+        freqs: Option<HashMap<T, u64>>,
+    ) -> Self {
         let mut cumul = HashMap::<T, u64>::new();
         let mut accum = 0u64;
+        let build_freqs = freqs.is_none();
+        let mut freqs = freqs.unwrap_or_default();
 
-        for &symbol in &set {
+        for (symbol, count) in freqs_sorted {
+            if build_freqs {
+                freqs.insert(symbol, count);
+            } else {
+                debug_assert_eq!(freqs[&symbol], count);
+            }
+
             cumul.insert(symbol, accum as u64);
-            accum += u64::from(freqs[&symbol]);
+            accum += u64::from(count);
         }
 
         if freqs.len() == 1 {
@@ -55,12 +64,106 @@ where
         }
     }
 
-    pub fn map(&self) -> &[(u64, T)] {
-        &self.map
+    /// Build context from sorted frequencies.
+    pub fn from_sorted_frequencies(freqs_sorted: impl IntoIterator<Item = (T, u64)>) -> Self {
+        Self::build(freqs_sorted, None)
+    }
+
+    /// Build context from frequency map.
+    pub fn from_frequency_map(freqs: HashMap<T, u64>) -> Self {
+        let mut freqs_sorted = freqs.iter().map(|(s, c)| (*s, *c)).collect::<Vec<_>>();
+        freqs_sorted.sort_unstable_by_key(|(_, count)| *count);
+        Self::build(freqs_sorted, Some(freqs))
+    }
+
+    /// Build context from input data.
+    pub fn from_input(input: impl IntoIterator<Item = T>) -> Self {
+        let mut freqs = HashMap::<T, u64>::new();
+
+        input.into_iter().for_each(|symbol| {
+            *freqs.entry(symbol).or_default() += 1;
+        });
+
+        Self::from_frequency_map(freqs)
     }
 
     pub fn freqs(&self) -> impl Iterator<Item = (T, u64)> + '_ {
         self.freqs.iter().map(|(s, c)| (*s, *c))
+    }
+
+    /// Write minimal header for Ans encoding.
+    pub fn write(&self, mut writer: impl std::io::Write) -> std::io::Result<()>
+    where
+        T: FixedCode,
+    {
+        let mut freqs = self.freqs().collect::<Vec<_>>();
+        freqs.sort_unstable_by_key(|(_, count)| *count);
+
+        // Delta-code frequencies.
+        let mut last = 0;
+        for (_, slot) in freqs.iter_mut() {
+            let count = *slot;
+            let delta = count - last;
+            *slot = delta;
+            last = count;
+        }
+
+        {
+            // Write number of symbols.
+            let mut bit_writer = WriteBits::new(&mut writer);
+            vle::encode(freqs.len(), &mut bit_writer)?;
+
+            // Encode frequency deltas.
+            for (_, delta) in &freqs {
+                vle::encode(*delta, &mut bit_writer)?;
+            }
+            bit_writer.finish()?;
+        }
+
+        // Write symbols.
+        for (symbol, _) in &freqs {
+            let mut bytes = T::Array::default();
+            symbol.encode(&mut bytes);
+            writer.write_all(bytes.as_ref())?;
+        }
+
+        Ok(())
+    }
+
+    /// Write minimal header for Ans encoding.
+    pub fn read(mut reader: impl std::io::Read) -> std::io::Result<Self>
+    where
+        T: FixedCode,
+    {
+        let mut bit_reader = ReadBits::new(&mut reader);
+
+        // Read number of symbols.
+        let count = { vle::decode::<usize, _>(&mut bit_reader)? };
+
+        let deltas = {
+            // Read frequency deltas.
+            (0..count)
+                .map(|_| vle::decode::<u64, _>(&mut bit_reader))
+                .collect::<Result<Vec<u64>, _>>()?
+        };
+
+        // Read symbols and build frequency map.
+        let mut freqs = Vec::<(T, u64)>::new();
+
+        let mut last = 0;
+        for delta in deltas {
+            let count = last + delta;
+            last = count;
+
+            let mut bytes = T::Array::default();
+            reader.read_exact(bytes.as_mut())?;
+            let symbol = T::decode(&bytes)
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+
+            freqs.push((symbol, count));
+        }
+
+        Ok(Self::from_sorted_frequencies(freqs))
     }
 }
 
@@ -170,7 +273,7 @@ fn test_u16() {
         3, 1, 1, 1, 2, 1, 3, 1, 1, 1, 2, 2, 1, 1, 3, 3,
     ];
 
-    let ctx = Context::new(data);
+    let ctx = Context::from_input(data);
 
     let mut encoder = Encoder::<u16>::new(&ctx);
     let mut compressed = Vec::new();
@@ -181,7 +284,11 @@ fn test_u16() {
         }
     }
 
-    let mut decoder = Decoder::new(encoder.state(), &ctx);
+    let mut ctx_buf = Vec::new();
+    ctx.write(&mut ctx_buf).unwrap();
+    let ctx2 = Context::read(&ctx_buf[..]).unwrap();
+
+    let mut decoder = Decoder::new(encoder.state(), &ctx2);
 
     let mut decoded = Vec::new();
     let mut iter = compressed.iter().copied().rev();

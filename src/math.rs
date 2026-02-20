@@ -1,12 +1,11 @@
 //! All the math functions are implemented here.
 
 use std::{
+    convert::Infallible,
     hash::Hash,
     io,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, Sub, SubAssign},
 };
-
-use crate::bytes::LeBytes;
 
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -3032,6 +3031,8 @@ impl Region3 {
 #[repr(transparent)]
 pub struct R8U(u8);
 
+impl_fixedcode_struct!(R8U(r: u8) | Infallible);
+
 impl R8U {
     pub const WHITE: R8U = R8U(255);
     pub const BLACK: R8U = R8U(0);
@@ -3099,6 +3100,8 @@ impl R8U {
 #[repr(transparent)]
 pub struct R32F(f32);
 
+impl_fixedcode_struct!(R32F(r: f32) | Infallible);
+
 impl R32F {
     pub const WHITE: R32F = R32F(1.0);
     pub const BLACK: R32F = R32F(0.0);
@@ -3149,6 +3152,8 @@ impl R32F {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Rg32F([f32; 2]);
+
+impl_fixedcode_array!(Rg32F([f32; 2]) | Infallible);
 
 impl Rg32F {
     pub const WHITE: Rg32F = Rg32F([1.0, 1.0]);
@@ -3205,6 +3210,8 @@ impl Rg32F {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Rgb8U([u8; 3]);
+
+impl_fixedcode_array!(Rgb8U([u8; 3]) | Infallible);
 
 impl Rgb8U {
     pub const WHITE: Rgb8U = Rgb8U([255, 255, 255]);
@@ -3317,26 +3324,12 @@ impl Rgb8U {
     }
 }
 
-impl LeBytes for Rgb8U {
-    fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    fn write_to(&self, writer: &mut impl io::Write) -> Result<(), io::Error> {
-        writer.write_all(&self.0)
-    }
-
-    fn read_from(input: &mut impl io::Read) -> Result<Self, io::Error> {
-        let mut bytes = [0u8; 3];
-        input.read_exact(&mut bytes)?;
-        Ok(Rgb8U(bytes))
-    }
-}
-
 /// An RGB color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Rgb32F([f32; 3]);
+
+impl_fixedcode_array!(Rgb32F([f32; 3]) | Infallible);
 
 impl Rgb32F {
     pub const WHITE: Rgb32F = Rgb32F([1.0, 1.0, 1.0]);
@@ -3518,26 +3511,12 @@ impl Rgba8U {
     }
 }
 
-impl LeBytes for Rgba8U {
-    fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    fn write_to(&self, writer: &mut impl io::Write) -> Result<(), io::Error> {
-        writer.write_all(&self.0)
-    }
-
-    fn read_from(input: &mut impl io::Read) -> Result<Self, io::Error> {
-        let mut bytes = [0u8; 4];
-        input.read_exact(&mut bytes)?;
-        Ok(Rgba8U(bytes))
-    }
-}
-
 /// An RGB color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Rgba32F([f32; 4]);
+
+impl_fixedcode_array!(Rgba32F([f32; 4]) | Infallible);
 
 impl Rgba32F {
     pub const WHITE: Rgba32F = Rgba32F([1.0, 1.0, 1.0, 1.0]);
@@ -3589,6 +3568,8 @@ impl Rgba32F {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Rgb565(u16);
+
+impl_fixedcode_struct!(Rgb565(rgb: u16) | Infallible);
 
 impl Rgb565 {
     pub const WHITE: Rgb565 = Rgb565(0b11111_111111_11111);
@@ -3752,6 +3733,8 @@ impl Rgb565 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Yiq32F([f32; 3]);
+
+impl_fixedcode_array!(Yiq32F([f32; 3]) | Infallible);
 
 impl Yiq32F {
     pub const WHITE: Yiq32F = Yiq32F([1.0, 0.0, 0.0]);

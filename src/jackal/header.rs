@@ -1,6 +1,10 @@
+use core::f32;
 use std::io::{Read, Write};
 
-use crate::jackal::{DecodeError, DecompressError};
+use crate::{
+    jackal::{DecodeError, DecompressError},
+    FixedCode,
+};
 
 /// Size of the super-block in number of blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,19 +13,12 @@ pub struct SuperBlockSize {
     pub height: u16,
 }
 
-fn super_block_from_extent(extent: u32) -> u16 {
-    match extent {
-        0..64 => 16,
-        64..128 => 64,
-        128..256 => 128,
-        256..512 => 256,
-        512..1024 => 512,
-        _ => 512,
-    }
-}
+impl FixedCode for SuperBlockSize {
+    const SIZE: usize = 1;
+    type Array = [u8; 1];
+    type Error = DecodeError;
 
-impl SuperBlockSize {
-    pub fn encode(&self) -> [u8; 2] {
+    fn encode(&self, output: &mut [u8; 1]) {
         debug_assert!(self.width.is_power_of_two());
         debug_assert!(self.height.is_power_of_two());
 
@@ -31,97 +28,143 @@ impl SuperBlockSize {
         debug_assert!(w < 16);
         debug_assert!(h < 16);
 
-        [w as u8, h as u8]
+        *output = [((w << 4) | h) as u8];
     }
 
-    pub fn decode(bytes: [u8; 2]) -> Result<Self, DecodeError> {
-        let w = bytes[0];
-        let h = bytes[1];
-
-        if w >= 16 || h >= 16 {
-            return Err(DecodeError::InvalidHeader);
-        }
+    fn decode(input: &[u8; 1]) -> Result<Self, DecodeError> {
+        let byte = input[0];
+        let w = byte >> 4;
+        let h = byte & 0x0F;
 
         let width = 1 << w;
         let height = 1 << h;
 
         Ok(SuperBlockSize { width, height })
     }
+}
 
-    pub fn from_size(width: u32, height: u32) -> Self {
-        SuperBlockSize {
-            width: super_block_from_extent(width),
-            height: super_block_from_extent(height),
+impl SuperBlockSize {
+    /// Finds the optimal super-block size for the given extent and block size.
+    ///
+    /// The optimal super-block size is the one that minimizes the cost function:
+    /// cost = (flat_cost + size_cost * super_block_size) * ceil(number_of_super_blocks / 64) * 64
+    /// i.e. super block cost is linear to size plus a float amount and it is multiplied by the number of super blocks rounded up to the nearest multiple of 64.
+    /// This cost function models the GPU decompression cost, which runs thread per super-block, each thread has a fixed overhead of dispatching and a cost proportional to the super-block size,
+    /// and the GPU executes threads in warps of 32 or 64 threads, so the number of super-blocks is rounded up to the nearest multiple of 64.
+    pub fn find_optimal(extent: Extent, block_size: u16, flat_cost: f32, size_cost: f32) -> Self {
+        assert!(block_size.is_power_of_two());
+
+        // The max super-block size to consider is either enough to cover the entire extent,
+        // or 32768 blocks, which is the maximum super-block size.
+        let max_superblock_width =
+            u16::try_from(extent.width().next_power_of_two()).unwrap_or(1 << 15);
+        let max_superblock_height =
+            u16::try_from(extent.height().next_power_of_two()).unwrap_or(1 << 15);
+
+        let mut min_cost = f32::INFINITY;
+        let mut best_candidate = SuperBlockSize {
+            width: block_size,
+            height: block_size,
+        };
+
+        let mut superblock_width = u32::from(block_size);
+        let mut superblock_height = u32::from(block_size);
+
+        loop {
+            let row_size = (extent.width() + superblock_width - 1) / superblock_width;
+            let column_size = (extent.height() + superblock_height - 1) / superblock_height;
+            let planes = extent.depth();
+
+            let super_blocks_count = row_size * column_size * planes;
+            let warps_count = (super_blocks_count + 63) / 64;
+
+            let cost = (flat_cost
+                + size_cost * (superblock_width as f32 * superblock_height as f32))
+                * warps_count as f32;
+
+            if cost < min_cost {
+                min_cost = cost;
+                best_candidate = SuperBlockSize {
+                    width: superblock_width as u16,
+                    height: superblock_height as u16,
+                };
+            }
+
+            if superblock_width == u32::from(max_superblock_width) {
+                if superblock_height == u32::from(max_superblock_height) {
+                    break;
+                } else {
+                    superblock_height *= 2;
+                    superblock_width = u32::from(block_size);
+                }
+            }
         }
+
+        best_candidate
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum Format {
-    BC1,
+    /// 8-bit single channel.
+    R8,
+
+    /// 8-bit two channels.
+    RG8,
+
+    /// 8-bit three channels.
+    RGB8,
+
+    /// 8-bit four channels.
+    RGBA8,
+
+    /// BC1 (DXT1) block compression format.
+    BC1 = 256,
+
+    /// BC3 (DXT5) block compression format.
     BC3,
+
+    /// BC4 block compression format.
     BC4,
+
+    /// BC5 block compression format.
     BC5,
+
+    /// BC6 block compression format.
     BC6,
+
+    /// BC7 block compression format.
     BC7,
 }
 
-impl Format {
-    pub fn encode(&self) -> [u8; 2] {
-        match self {
-            Format::BC1 => 0u16.to_le_bytes(),
-            Format::BC3 => 1u16.to_le_bytes(),
-            Format::BC4 => 2u16.to_le_bytes(),
-            Format::BC5 => 3u16.to_le_bytes(),
-            Format::BC6 => 4u16.to_le_bytes(),
-            Format::BC7 => 5u16.to_le_bytes(),
-        }
+impl FixedCode for Format {
+    const SIZE: usize = 2;
+    type Array = [u8; 2];
+    type Error = DecodeError;
+
+    fn encode(&self, output: &mut [u8; 2]) {
+        *output = (*self as u16).to_le_bytes();
     }
 
-    pub fn decode(bytes: [u8; 2]) -> Result<Self, DecodeError> {
-        match u16::from_le_bytes(bytes) {
-            0 => Ok(Format::BC1),
-            1 => Ok(Format::BC3),
-            2 => Ok(Format::BC4),
-            3 => Ok(Format::BC5),
-            4 => Ok(Format::BC6),
-            5 => Ok(Format::BC7),
-            _ => Err(DecodeError::InvalidHeader),
-        }
-    }
-}
+    fn decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
+        let value = u16::from_le_bytes(*bytes);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u16)]
-pub enum Dimensions {
-    D1,
-    D2,
-    D3,
-    D1Array,
-    D2Array,
-}
+        let format = match value {
+            0 => Format::R8,
+            1 => Format::RG8,
+            2 => Format::RGB8,
+            3 => Format::RGBA8,
+            256 => Format::BC1,
+            257 => Format::BC3,
+            258 => Format::BC4,
+            259 => Format::BC5,
+            260 => Format::BC6,
+            261 => Format::BC7,
+            _ => return Err(DecodeError::InvalidFormat),
+        };
 
-impl Dimensions {
-    pub fn encode(&self) -> [u8; 2] {
-        match self {
-            Dimensions::D1 => 0u16.to_le_bytes(),
-            Dimensions::D2 => 1u16.to_le_bytes(),
-            Dimensions::D3 => 2u16.to_le_bytes(),
-            Dimensions::D1Array => 3u16.to_le_bytes(),
-            Dimensions::D2Array => 4u16.to_le_bytes(),
-        }
-    }
-
-    pub fn decode(bytes: [u8; 2]) -> Result<Self, DecodeError> {
-        match u16::from_le_bytes(bytes) {
-            0 => Ok(Dimensions::D1),
-            1 => Ok(Dimensions::D2),
-            2 => Ok(Dimensions::D3),
-            3 => Ok(Dimensions::D1Array),
-            4 => Ok(Dimensions::D2Array),
-            _ => Err(DecodeError::InvalidHeader),
-        }
+        Ok(format)
     }
 }
 
@@ -129,15 +172,19 @@ impl Dimensions {
 #[repr(transparent)]
 pub struct MipLevels(pub u16);
 
-impl MipLevels {
-    pub fn encode(&self) -> [u8; 2] {
-        self.0.to_le_bytes()
+impl FixedCode for MipLevels {
+    const SIZE: usize = 2;
+    type Array = [u8; 2];
+    type Error = DecodeError;
+
+    fn encode(&self, output: &mut [u8; 2]) {
+        *output = self.0.to_le_bytes();
     }
 
-    pub fn decode(bytes: [u8; 2]) -> Result<Self, DecodeError> {
-        let levels = u16::from_le_bytes(bytes);
+    fn decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
+        let levels = u16::from_le_bytes(*bytes);
         if levels == 0 {
-            return Err(DecodeError::InvalidHeader);
+            return Err(DecodeError::MipZero);
         }
         Ok(MipLevels(levels))
     }
@@ -146,140 +193,34 @@ impl MipLevels {
 const MAGIC_NUMBER: u32 = 0x494C4B4Au32; // "JKLI"
 
 #[derive(Clone, Copy)]
-pub struct JackalHeader {
-    // Number of texture mip levels.
-    pub levels: MipLevels,
+struct Magic;
 
-    // Format of the blocks.
-    pub format: Format,
+impl FixedCode for Magic {
+    const SIZE: usize = 4;
+    type Array = [u8; 4];
+    type Error = DecodeError;
 
-    // SuperBlockSize of super-blocks.
-    pub super_block_size: SuperBlockSize,
-
-    /// Extent of the image. Decoded based on dimensions.
-    pub extent: Extent,
-}
-
-impl JackalHeader {
-    pub const BYTES_SIZE: usize = 26;
-
-    pub fn write_to(&self, mut write: impl Write) -> std::io::Result<()> {
-        let mut bytes = [0; Self::BYTES_SIZE];
-
-        bytes[0..4].copy_from_slice(&MAGIC_NUMBER.to_le_bytes());
-
-        bytes[4..6].copy_from_slice(&self.levels.encode());
-        bytes[6..8].copy_from_slice(&self.format.encode());
-        bytes[8..10].copy_from_slice(&self.super_block_size.encode());
-        bytes[10..12].copy_from_slice(&self.extent.dimensions().encode());
-
-        let raw_size = self.extent.raw_size();
-        bytes[12..16].copy_from_slice(&raw_size[0].to_le_bytes());
-        bytes[16..20].copy_from_slice(&raw_size[1].to_le_bytes());
-        bytes[20..24].copy_from_slice(&raw_size[2].to_le_bytes());
-
-        write.write_all(&bytes)?;
-        Ok(())
+    fn encode(&self, output: &mut [u8; 4]) {
+        *output = MAGIC_NUMBER.to_le_bytes();
     }
 
-    pub fn read_from(mut read: impl Read) -> Result<Self, DecompressError> {
-        let mut bytes = [0; 24];
-        read.read_exact(&mut bytes)?;
-
-        let mut magic_bytes = [0; 4];
-        magic_bytes.copy_from_slice(&bytes[0..4]);
-        let magic = u32::from_le_bytes(magic_bytes);
-        if magic != MAGIC_NUMBER {
-            return Err(DecodeError::InvalidMagic.into());
+    fn decode(bytes: &[u8; 4]) -> Result<Self, DecodeError> {
+        let value = u32::from_le_bytes(*bytes);
+        if value != MAGIC_NUMBER {
+            return Err(DecodeError::InvalidMagic);
         }
-
-        let mut levels_bytes = [0; 2];
-        levels_bytes.copy_from_slice(&bytes[4..6]);
-        let levels = MipLevels::decode(levels_bytes)?;
-
-        let mut format_bytes = [0; 2];
-        format_bytes.copy_from_slice(&bytes[6..8]);
-        let format = Format::decode(format_bytes)?;
-
-        let mut super_block_size_bytes = [0; 2];
-        super_block_size_bytes.copy_from_slice(&bytes[8..10]);
-        let super_block_size = SuperBlockSize::decode(super_block_size_bytes)?;
-
-        let mut dimensions_bytes = [0; 2];
-        dimensions_bytes.copy_from_slice(&bytes[10..12]);
-        let dimensions = Dimensions::decode(dimensions_bytes)?;
-
-        let mut extent_bytes = [0; 4];
-        extent_bytes.copy_from_slice(&bytes[12..16]);
-        let width = u32::from_le_bytes(extent_bytes);
-        extent_bytes.copy_from_slice(&bytes[16..20]);
-        let height = u32::from_le_bytes(extent_bytes);
-        extent_bytes.copy_from_slice(&bytes[20..24]);
-        let depth = u32::from_le_bytes(extent_bytes);
-
-        let raw_size = [width, height, depth];
-        let extent = Extent::from_raw_size(raw_size, dimensions)?;
-
-        Ok(JackalHeader {
-            levels,
-            format,
-            super_block_size,
-            extent,
-        })
-    }
-
-    pub fn format(&self) -> Format {
-        self.format
-    }
-
-    pub fn extent(&self) -> Extent {
-        self.extent
-    }
-
-    pub fn jackal_blocks_count(&self) -> usize {
-        let [width, height, depth] = self.jackal_blocks_extent();
-        (width * height * depth) as usize
-    }
-
-    pub fn jackal_blocks_extent(&self) -> [u32; 3] {
-        let raw_size = self.extent.raw_size();
-        let jackal_blocks_width = (raw_size[0] + self.super_block_size.width as u32 - 1)
-            / self.super_block_size.width as u32;
-        let jackal_blocks_height = (raw_size[1] + self.super_block_size.height as u32 - 1)
-            / self.super_block_size.height as u32;
-        let jackal_blocks_depth = raw_size[2];
-
-        [
-            jackal_blocks_width,
-            jackal_blocks_height,
-            jackal_blocks_depth,
-        ]
-    }
-
-    pub fn blocks_count(&self) -> usize {
-        let raw_size = self.extent.raw_size();
-        raw_size[0] as usize * raw_size[1] as usize * raw_size[2] as usize
+        Ok(Magic)
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct JackalBlock {
-    pub offset: u64,
-}
-
-impl JackalBlock {
-    pub const BYTES_SIZE: usize = size_of::<u64>();
-
-    pub fn write_to(&self, mut write: impl Write) -> std::io::Result<()> {
-        write.write_all(&self.offset.to_le_bytes())
-    }
-
-    pub fn read_from(mut read: impl Read) -> Result<Self, DecompressError> {
-        let mut bytes = [0; Self::BYTES_SIZE];
-        read.read_exact(&mut bytes)?;
-        let offset = u64::from_le_bytes(bytes);
-        Ok(JackalBlock { offset })
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Dimensions {
+    D1,
+    D2,
+    D3,
+    D1Array,
+    D2Array,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,13 +321,13 @@ impl Extent {
         match dimensions {
             Dimensions::D1 => {
                 if value[1] != 1 || value[2] != 1 {
-                    return Err(DecodeError::InvalidHeader);
+                    return Err(DecodeError::InvalidExtent);
                 }
                 Ok(Extent::D1 { width: value[0] })
             }
             Dimensions::D2 => {
                 if value[2] != 1 {
-                    return Err(DecodeError::InvalidHeader);
+                    return Err(DecodeError::InvalidExtent);
                 }
                 Ok(Extent::D2 {
                     width: value[0],
@@ -400,7 +341,7 @@ impl Extent {
             }),
             Dimensions::D1Array => {
                 if value[2] != 1 {
-                    return Err(DecodeError::InvalidHeader);
+                    return Err(DecodeError::InvalidExtent);
                 }
                 Ok(Extent::D1Array {
                     width: value[0],
@@ -413,5 +354,136 @@ impl Extent {
                 layers: value[2],
             }),
         }
+    }
+}
+
+impl FixedCode for Extent {
+    const SIZE: usize = 13;
+    type Array = [u8; 13];
+    type Error = DecodeError;
+
+    fn encode(&self, output: &mut [u8; 13]) {
+        output[0] = match self.dimensions() {
+            Dimensions::D1 => 0u8,
+            Dimensions::D2 => 1u8,
+            Dimensions::D3 => 2u8,
+            Dimensions::D1Array => 3u8,
+            Dimensions::D2Array => 4u8,
+        };
+
+        let raw_size = self.raw_size();
+        output[1..5].copy_from_slice(&raw_size[0].to_le_bytes());
+        output[5..9].copy_from_slice(&raw_size[1].to_le_bytes());
+        output[9..13].copy_from_slice(&raw_size[2].to_le_bytes());
+    }
+
+    fn decode(input: &[u8; 13]) -> Result<Self, DecodeError> {
+        let dimensions = match input[0] {
+            0 => Dimensions::D1,
+            1 => Dimensions::D2,
+            2 => Dimensions::D3,
+            3 => Dimensions::D1Array,
+            4 => Dimensions::D2Array,
+            _ => return Err(DecodeError::InvalidDimensions),
+        };
+
+        let width = u32::from_le_bytes(*input[1..5].as_array().unwrap());
+        let height = u32::from_le_bytes(*input[5..9].as_array().unwrap());
+        let depth = u32::from_le_bytes(*input[9..13].as_array().unwrap());
+
+        let raw_size = [width, height, depth];
+        let extent = Extent::from_raw_size(raw_size, dimensions)?;
+
+        Ok(extent)
+    }
+}
+
+/// Compression method used for the texel data.
+#[repr(u8)]
+pub enum Compression {
+    None = 0,
+    Ans = 1,
+    AnsRle = 2,
+}
+
+#[derive(Clone, Copy)]
+pub struct JackalHeader {
+    pub magic: Magic,
+
+    // Format of the blocks.
+    pub format: Format,
+
+    /// Extent of the image at mip-0.
+    pub extent: Extent,
+
+    // Number of texture mip levels.
+    pub levels: MipLevels,
+
+    // SuperBlockSize of super-blocks.
+    pub super_block_size: SuperBlockSize,
+}
+
+impl_fixedcode_struct! {
+    JackalHeader {
+        magic: Magic
+        format: Format
+        extent: Extent
+        levels: MipLevels
+        super_block_size: SuperBlockSize
+    } | DecodeError
+}
+
+impl JackalHeader {
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    pub fn extent(&self) -> Extent {
+        self.extent
+    }
+
+    pub fn jackal_blocks_count(&self) -> usize {
+        let [width, height, depth] = self.jackal_blocks_extent();
+        (width * height * depth) as usize
+    }
+
+    pub fn jackal_blocks_extent(&self) -> [u32; 3] {
+        let raw_size = self.extent.raw_size();
+        let jackal_blocks_width = (raw_size[0] + self.super_block_size.width as u32 - 1)
+            / self.super_block_size.width as u32;
+        let jackal_blocks_height = (raw_size[1] + self.super_block_size.height as u32 - 1)
+            / self.super_block_size.height as u32;
+        let jackal_blocks_depth = raw_size[2];
+
+        [
+            jackal_blocks_width,
+            jackal_blocks_height,
+            jackal_blocks_depth,
+        ]
+    }
+
+    pub fn blocks_count(&self) -> usize {
+        let raw_size = self.extent.raw_size();
+        raw_size[0] as usize * raw_size[1] as usize * raw_size[2] as usize
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct JackalBlock {
+    pub offset: u64,
+}
+
+impl JackalBlock {
+    pub const BYTES_SIZE: usize = size_of::<u64>();
+
+    pub fn write_to(&self, mut write: impl Write) -> std::io::Result<()> {
+        write.write_all(&self.offset.to_le_bytes())
+    }
+
+    pub fn read_from(mut read: impl Read) -> Result<Self, DecompressError> {
+        let mut bytes = [0; Self::BYTES_SIZE];
+        read.read_exact(&mut bytes)?;
+        let offset = u64::from_le_bytes(bytes);
+        Ok(JackalBlock { offset })
     }
 }
