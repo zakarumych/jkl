@@ -1,9 +1,51 @@
-use crate::FixedCode;
+use std::io;
+
+use crate::{
+    bits::{ReadBits, WriteBits},
+    encode::Encode,
+    vle,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Token<T> {
     Reference { distance: usize, length: usize },
     Literal { literal: T },
+}
+
+impl<T> Encode for Token<T>
+where
+    T: Encode,
+{
+    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        match self {
+            Token::Reference { distance, length } => {
+                writer.write_bit(false)?;
+                vle::encode(*distance, writer)?;
+                vle::encode(*length, writer)?;
+            }
+            Token::Literal { literal } => {
+                writer.write_bit(true)?;
+                literal.write(&mut *writer)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+        let token_type = reader.read_bit()?;
+
+        match token_type {
+            false => {
+                let distance = vle::decode::<usize, _>(reader)?;
+                let length = vle::decode::<usize, _>(reader)?;
+                Ok(Token::Reference { distance, length })
+            }
+            true => {
+                let literal = T::read(&mut *reader)?;
+                Ok(Token::Literal { literal })
+            }
+        }
+    }
 }
 
 struct Window<T> {
@@ -12,12 +54,12 @@ struct Window<T> {
 }
 
 impl<T> Window<T> {
-    fn new(init: T, length: usize) -> Self
+    fn new(init: T, length: u32) -> Self
     where
         T: Copy,
     {
         Window {
-            buffer: vec![init; length],
+            buffer: vec![init; length as usize],
             head: 0,
         }
     }
@@ -136,9 +178,9 @@ pub struct Encoder<T> {
 
 impl<T> Encoder<T>
 where
-    T: Copy + Eq + FixedCode,
+    T: Copy + Eq,
 {
-    pub fn new(init: T, length: usize) -> Self {
+    pub fn new(init: T, length: u32) -> Self {
         Encoder {
             window: Window::new(init, length),
             distance: 0,
@@ -147,83 +189,94 @@ where
     }
 
     pub fn encode(&mut self, input: T, output: &mut impl Extend<Token<T>>) {
-        if self.length == 0 {
-            match self.window.find_elem(0, &input) {
-                None => {
-                    let emit = Token::Literal { literal: input };
-                    self.window.push(input);
-                    self.distance = 0;
-                    self.length = 0;
-                    output.extend(Some(emit));
+        if self.length > 0 {
+            if self.length < usize::MAX {
+                // If longer match is possible to represent.
+
+                if *self.window.get(distance_index(self.distance, self.length)) == input {
+                    // Input continues the current match.
+                    self.length += 1;
                     return;
                 }
-                Some(pos) => {
-                    self.distance = pos;
-                    self.length = 1;
-                    return;
+
+                // If input does not continues current match, try find another one and test if input continues it.
+                let mut offset = self.distance;
+                loop {
+                    match self.window.find_range(offset, self.distance, self.length) {
+                        None => break, // No more matches.
+                        Some(pos) => {
+                            if *self.window.get(distance_index(pos, self.length)) == input {
+                                self.distance = pos;
+                                self.length += 1;
+                                return;
+                            }
+
+                            offset = pos;
+                        }
+                    }
                 }
             }
-        } else {
-            if *self.window.get(distance_index(self.distance, self.length)) == input {
-                self.length += 1;
+
+            // Failed to continue current match, emit it and start anew.
+            let emit_reference = self.length >= 2;
+
+            if emit_reference {
+                output.extend(Some(Token::Reference {
+                    distance: self.distance,
+                    length: self.length,
+                }));
+            }
+
+            for i in 0..self.length {
+                // Rotate window and emit literals if current match is not long enough.
+                let elem = *self.window.get(distance_index(self.distance, i));
+                self.window.push(elem);
+                self.distance += 1;
+
+                if !emit_reference {
+                    output.extend(Some(Token::Literal { literal: elem }));
+                }
+            }
+
+            self.distance = 0;
+            self.length = 0;
+        }
+
+        match self.window.find_elem(0, &input) {
+            None => {
+                // Symbol is not in the window, emit it as literal and add to the window.
+
+                let emit = Token::Literal { literal: input };
+                self.window.push(input);
+                self.distance = 0;
+                self.length = 0;
+                output.extend(Some(emit));
                 return;
             }
+            Some(pos) => {
+                // Symbol is in the window, start new match.
 
-            let mut offset = self.distance;
-            loop {
-                match self.window.find_range(offset, self.distance, self.length) {
-                    None => {
-                        if self.length >= 4 {
-                            output.extend(Some(Token::Reference {
-                                distance: self.distance,
-                                length: self.length,
-                            }));
-                        }
-
-                        for i in 0..self.length {
-                            let elem = *self.window.get(distance_index(self.distance, i));
-                            self.window.push(elem);
-                            self.distance += 1;
-
-                            if self.length < 4 {
-                                output.extend(Some(Token::Literal { literal: elem }));
-                            }
-                        }
-
-                        output.extend(Some(Token::Literal { literal: input }));
-
-                        self.window.push(input);
-                        self.distance = 0;
-                        self.length = 0;
-
-                        return;
-                    }
-                    Some(pos) => {
-                        if *self.window.get(distance_index(pos, self.length)) == input {
-                            self.distance = pos;
-                            self.length += 1;
-                            return;
-                        }
-
-                        offset = pos;
-                    }
-                }
+                self.distance = pos;
+                self.length = 1;
+                return;
             }
         }
     }
 
     pub fn finish(mut self, output: &mut impl Extend<Token<T>>) {
-        if self.length < 4 {
+        let emit_reference = self.length >= 2;
+
+        if emit_reference {
+            output.extend(Some(Token::Reference {
+                distance: self.distance,
+                length: self.length,
+            }));
+        } else {
             for i in 0..self.length {
                 let elem = *self.window.get(distance_index(self.distance, i));
                 self.distance += 1;
                 output.extend(Some(Token::Literal { literal: elem }));
             }
-        } else {
-            output.extend(Some(Token::Reference {
-                distance: self.distance,
-                length: self.length,
-            }));
         }
     }
 }
@@ -240,9 +293,9 @@ pub struct Decoder<T> {
 
 impl<T> Decoder<T>
 where
-    T: Copy + Eq + FixedCode,
+    T: Copy + Eq,
 {
-    pub fn new(init: T, length: usize) -> Self {
+    pub fn new(init: T, length: u32) -> Self {
         Decoder {
             window: Window::new(init, length),
             entry: None,
@@ -256,12 +309,12 @@ where
 
                 match token {
                     Token::Reference { distance, length } => {
-                        let first = *self.window.get(distance);
+                        let first = *self.window.get(distance as usize);
                         self.window.push(first);
 
                         self.entry = Some(Entry {
-                            distance: distance,
-                            length: length - 1,
+                            distance: distance as usize,
+                            length: length as usize - 1,
                         });
 
                         Some(first)

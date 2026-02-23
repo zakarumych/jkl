@@ -1,10 +1,11 @@
 use std::{hash::Hash, io};
 
-use hashbrown::{HashMap, HashSet};
+use hashbrown::HashMap;
 
 use crate::{
     bits::{ReadBits, WriteBits},
-    vle, FixedCode,
+    encode::Encode,
+    vle,
 };
 
 #[derive(Clone, Debug)]
@@ -87,14 +88,14 @@ where
         Self::from_frequency_map(freqs)
     }
 
-    pub fn freqs(&self) -> impl Iterator<Item = (T, u64)> + '_ {
+    pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, u64)> + '_ {
         self.freqs.iter().map(|(s, c)| (*s, *c))
     }
 
     /// Write minimal header for Ans encoding.
-    pub fn write(&self, mut writer: impl std::io::Write) -> std::io::Result<()>
+    pub fn write(&self, mut writer: &mut impl io::Write) -> io::Result<()>
     where
-        T: FixedCode,
+        T: Encode,
     {
         let mut freqs = self.freqs().collect::<Vec<_>>();
         freqs.sort_unstable_by_key(|(_, count)| *count);
@@ -117,23 +118,22 @@ where
             for (_, delta) in &freqs {
                 vle::encode(*delta, &mut bit_writer)?;
             }
-            bit_writer.finish()?;
-        }
 
-        // Write symbols.
-        for (symbol, _) in &freqs {
-            let mut bytes = T::Array::default();
-            symbol.encode(&mut bytes);
-            writer.write_all(bytes.as_ref())?;
+            // Write symbols.
+            for (symbol, _) in &freqs {
+                symbol.write(&mut bit_writer)?;
+            }
+
+            bit_writer.finish()?;
         }
 
         Ok(())
     }
 
     /// Write minimal header for Ans encoding.
-    pub fn read(mut reader: impl std::io::Read) -> std::io::Result<Self>
+    pub fn read(mut reader: &mut impl io::Read) -> io::Result<Self>
     where
-        T: FixedCode,
+        T: Encode,
     {
         let mut bit_reader = ReadBits::new(&mut reader);
 
@@ -155,11 +155,7 @@ where
             let count = last + delta;
             last = count;
 
-            let mut bytes = T::Array::default();
-            reader.read_exact(bytes.as_mut())?;
-            let symbol = T::decode(&bytes)
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-
+            let symbol = T::read(&mut bit_reader)?;
             freqs.push((symbol, count));
         }
 
@@ -286,7 +282,7 @@ fn test_u16() {
 
     let mut ctx_buf = Vec::new();
     ctx.write(&mut ctx_buf).unwrap();
-    let ctx2 = Context::read(&ctx_buf[..]).unwrap();
+    let ctx2 = Context::read(&mut &ctx_buf[..]).unwrap();
 
     let mut decoder = Decoder::new(encoder.state(), &ctx2);
 

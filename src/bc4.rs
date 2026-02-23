@@ -1,19 +1,29 @@
 //! BC4 implementation.
 //!
 
+use std::convert::Infallible;
+
 use crate::{
     cluster_fit::cluster_fit,
     math::{R32F, R8U},
 };
 
 /// A block of 4x4 texels compressed with BC4.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
     pub color0: R8U,
     pub color1: R8U,
     pub texels: [u8; 6],
 }
+
+impl_fixedcode_struct!(
+    Block {
+        color0: R8U,
+        color1: R8U,
+        texels: [u8; 6],
+    } | Infallible
+);
 
 impl Block {
     pub const BLACK: Block = Block {
@@ -86,9 +96,9 @@ impl Block {
         };
 
         // Decode texels.
-        for i in 0..4 {
-            for j in 0..4 {
-                let start_bit = (i * 4 + j) * 3;
+        for x in 0..4 {
+            for y in 0..4 {
+                let start_bit = (y * 4 + x) * 3;
                 let start_byte = start_bit / 8;
 
                 let mut index = (texels[start_byte] >> (start_bit & 7)) & 0b111;
@@ -96,7 +106,7 @@ impl Block {
                     index |= (texels[start_byte + 1] << (8 - (start_bit & 7))) & 0b111;
                 }
 
-                colors[i][j] = palette[index as usize];
+                colors[y][x] = palette[index as usize];
             }
         }
 
@@ -106,9 +116,9 @@ impl Block {
     pub fn encode(colors: [[R32F; 4]; 4]) -> Self {
         let mut samples = [0.0; 16];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                samples[i * 4 + j] = colors[i][j].r();
+        for y in 0..4 {
+            for x in 0..4 {
+                samples[y * 4 + x] = colors[y][x].r();
             }
         }
 
@@ -137,11 +147,11 @@ impl Block {
 
         let (color0, color1) = cf.endpoints;
         let mut texels = [0; 6];
-        for i in 0..4 {
-            for j in 0..4 {
-                let idx = (cf.indices[i * 4 + j] as u8) & 0b111;
+        for y in 0..4 {
+            for x in 0..4 {
+                let idx = (cf.indices[y * 4 + x] as u8) & 0b111;
 
-                let start_bit = (i * 4 + j) * 3;
+                let start_bit = (y * 4 + x) * 3;
                 let start_byte = start_bit / 8;
 
                 texels[start_byte] |= idx << (start_bit & 7);

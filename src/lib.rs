@@ -1,19 +1,21 @@
 macro_rules! impl_fixedcode_struct {
-    ($name:ident { $($field_name:ident: $field_ty:ty)* } | $error:ty) => {
-        impl $crate::FixedCode for $name {
-            const SIZE: usize = 0 $(+ <$field_ty as $crate::FixedCode>::SIZE)*;
+    ($name:ident { $($field_name:ident: $field_ty:ty),* $(,)? } | $error:ty) => {
+        impl $crate::encode::FixedCode for $name {
+            const SIZE: usize = 0 $(+ <$field_ty as $crate::encode::FixedCode>::SIZE)*;
             type Array = [u8; Self::SIZE];
-
             type Error = $error;
 
-            fn encode(&self, output: &mut [u8; Self::SIZE]) {
+            fn encode(&self) -> [u8; Self::SIZE] {
                 #![allow(unused_assignments)]
 
+                let mut output = [0u8; Self::SIZE];
                 let mut offset = 0;
                 $(
-                    self.$field_name.encode(output[offset..offset + <$field_ty as $crate::FixedCode>::SIZE].as_mut_array().unwrap());
-                    offset += <$field_ty as $crate::FixedCode>::SIZE;
+                    output[offset..offset + <$field_ty as $crate::encode::FixedCode>::SIZE].copy_from_slice(&self.$field_name.encode());
+                    offset += <$field_ty as $crate::encode::FixedCode>::SIZE;
                 )*
+
+                output
             }
 
             fn decode(input: &[u8; Self::SIZE]) -> Result<Self, $error> {
@@ -23,8 +25,8 @@ macro_rules! impl_fixedcode_struct {
                 Ok($name {
                     $(
                         $field_name: {
-                            let value = <$field_ty as $crate::FixedCode>::decode(input[offset..offset + <$field_ty as $crate::FixedCode>::SIZE].as_array().unwrap())?;
-                            offset += <$field_ty as $crate::FixedCode>::SIZE;
+                            let value = <$field_ty as $crate::encode::FixedCode>::decode(input[offset..offset + <$field_ty as $crate::encode::FixedCode>::SIZE].as_array().unwrap())?;
+                            offset += <$field_ty as $crate::encode::FixedCode>::SIZE;
                             value
                         },
                     )*
@@ -33,23 +35,24 @@ macro_rules! impl_fixedcode_struct {
         }
     };
 
-    ($name:ident ( $($field_name:ident: $field_ty:ty)* ) | $error:ty) => {
-        impl $crate::FixedCode for $name {
-            const SIZE: usize = 0 $(+ <$field_ty as $crate::FixedCode>::SIZE)*;
+    ($name:ident ( $($field_name:ident: $field_ty:ty),* $(,)? ) | $error:ty) => {
+        impl $crate::encode::FixedCode for $name {
+            const SIZE: usize = 0 $(+ <$field_ty as $crate::encode::FixedCode>::SIZE)*;
             type Array = [u8; Self::SIZE];
-
             type Error = $error;
 
-            fn encode(&self, output: &mut [u8; Self::SIZE]) {
+            fn encode(&self) -> [u8; Self::SIZE] {
                 #![allow(unused_assignments)]
 
                 let $name($($field_name,)*) = self;
 
+                let mut output = [0u8; Self::SIZE];
                 let mut offset = 0;
                 $(
-                    $field_name.encode(output[offset..offset + <$field_ty as $crate::FixedCode>::SIZE].as_mut_array().unwrap());
-                    offset += <$field_ty as $crate::FixedCode>::SIZE;
+                    output[offset..offset + <$field_ty as $crate::encode::FixedCode>::SIZE].copy_from_slice(&$field_name.encode());
+                    offset += <$field_ty as $crate::encode::FixedCode>::SIZE;
                 )*
+                output
             }
 
             fn decode(input: &[u8; Self::SIZE]) -> Result<Self, $error> {
@@ -59,8 +62,8 @@ macro_rules! impl_fixedcode_struct {
                 Ok($name(
                     $(
                         {
-                            let $field_name = <$field_ty as $crate::FixedCode>::decode(input[offset..offset + <$field_ty as $crate::FixedCode>::SIZE].as_array().unwrap())?;
-                            offset += <$field_ty as $crate::FixedCode>::SIZE;
+                            let $field_name = <$field_ty as $crate::encode::FixedCode>::decode(input[offset..offset + <$field_ty as $crate::encode::FixedCode>::SIZE].as_array().unwrap())?;
+                            offset += <$field_ty as $crate::encode::FixedCode>::SIZE;
                             $field_name
                         },
                     )*
@@ -73,13 +76,13 @@ macro_rules! impl_fixedcode_struct {
 macro_rules! impl_fixedcode_le_bytes {
     ($($t:ty),* $(,)?) => {
         $(
-            impl $crate::FixedCode for $t {
+            impl $crate::encode::FixedCode for $t {
                 const SIZE: usize = std::mem::size_of::<Self>();
                 type Array = [u8; Self::SIZE];
                 type Error = std::convert::Infallible;
 
-                fn encode(&self, output: &mut Self::Array) {
-                    *output = self.to_le_bytes();
+                fn encode(&self) -> Self::Array {
+                    self.to_le_bytes()
                 }
 
                 fn decode(input: &Self::Array) -> Result<Self, Self::Error> {
@@ -92,25 +95,27 @@ macro_rules! impl_fixedcode_le_bytes {
 
 macro_rules! impl_fixedcode_array {
     ($name:ident([$e:ty; $n:literal]) | $error:ty) => {
-        impl $crate::FixedCode for $name {
-            const SIZE: usize = <$e as $crate::FixedCode>::SIZE * $n;
+        impl $crate::encode::FixedCode for $name {
+            const SIZE: usize = <$e as $crate::encode::FixedCode>::SIZE * $n;
             type Array = [u8; Self::SIZE];
             type Error = $error;
 
-            fn encode(&self, output: &mut Self::Array) {
-                let es = <$e as $crate::FixedCode>::SIZE;
+            fn encode(&self) -> Self::Array {
+                let es = <$e as $crate::encode::FixedCode>::SIZE;
+                let mut output = [0u8; Self::SIZE];
                 for (i, item) in self.0.iter().enumerate() {
-                    item.encode(output[i * es..][..es].as_mut_array().unwrap());
+                    output[i * es..i * es + es].copy_from_slice(&item.encode());
                 }
+                output
             }
 
             fn decode(input: &Self::Array) -> Result<Self, Self::Error> {
-                let es = <$e as $crate::FixedCode>::SIZE;
+                let es = <$e as $crate::encode::FixedCode>::SIZE;
                 let mut result = [const { None }; $n];
 
                 for (i, slot) in result.iter_mut().enumerate() {
 
-                    match <$e as $crate::FixedCode>::decode(input[i * es..][..es].as_array().unwrap()) {
+                    match <$e as $crate::encode::FixedCode>::decode(input[i * es..][..es].as_array().unwrap()) {
                         Ok(value) => {
                             *slot = Some(value)
                         }
@@ -134,6 +139,7 @@ pub mod bc4;
 pub mod bc5;
 pub mod bits;
 pub mod cluster_fit;
+pub mod encode;
 pub mod filter;
 pub mod jackal;
 pub mod lz77;
@@ -145,34 +151,4 @@ pub mod vle;
 pub mod z_curve;
 pub mod zigzaq;
 
-use std::error::Error;
-
 pub use jackal::{DecodeError, DecompressError, Extent};
-
-// A trait for generic encoding of values that can be represented as a fixed-size array of bytes.
-pub trait FixedCode: Sized {
-    const SIZE: usize;
-    type Array: AsRef<[u8]> + AsMut<[u8]> + Default + Send + Sync + 'static;
-    type Error: Error + Send + Sync + 'static;
-    fn encode(&self, output: &mut Self::Array);
-    fn decode(input: &Self::Array) -> Result<Self, Self::Error>;
-}
-
-impl<const N: usize> FixedCode for [u8; N]
-where
-    [u8; N]: Default,
-{
-    const SIZE: usize = N;
-    type Array = [u8; N];
-    type Error = std::convert::Infallible;
-
-    fn encode(&self, output: &mut Self) {
-        output.copy_from_slice(self);
-    }
-
-    fn decode(input: &Self) -> Result<Self, Self::Error> {
-        Ok(*input)
-    }
-}
-
-impl_fixedcode_le_bytes!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64);

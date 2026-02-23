@@ -1,19 +1,29 @@
 //! BC1 implementation.
 //!
 
+use std::convert::Infallible;
+
 use crate::{
     cluster_fit::cluster_fit,
     math::{Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F},
 };
 
 /// A block of 4x4 texels compressed with BC1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
     pub color0: Rgb565,
     pub color1: Rgb565,
     pub texels: [u8; 4],
 }
+
+impl_fixedcode_struct!(
+    Block {
+        color0: Rgb565,
+        color1: Rgb565,
+        texels: [u8; 4],
+    } | Infallible
+);
 
 impl Block {
     pub const BLACK: Block = Block {
@@ -86,11 +96,11 @@ impl Block {
         };
 
         // Decode texels.
-        for i in 0..4 {
-            for j in 0..4 {
-                let index = (texels[i] >> 2 * j) & 0b11;
+        for y in 0..4 {
+            for x in 0..4 {
+                let index = (texels[y] >> 2 * x) & 0b11;
 
-                colors[i][j] = palette[index as usize];
+                colors[y][x] = palette[index as usize];
             }
         }
 
@@ -127,11 +137,11 @@ impl Block {
         };
 
         // Decode texels.
-        for i in 0..4 {
-            for j in 0..4 {
-                let index = (texels[i] >> 2 * j) & 0b11;
+        for y in 0..4 {
+            for x in 0..4 {
+                let index = (texels[y] >> 2 * x) & 0b11;
 
-                colors[i][j] = palette[index as usize];
+                colors[y][x] = palette[index as usize];
             }
         }
 
@@ -141,9 +151,9 @@ impl Block {
     pub fn encode(colors: [[Rgb32F; 4]; 4]) -> Self {
         let mut samples = [Vec3::ZERO; 16];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                samples[i * 4 + j] = colors[i][j].into();
+        for y in 0..4 {
+            for x in 0..4 {
+                samples[y * 4 + x] = colors[y][x].into();
             }
         }
 
@@ -175,10 +185,10 @@ impl Block {
 
         let (color0, color1) = cf.endpoints;
         let mut texels = [0; 4];
-        for i in 0..4 {
-            for j in 0..4 {
-                let idx = (cf.indices[i * 4 + j] as u8) & 0b11;
-                texels[i] |= idx << (j * 2);
+        for y in 0..4 {
+            for x in 0..4 {
+                let idx = (cf.indices[y * 4 + x] as u8) & 0b11;
+                texels[y] |= idx << (x * 2);
             }
         }
 
@@ -195,9 +205,9 @@ impl Block {
 
         let mut num_samples = 0;
 
-        for i in 0..4 {
-            for j in 0..4 {
-                let c = colors[i][j];
+        for y in 0..4 {
+            for x in 0..4 {
+                let c = colors[y][x];
 
                 if c.a() <= threshold {
                     continue;
@@ -239,14 +249,14 @@ impl Block {
 
                 let (color0, color1) = cf.endpoints;
                 let mut texels = [0; 4];
-                for i in 0..4 {
-                    for j in 0..4 {
-                        let c = colors[i][j];
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let c = colors[y][x];
                         if c.a() < threshold {
-                            texels[i] |= 0b11 << (j * 2);
+                            texels[y] |= 0b11 << (x * 2);
                         } else {
-                            let idx = (cf.indices[i * 4 + j] as u8) & 0b11;
-                            texels[i] |= idx << (j * 2);
+                            let idx = (cf.indices[y * 4 + x] as u8) & 0b11;
+                            texels[y] |= idx << (x * 2);
                         }
                     }
                 }
@@ -286,10 +296,10 @@ impl Block {
 
                 let (color0, color1) = cf.endpoints;
                 let mut texels = [0; 4];
-                for i in 0..4 {
-                    for j in 0..4 {
-                        let idx = (cf.indices[i * 4 + j] as u8) & 0b11;
-                        texels[i] |= idx << (j * 2);
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let idx = (cf.indices[y * 4 + x] as u8) & 0b11;
+                        texels[y] |= idx << (x * 2);
                     }
                 }
 

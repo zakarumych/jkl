@@ -1,13 +1,15 @@
 //! BC2 implementation.
 //!
 
+use std::convert::Infallible;
+
 use crate::{
     cluster_fit::cluster_fit,
     math::{Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F},
 };
 
 /// A block of 4x4 texels compressed with BC2.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
     pub alpha: [u8; 8],
@@ -15,6 +17,15 @@ pub struct Block {
     pub color1: Rgb565,
     pub texels: [u8; 4],
 }
+
+impl_fixedcode_struct!(
+    Block {
+        alpha: [u8; 8],
+        color0: Rgb565,
+        color1: Rgb565,
+        texels: [u8; 4],
+    } | Infallible
+);
 
 impl Block {
     pub const BLACK: Block = Block {
@@ -127,13 +138,13 @@ impl Block {
         ];
 
         // Decode texels.
-        for i in 0..4 {
-            for j in 0..4 {
-                let index = (texels[i] >> 2 * j) & 0b11;
-                let alpha = (self.alpha[i * 2 + j / 2] >> 4 * (j % 2)) & 0b1111;
+        for y in 0..4 {
+            for x in 0..4 {
+                let index = (texels[y] >> 2 * x) & 0b11;
+                let alpha = (self.alpha[y * 2 + x / 2] >> 4 * (x % 2)) & 0b1111;
                 let alpha = alpha as f32 / 15.0;
 
-                colors[i][j] = palette[index as usize].with_alpha(alpha);
+                colors[y][x] = palette[index as usize].with_alpha(alpha);
             }
         }
 
@@ -143,9 +154,9 @@ impl Block {
     pub fn encode(colors: [[Rgb32F; 4]; 4]) -> Self {
         let mut samples = [Vec3::ZERO; 16];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                samples[i * 4 + j] = colors[i][j].into();
+        for y in 0..4 {
+            for x in 0..4 {
+                samples[y * 4 + x] = colors[y][x].into();
             }
         }
 
@@ -177,10 +188,10 @@ impl Block {
 
         let (color0, color1) = cf.endpoints;
         let mut texels = [0; 4];
-        for i in 0..4 {
-            for j in 0..4 {
-                let idx = (cf.indices[i * 4 + j] as u8) & 0b11;
-                texels[i] |= idx << (j * 2);
+        for y in 0..4 {
+            for x in 0..4 {
+                let idx = (cf.indices[y * 4 + x] as u8) & 0b11;
+                texels[y] |= idx << (x * 2);
             }
         }
 
@@ -196,9 +207,9 @@ impl Block {
     pub fn encode_with_alpha(colors: [[Rgba32F; 4]; 4]) -> Self {
         let mut samples = [Vec3::ZERO; 16];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                samples[i * 4 + j] = colors[i][j].rgb().into();
+        for y in 0..4 {
+            for x in 0..4 {
+                samples[y * 4 + x] = colors[y][x].rgb().into();
             }
         }
 
@@ -230,18 +241,18 @@ impl Block {
 
         let (color0, color1) = cf.endpoints;
         let mut texels = [0; 4];
-        for i in 0..4 {
-            for j in 0..4 {
-                let idx = (cf.indices[i * 4 + j] as u8) & 0b11;
-                texels[i] |= idx << (j * 2);
+        for y in 0..4 {
+            for x in 0..4 {
+                let idx = (cf.indices[y * 4 + x] as u8) & 0b11;
+                texels[y] |= idx << (x * 2);
             }
         }
 
         let mut alpha = [0; 8];
-        for i in 0..4 {
-            for j in 0..4 {
-                let a = (colors[i][j].a() * 15.0).round() as u8;
-                alpha[i * 2 + j / 2] |= (a & 0b1111) << (4 * (j % 2));
+        for y in 0..4 {
+            for x in 0..4 {
+                let a = (colors[y][x].a() * 15.0).round() as u8;
+                alpha[y * 2 + x / 2] |= (a & 0b1111) << (4 * (x % 2));
             }
         }
 

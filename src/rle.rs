@@ -1,7 +1,31 @@
+use crate::{
+    bits::{ReadBits, WriteBits},
+    encode::Encode,
+    vle,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rle<T> {
     pub value: T,
     pub count: u32,
+}
+
+impl<T> Encode for Rle<T>
+where
+    T: Encode,
+{
+    fn write(&self, writer: &mut WriteBits<impl std::io::Write>) -> std::io::Result<()> {
+        self.value.write(writer)?;
+        vle::encode(self.count, writer)
+    }
+
+    fn read(reader: &mut ReadBits<impl std::io::Read>) -> std::io::Result<Self> {
+        let value = T::read(reader)?;
+
+        let count = vle::decode::<u32, _>(reader)?;
+
+        Ok(Rle { value, count })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

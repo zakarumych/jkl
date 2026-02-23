@@ -3,7 +3,6 @@
 use std::{
     convert::Infallible,
     hash::Hash,
-    io,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, Sub, SubAssign},
 };
 
@@ -3027,7 +3026,7 @@ impl Region3 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct R8U(u8);
 
@@ -3405,6 +3404,8 @@ impl Rgb32F {
 #[repr(transparent)]
 pub struct Rgba8U([u8; 4]);
 
+impl_fixedcode_array!(Rgba8U([u8; 4]) | Infallible);
+
 impl Rgba8U {
     pub const WHITE: Rgba8U = Rgba8U([255, 255, 255, 255]);
     pub const BLACK: Rgba8U = Rgba8U([0, 0, 0, 255]);
@@ -3726,6 +3727,16 @@ impl Rgb565 {
         let g = a.g().wrapping_sub(b.g()) & 63;
         let b = a.b().wrapping_sub(b.b()) & 31;
         Rgb565::new(r, g, b)
+    }
+
+    #[inline(always)]
+    pub fn into_8u(self) -> Rgb8U {
+        Rgb8U::from_f32(self.into_f32())
+    }
+
+    #[inline(always)]
+    pub fn from_8u(rgb: Rgb8U) -> Self {
+        Self::from_f32(rgb.into_f32())
     }
 }
 

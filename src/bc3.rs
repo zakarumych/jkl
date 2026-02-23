@@ -1,18 +1,27 @@
 //! BC4 implementation.
 //!
 
+use std::convert::Infallible;
+
 use crate::{
     bc1, bc4,
     math::{Rgb32F, Rgba32F, R32F},
 };
 
 /// A block of 4x4 texels compressed with BC4.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
     pub alpha: bc4::Block,
     pub rgb: bc1::Block,
 }
+
+impl_fixedcode_struct!(
+    Block {
+        alpha: bc4::Block,
+        rgb: bc1::Block,
+    } | Infallible
+);
 
 impl Block {
     pub const BLACK: Block = Block {
@@ -66,9 +75,9 @@ impl Block {
 
         let mut colors = [[Rgba32F::BLACK; 4]; 4];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                colors[i][j] = rgb[i][j].with_alpha(alpha[i][j].r());
+        for x in 0..4 {
+            for y in 0..4 {
+                colors[y][x] = rgb[y][x].with_alpha(alpha[y][x].r());
             }
         }
 

@@ -1,18 +1,27 @@
 //! BC4 implementation.
 //!
 
+use std::convert::Infallible;
+
 use crate::{
     bc4,
     math::{Rg32F, R32F},
 };
 
 /// A block of 4x4 texels compressed with BC4.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
     pub red: bc4::Block,
     pub green: bc4::Block,
 }
+
+impl_fixedcode_struct!(
+    Block {
+        red: bc4::Block,
+        green: bc4::Block,
+    } | Infallible
+);
 
 impl Block {
     pub const BLACK: Block = Block {
@@ -56,9 +65,9 @@ impl Block {
 
         let mut colors = [[Rg32F::BLACK; 4]; 4];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                colors[i][j] = Rg32F::new(red[i][j].r(), green[i][j].r());
+        for y in 0..4 {
+            for x in 0..4 {
+                colors[y][x] = Rg32F::new(red[y][x].r(), green[y][x].r());
             }
         }
 
@@ -69,10 +78,10 @@ impl Block {
         let mut red = [[R32F::BLACK; 4]; 4];
         let mut green = [[R32F::BLACK; 4]; 4];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                red[i][j] = R32F::new(colors[i][j].r());
-                green[i][j] = R32F::new(colors[i][j].g());
+        for y in 0..4 {
+            for x in 0..4 {
+                red[y][x] = R32F::new(colors[y][x].r());
+                green[y][x] = R32F::new(colors[y][x].g());
             }
         }
 

@@ -567,14 +567,6 @@ fn round_down_8(n: usize) -> usize {
     n & !7
 }
 
-fn round_up_8(n: usize) -> usize {
-    if n & 7 == 0 {
-        n
-    } else {
-        (n & !7) + 8
-    }
-}
-
 fn modulo_8(n: usize) -> usize {
     n & 7
 }

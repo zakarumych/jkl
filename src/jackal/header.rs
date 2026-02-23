@@ -1,9 +1,13 @@
 use core::f32;
-use std::io::{Read, Write};
+use std::{
+    convert::Infallible,
+    io::{Read, Write},
+};
 
 use crate::{
+    ans::Context,
+    encode::FixedCode,
     jackal::{DecodeError, DecompressError},
-    FixedCode,
 };
 
 /// Size of the super-block in number of blocks.
@@ -18,7 +22,7 @@ impl FixedCode for SuperBlockSize {
     type Array = [u8; 1];
     type Error = DecodeError;
 
-    fn encode(&self, output: &mut [u8; 1]) {
+    fn encode(&self) -> [u8; 1] {
         debug_assert!(self.width.is_power_of_two());
         debug_assert!(self.height.is_power_of_two());
 
@@ -28,7 +32,7 @@ impl FixedCode for SuperBlockSize {
         debug_assert!(w < 16);
         debug_assert!(h < 16);
 
-        *output = [((w << 4) | h) as u8];
+        [((w << 4) | h) as u8]
     }
 
     fn decode(input: &[u8; 1]) -> Result<Self, DecodeError> {
@@ -47,7 +51,7 @@ impl SuperBlockSize {
     /// Finds the optimal super-block size for the given extent and block size.
     ///
     /// The optimal super-block size is the one that minimizes the cost function:
-    /// cost = (flat_cost + size_cost * super_block_size) * ceil(number_of_super_blocks / 64) * 64
+    /// cost = (flat_cost + size_cost * superblock_size) * ceil(number_of_superblocks / 64) * 64
     /// i.e. super block cost is linear to size plus a float amount and it is multiplied by the number of super blocks rounded up to the nearest multiple of 64.
     /// This cost function models the GPU decompression cost, which runs thread per super-block, each thread has a fixed overhead of dispatching and a cost proportional to the super-block size,
     /// and the GPU executes threads in warps of 32 or 64 threads, so the number of super-blocks is rounded up to the nearest multiple of 64.
@@ -75,8 +79,8 @@ impl SuperBlockSize {
             let column_size = (extent.height() + superblock_height - 1) / superblock_height;
             let planes = extent.depth();
 
-            let super_blocks_count = row_size * column_size * planes;
-            let warps_count = (super_blocks_count + 63) / 64;
+            let superblocks_count = row_size * column_size * planes;
+            let warps_count = (superblocks_count + 63) / 64;
 
             let cost = (flat_cost
                 + size_cost * (superblock_width as f32 * superblock_height as f32))
@@ -143,8 +147,8 @@ impl FixedCode for Format {
     type Array = [u8; 2];
     type Error = DecodeError;
 
-    fn encode(&self, output: &mut [u8; 2]) {
-        *output = (*self as u16).to_le_bytes();
+    fn encode(&self) -> [u8; 2] {
+        (*self as u16).to_le_bytes()
     }
 
     fn decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
@@ -177,8 +181,8 @@ impl FixedCode for MipLevels {
     type Array = [u8; 2];
     type Error = DecodeError;
 
-    fn encode(&self, output: &mut [u8; 2]) {
-        *output = self.0.to_le_bytes();
+    fn encode(&self) -> [u8; 2] {
+        self.0.to_le_bytes()
     }
 
     fn decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
@@ -200,8 +204,8 @@ impl FixedCode for Magic {
     type Array = [u8; 4];
     type Error = DecodeError;
 
-    fn encode(&self, output: &mut [u8; 4]) {
-        *output = MAGIC_NUMBER.to_le_bytes();
+    fn encode(&self) -> [u8; 4] {
+        MAGIC_NUMBER.to_le_bytes()
     }
 
     fn decode(bytes: &[u8; 4]) -> Result<Self, DecodeError> {
@@ -362,7 +366,8 @@ impl FixedCode for Extent {
     type Array = [u8; 13];
     type Error = DecodeError;
 
-    fn encode(&self, output: &mut [u8; 13]) {
+    fn encode(&self) -> [u8; 13] {
+        let mut output = [0u8; 13];
         output[0] = match self.dimensions() {
             Dimensions::D1 => 0u8,
             Dimensions::D2 => 1u8,
@@ -375,6 +380,7 @@ impl FixedCode for Extent {
         output[1..5].copy_from_slice(&raw_size[0].to_le_bytes());
         output[5..9].copy_from_slice(&raw_size[1].to_le_bytes());
         output[9..13].copy_from_slice(&raw_size[2].to_le_bytes());
+        output
     }
 
     fn decode(input: &[u8; 13]) -> Result<Self, DecodeError> {
@@ -400,15 +406,40 @@ impl FixedCode for Extent {
 
 /// Compression method used for the texel data.
 #[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Compression {
     None = 0,
     Ans = 1,
-    AnsRle = 2,
+    Lz77Ans = 2,
+}
+
+impl FixedCode for Compression {
+    const SIZE: usize = 1;
+    type Array = [u8; 1];
+    type Error = DecodeError;
+
+    fn encode(&self) -> [u8; 1] {
+        [*self as u8]
+    }
+
+    fn decode(input: &[u8; 1]) -> Result<Self, DecodeError> {
+        let value = input[0];
+        let compression = match value {
+            0 => Compression::None,
+            1 => Compression::Ans,
+            2 => Compression::Lz77Ans,
+            _ => return Err(DecodeError::InvalidCompression),
+        };
+        Ok(compression)
+    }
 }
 
 #[derive(Clone, Copy)]
 pub struct JackalHeader {
-    pub magic: Magic,
+    magic: Magic,
+
+    /// Compression method used for the texel data.
+    pub compression: Compression,
 
     // Format of the blocks.
     pub format: Format,
@@ -420,16 +451,17 @@ pub struct JackalHeader {
     pub levels: MipLevels,
 
     // SuperBlockSize of super-blocks.
-    pub super_block_size: SuperBlockSize,
+    pub superblock_size: SuperBlockSize,
 }
 
 impl_fixedcode_struct! {
     JackalHeader {
-        magic: Magic
-        format: Format
-        extent: Extent
-        levels: MipLevels
-        super_block_size: SuperBlockSize
+        magic: Magic,
+        compression: Compression,
+        format: Format,
+        extent: Extent,
+        levels: MipLevels,
+        superblock_size: SuperBlockSize,
     } | DecodeError
 }
 
@@ -442,24 +474,20 @@ impl JackalHeader {
         self.extent
     }
 
-    pub fn jackal_blocks_count(&self) -> usize {
-        let [width, height, depth] = self.jackal_blocks_extent();
+    pub fn superblocks_count(&self) -> usize {
+        let [width, height, depth] = self.superblocks_extent();
         (width * height * depth) as usize
     }
 
-    pub fn jackal_blocks_extent(&self) -> [u32; 3] {
+    pub fn superblocks_extent(&self) -> [u32; 3] {
         let raw_size = self.extent.raw_size();
-        let jackal_blocks_width = (raw_size[0] + self.super_block_size.width as u32 - 1)
-            / self.super_block_size.width as u32;
-        let jackal_blocks_height = (raw_size[1] + self.super_block_size.height as u32 - 1)
-            / self.super_block_size.height as u32;
-        let jackal_blocks_depth = raw_size[2];
+        let superblocks_width = (raw_size[0] + self.superblock_size.width as u32 - 1)
+            / self.superblock_size.width as u32;
+        let superblocks_height = (raw_size[1] + self.superblock_size.height as u32 - 1)
+            / self.superblock_size.height as u32;
+        let superblocks_depth = raw_size[2];
 
-        [
-            jackal_blocks_width,
-            jackal_blocks_height,
-            jackal_blocks_depth,
-        ]
+        [superblocks_width, superblocks_height, superblocks_depth]
     }
 
     pub fn blocks_count(&self) -> usize {
@@ -473,17 +501,4 @@ pub struct JackalBlock {
     pub offset: u64,
 }
 
-impl JackalBlock {
-    pub const BYTES_SIZE: usize = size_of::<u64>();
-
-    pub fn write_to(&self, mut write: impl Write) -> std::io::Result<()> {
-        write.write_all(&self.offset.to_le_bytes())
-    }
-
-    pub fn read_from(mut read: impl Read) -> Result<Self, DecompressError> {
-        let mut bytes = [0; Self::BYTES_SIZE];
-        read.read_exact(&mut bytes)?;
-        let offset = u64::from_le_bytes(bytes);
-        Ok(JackalBlock { offset })
-    }
-}
+impl_fixedcode_struct!(JackalBlock { offset: u64 } | Infallible);

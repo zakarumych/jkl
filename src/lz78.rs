@@ -7,12 +7,38 @@
 //! when 256th entry is added, the index becomes 16bits.
 //!
 
-use std::iter::{Fuse, FusedIterator};
+use std::{
+    io,
+    iter::{Fuse, FusedIterator},
+};
+
+use crate::{
+    bits::{ReadBits, WriteBits},
+    encode::Encode,
+    vle,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token<T> {
-    pub prefix: usize,
+    pub prefix: u32,
     pub literal: T,
+}
+
+impl<T> Encode for Token<T>
+where
+    T: Encode,
+{
+    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        vle::encode(self.prefix, writer)?;
+        self.literal.write(writer)
+    }
+
+    fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+        let prefix = vle::decode::<u32, _>(reader)?;
+        let literal = T::read(reader)?;
+
+        Ok(Token { prefix, literal })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,8 +84,10 @@ where
 
         match index {
             None => {
+                debug_assert!(u32::try_from(self.prefix).is_ok());
+
                 let token = Token {
-                    prefix: self.prefix,
+                    prefix: self.prefix as u32,
                     literal: symbol,
                 };
                 self.entires.push(entry);
@@ -86,7 +114,7 @@ where
         self.prefix = 0;
 
         Some(Token {
-            prefix: last.prefix,
+            prefix: last.prefix as u32,
             literal: last.literal,
         })
     }
