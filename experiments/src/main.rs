@@ -5,18 +5,19 @@ use egui::{
     TextureOptions, Ui, Vec2,
 };
 use egui_snarl::{
-    ui::{self, PinInfo, SnarlViewer, SnarlWidget},
+    ui::{PinInfo, SnarlViewer, SnarlWidget},
     InPin, OutPin, Snarl,
 };
 use jkl::{
     bc1,
     bits::WriteBits,
     encode::{Encode, FixedCode},
+    lz77,
     math::{Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3},
     max_rects::MaximalRectangles,
+    reference_map::{ImageMut, ImageRef, ReferenceMap},
     rle::{rle_with_cfg, RleCfg},
 };
-use serde::{de, Deserialize};
 
 fn main() {
     let native_options = eframe::NativeOptions::default();
@@ -301,6 +302,12 @@ impl SnarlViewer<JackalNode> for JackalViewer {
             if r.clicked() {
                 snarl.insert_node(pos, JackalNode::Atlas(AtlasNode::new()));
             }
+
+            let r = ui.button("Add Reference Map Node");
+            let r = r.on_hover_text("Add an Reference Map node");
+            if r.clicked() {
+                snarl.insert_node(pos, JackalNode::ReferenceMap(ReferenceMapNode::new()));
+            }
         });
     }
 }
@@ -427,9 +434,9 @@ enum ImageValue {
 impl ImageValue {
     pub fn new(width: u32, height: u32, pixel_type: PixelType) -> Self {
         match pixel_type {
-            PixelType::Rgb8U => ImageValue::Rgb8U(Image::new(width, height, Rgb8U::BLACK)),
-            PixelType::Rgba8U => ImageValue::Rgba8U(Image::new(width, height, Rgba8U::BLACK)),
-            PixelType::BC1 => ImageValue::BC1(Image::new(width, height, bc1::Block::BLACK)),
+            PixelType::Rgb8U => ImageValue::Rgb8U(Image::solid(width, height, Rgb8U::BLACK)),
+            PixelType::Rgba8U => ImageValue::Rgba8U(Image::solid(width, height, Rgba8U::BLACK)),
+            PixelType::BC1 => ImageValue::BC1(Image::solid(width, height, bc1::Block::BLACK)),
         }
     }
 
@@ -524,6 +531,7 @@ enum JackalNode {
     LZ78RansCalculator(LZ78RansCalculatorNode),
     RleRansCalculator(RleRansCalculatorNode),
     Atlas(AtlasNode),
+    ReferenceMap(ReferenceMapNode),
 }
 
 impl JackalNode {
@@ -541,6 +549,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.title(),
             JackalNode::RleRansCalculator(node) => node.title(),
             JackalNode::Atlas(node) => node.title(),
+            JackalNode::ReferenceMap(node) => node.title(),
         }
     }
 
@@ -558,6 +567,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.inputs(),
             JackalNode::RleRansCalculator(node) => node.inputs(),
             JackalNode::Atlas(node) => node.inputs(),
+            JackalNode::ReferenceMap(node) => node.inputs(),
         }
     }
 
@@ -579,6 +589,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.set_input_ty(input, ty),
             JackalNode::RleRansCalculator(node) => node.set_input_ty(input, ty),
             JackalNode::Atlas(node) => node.set_input_ty(input, ty),
+            JackalNode::ReferenceMap(node) => node.set_input_ty(input, ty),
         }
     }
 
@@ -599,6 +610,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.input_ty(input),
             JackalNode::RleRansCalculator(node) => node.input_ty(input),
             JackalNode::Atlas(node) => node.input_ty(input),
+            JackalNode::ReferenceMap(node) => node.input_ty(input),
         }
     }
 
@@ -619,6 +631,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.input_ui(input, ui),
             JackalNode::RleRansCalculator(node) => node.input_ui(input, ui),
             JackalNode::Atlas(node) => node.input_ui(input, ui),
+            JackalNode::ReferenceMap(node) => node.input_ui(input, ui),
         }
     }
 
@@ -636,6 +649,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.outputs(),
             JackalNode::RleRansCalculator(node) => node.outputs(),
             JackalNode::Atlas(node) => node.outputs(),
+            JackalNode::ReferenceMap(node) => node.outputs(),
         }
     }
 
@@ -656,6 +670,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.output_ty(output),
             JackalNode::RleRansCalculator(node) => node.output_ty(output),
             JackalNode::Atlas(node) => node.output_ty(output),
+            JackalNode::ReferenceMap(node) => node.output_ty(output),
         }
     }
 
@@ -676,6 +691,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.output_ui(output, ui),
             JackalNode::RleRansCalculator(node) => node.output_ui(output, ui),
             JackalNode::Atlas(node) => node.output_ui(output, ui),
+            JackalNode::ReferenceMap(node) => node.output_ui(output, ui),
         }
     }
 
@@ -693,6 +709,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.has_body(),
             JackalNode::RleRansCalculator(node) => node.has_body(),
             JackalNode::Atlas(node) => node.has_body(),
+            JackalNode::ReferenceMap(node) => node.has_body(),
         }
     }
 
@@ -710,6 +727,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.body_ui(ui),
             JackalNode::RleRansCalculator(node) => node.body_ui(ui),
             JackalNode::Atlas(node) => node.body_ui(ui),
+            JackalNode::ReferenceMap(node) => node.body_ui(ui),
         }
     }
 
@@ -730,6 +748,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.get_output(output),
             JackalNode::RleRansCalculator(node) => node.get_output(output),
             JackalNode::Atlas(node) => node.get_output(output),
+            JackalNode::ReferenceMap(node) => node.get_output(output),
         }
     }
 
@@ -750,6 +769,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.set_input(input, data),
             JackalNode::RleRansCalculator(node) => node.set_input(input, data),
             JackalNode::Atlas(node) => node.set_input(input, data),
+            JackalNode::ReferenceMap(node) => node.set_input(input, data),
         }
     }
 
@@ -767,6 +787,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.prepare(ctx),
             JackalNode::RleRansCalculator(node) => node.prepare(ctx),
             JackalNode::Atlas(node) => node.prepare(ctx),
+            JackalNode::ReferenceMap(node) => node.prepare(ctx),
         }
     }
 }
@@ -1316,11 +1337,37 @@ impl<T> Image<T>
 where
     T: Copy,
 {
-    fn new(width: u32, height: u32, fill: T) -> Self {
+    fn as_ref(&self) -> ImageRef<'_, T> {
+        ImageRef {
+            width: self.width as usize,
+            height: self.height as usize,
+            pixels: &self.pixels,
+            stride: self.width as usize,
+        }
+    }
+
+    fn as_mut(&mut self) -> ImageMut<'_, T> {
+        ImageMut {
+            width: self.width as usize,
+            height: self.height as usize,
+            pixels: &mut self.pixels,
+            stride: self.width as usize,
+        }
+    }
+
+    fn solid(width: u32, height: u32, fill: T) -> Self {
         Image {
             width,
             height,
             pixels: vec![fill; (width * height) as usize],
+        }
+    }
+
+    fn new(width: u32, height: u32, pixels: Vec<T>) -> Self {
+        Image {
+            width,
+            height,
+            pixels,
         }
     }
 
@@ -1612,7 +1659,7 @@ impl<'de> serde::Deserialize<'de> for LZPCalculatorNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(LZPCalculatorNode::new())
     }
 }
@@ -1728,7 +1775,7 @@ impl<'de> serde::Deserialize<'de> for SizeOfNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(SizeOfNode::new())
     }
 }
@@ -1774,6 +1821,7 @@ impl io::Write for WriteSize {
 struct LZ77CalculatorNode {
     input: Option<PixelType>,
     image: Option<ImageValue>,
+    window_size: u32,
     sizes: [u64; 2],
     unzip_block: bool,
 }
@@ -1783,6 +1831,7 @@ impl LZ77CalculatorNode {
         LZ77CalculatorNode {
             input: None,
             image: None,
+            window_size: 14,
             sizes: [0; 2],
             unzip_block: false,
         }
@@ -1846,11 +1895,15 @@ impl LZ77CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ77BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ77 {
+                    write_bits: &mut write_bits,
+                    reference_count: 0,
+                    literal_count: 0,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut encoder = jkl::lz77::Encoder::new(Rgb8U::BLACK, 1 << 14);
+                        let mut encoder = lz77::Encoder::new(Rgb8U::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -1867,6 +1920,11 @@ impl LZ77CalculatorNode {
                     }
                 }
 
+                println!(
+                    "references: {}, literals: {}",
+                    ebs.reference_count, ebs.literal_count
+                );
+
                 write_bits.finish().unwrap();
                 self.sizes[0] = write_size.size as u64 * 8;
             }
@@ -1874,11 +1932,16 @@ impl LZ77CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ77BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ77 {
+                    write_bits: &mut write_bits,
+                    reference_count: 0,
+                    literal_count: 0,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut encoder = jkl::lz77::Encoder::<Rgba8U>::new(Rgba8U::BLACK, 1 << 14);
+                        let mut encoder =
+                            lz77::Encoder::<Rgba8U>::new(Rgba8U::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -1895,6 +1958,11 @@ impl LZ77CalculatorNode {
                     }
                 }
 
+                println!(
+                    "references: {}, literals: {}",
+                    ebs.reference_count, ebs.literal_count
+                );
+
                 write_bits.finish().unwrap();
                 self.sizes[0] = write_size.size as u64 * 8;
             }
@@ -1902,11 +1970,16 @@ impl LZ77CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ77BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ77 {
+                    write_bits: &mut write_bits,
+                    reference_count: 0,
+                    literal_count: 0,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut encoder = jkl::lz77::Encoder::<Rgb565>::new(Rgb565::BLACK, 1 << 14);
+                        let mut encoder =
+                            lz77::Encoder::<Rgb565>::new(Rgb565::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -1924,17 +1997,26 @@ impl LZ77CalculatorNode {
                     }
                 }
 
+                println!(
+                    "COLOR: references: {}, literals: {}",
+                    ebs.reference_count, ebs.literal_count
+                );
+
                 write_bits.finish().unwrap();
                 self.sizes[0] = write_size.size as u64 * 8;
 
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ77BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ77 {
+                    write_bits: &mut write_bits,
+                    reference_count: 0,
+                    literal_count: 0,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut encoder = jkl::lz77::Encoder::<[u8; 4]>::new([0u8; 4], 1 << 14);
+                        let mut encoder = lz77::Encoder::<[u8; 4]>::new([0u8; 4], self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -1951,6 +2033,11 @@ impl LZ77CalculatorNode {
                     }
                 }
 
+                println!(
+                    "TEXEL: references: {}, literals: {}",
+                    ebs.reference_count, ebs.literal_count
+                );
+
                 write_bits.finish().unwrap();
                 self.sizes[1] = write_size.size as u64 * 8;
             }
@@ -1958,12 +2045,18 @@ impl LZ77CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ77BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ77 {
+                    write_bits: &mut write_bits,
+                    reference_count: 0,
+                    literal_count: 0,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut encoder =
-                            jkl::lz77::Encoder::<bc1::Block>::new(bc1::Block::BLACK, 1 << 14);
+                        let mut encoder = lz77::Encoder::<bc1::Block>::new(
+                            bc1::Block::BLACK,
+                            1 << self.window_size,
+                        );
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -1979,6 +2072,11 @@ impl LZ77CalculatorNode {
                         }
                     }
                 }
+
+                println!(
+                    "references: {}, literals: {}",
+                    ebs.reference_count, ebs.literal_count
+                );
 
                 write_bits.finish().unwrap();
                 self.sizes[0] = write_size.size as u64 * 8;
@@ -2023,17 +2121,17 @@ impl LZ77CalculatorNode {
                 ui.label("No input");
             }
             Some(PixelType::Rgb8U) => {
-                ui.label(format!("{}", human_readable_bits(self.sizes[0])));
+                ui.label(format!("{} bit", self.sizes[0]));
             }
             Some(PixelType::Rgba8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.sizes[0])));
+                ui.label(format!("MAP: {} bit", self.sizes[0]));
             }
             Some(PixelType::BC1) => {
                 if self.unzip_block {
-                    ui.label(format!("color: {}", human_readable_bits(self.sizes[0])));
-                    ui.label(format!("texel: {}", human_readable_bits(self.sizes[1])));
+                    ui.label(format!("color: {} bit", self.sizes[0]));
+                    ui.label(format!("texel: {} bit", self.sizes[1]));
                 } else {
-                    ui.label(format!("{}", human_readable_bits(self.sizes[0])));
+                    ui.label(format!("{} bit", self.sizes[0]));
                 }
             }
         });
@@ -2049,10 +2147,20 @@ impl LZ77CalculatorNode {
     }
 
     fn has_body(&self) -> bool {
-        matches!(self.input, Some(PixelType::BC1))
+        true
     }
 
     fn body_ui(&mut self, ui: &mut Ui) {
+        let r = ui.add(
+            egui::DragValue::new(&mut self.window_size)
+                .range(1..=16)
+                .clamp_existing_to_range(true),
+        );
+
+        if (r.changed() && !r.dragged()) || r.drag_stopped() {
+            self.rebuild();
+        }
+
         if matches!(self.input, Some(PixelType::BC1)) {
             let r = ui.checkbox(&mut self.unzip_block, "Unzip block");
             if r.changed() {
@@ -2076,7 +2184,7 @@ impl<'de> serde::Deserialize<'de> for LZ77CalculatorNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(LZ77CalculatorNode::new())
     }
 }
@@ -2157,7 +2265,9 @@ impl LZ78CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ78BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ78 {
+                    write_bits: &mut write_bits,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
@@ -2185,7 +2295,9 @@ impl LZ78CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ78BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ78 {
+                    write_bits: &mut write_bits,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
@@ -2213,7 +2325,9 @@ impl LZ78CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ78BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ78 {
+                    write_bits: &mut write_bits,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
@@ -2241,7 +2355,9 @@ impl LZ78CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ78BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ78 {
+                    write_bits: &mut write_bits,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
@@ -2269,7 +2385,9 @@ impl LZ78CalculatorNode {
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
 
-                let mut ebs = ExtendLZ78BitsSize(&mut write_bits);
+                let mut ebs = ExtendLZ78 {
+                    write_bits: &mut write_bits,
+                };
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
@@ -2333,17 +2451,17 @@ impl LZ78CalculatorNode {
                 ui.label("No input");
             }
             Some(PixelType::Rgb8U) => {
-                ui.label(format!("{}", human_readable_bits(self.sizes[0])));
+                ui.label(format!("{} bit", self.sizes[0]));
             }
             Some(PixelType::Rgba8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.sizes[0])));
+                ui.label(format!("MAP: {} bit", self.sizes[0]));
             }
             Some(PixelType::BC1) => {
                 if self.unzip_block {
-                    ui.label(format!("color: {}", human_readable_bits(self.sizes[0])));
-                    ui.label(format!("texel: {}", human_readable_bits(self.sizes[1])));
+                    ui.label(format!("color: {} bit", self.sizes[0]));
+                    ui.label(format!("texel: {} bit", self.sizes[1]));
                 } else {
-                    ui.label(format!("{}", human_readable_bits(self.sizes[0])));
+                    ui.label(format!("{} bit", self.sizes[0]));
                 }
             }
         });
@@ -2386,7 +2504,7 @@ impl<'de> serde::Deserialize<'de> for LZ78CalculatorNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(LZ78CalculatorNode::new())
     }
 }
@@ -2584,7 +2702,7 @@ impl RansCalculatorNode {
 
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
                     let image = &image;
-                    (0..image.height()).map(move |y| match image.get(x, y) {
+                    (0..image.height()).flat_map(move |y| match image.get(x, y) {
                         PixelValue::BC1(b) => b.texels,
                         _ => unreachable!(),
                     })
@@ -2647,7 +2765,16 @@ impl RansCalculatorNode {
 
                         let mut emitted = 0;
                         rev_data.clone().for_each(|p| {
-                            if let Some(_) = encoder.encode(p.texels) {
+                            if let Some(_) = encoder.encode(p.texels[0]) {
+                                emitted += 32;
+                            }
+                            if let Some(_) = encoder.encode(p.texels[1]) {
+                                emitted += 32;
+                            }
+                            if let Some(_) = encoder.encode(p.texels[2]) {
+                                emitted += 32;
+                            }
+                            if let Some(_) = encoder.encode(p.texels[3]) {
                                 emitted += 32;
                             }
                         });
@@ -2750,34 +2877,22 @@ impl RansCalculatorNode {
                 ui.label("No input");
             }
             Some(PixelType::Rgb8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
             }
             Some(PixelType::Rgba8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
             }
             Some(PixelType::BC1) => {
                 if self.unzip_block {
-                    ui.label(format!(
-                        "MAP color: {}",
-                        human_readable_bits(self.map_sizes[0])
-                    ));
-                    ui.label(format!(
-                        "rANS color: {}",
-                        human_readable_bits(self.rans_sizes[0])
-                    ));
-                    ui.label(format!(
-                        "MAP texel: {}",
-                        human_readable_bits(self.map_sizes[1])
-                    ));
-                    ui.label(format!(
-                        "rANS texel: {}",
-                        human_readable_bits(self.rans_sizes[1])
-                    ));
+                    ui.label(format!("MAP color: {} bit", self.map_sizes[0]));
+                    ui.label(format!("rANS color: {} bit", self.rans_sizes[0]));
+                    ui.label(format!("MAP texel: {} bit", self.map_sizes[1]));
+                    ui.label(format!("rANS texel: {} bit", self.rans_sizes[1]));
                 } else {
-                    ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                    ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                    ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                    ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
                 }
             }
         });
@@ -2820,7 +2935,7 @@ impl<'de> serde::Deserialize<'de> for RansCalculatorNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(RansCalculatorNode::new())
     }
 }
@@ -2829,6 +2944,7 @@ impl<'de> serde::Deserialize<'de> for RansCalculatorNode {
 struct LZ77RansCalculatorNode {
     input: Option<PixelType>,
     image: Option<ImageValue>,
+    window_size: usize,
     map_sizes: [u64; 2],
     rans_sizes: [u64; 2],
     unzip_block: bool,
@@ -2841,6 +2957,7 @@ impl LZ77RansCalculatorNode {
             image: None,
             map_sizes: [0; 2],
             rans_sizes: [0; 2],
+            window_size: 14,
             unzip_block: false,
         }
     }
@@ -2906,7 +3023,7 @@ impl LZ77RansCalculatorNode {
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut lz77 = jkl::lz77::Encoder::new(Rgb8U::BLACK, 1 << 14);
+                        let mut lz77 = lz77::Encoder::new(Rgb8U::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -2941,7 +3058,7 @@ impl LZ77RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         buffer.clear();
 
-                        let mut lz77 = jkl::lz77::Encoder::new(Rgb8U::BLACK, 1 << 14);
+                        let mut lz77 = lz77::Encoder::new(Rgb8U::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -2962,7 +3079,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| lz77_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -2993,7 +3110,7 @@ impl LZ77RansCalculatorNode {
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut lz77 = jkl::lz77::Encoder::new(Rgba8U::BLACK, 1 << 14);
+                        let mut lz77 = lz77::Encoder::new(Rgba8U::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -3028,7 +3145,7 @@ impl LZ77RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         buffer.clear();
 
-                        let mut lz77 = jkl::lz77::Encoder::new(Rgba8U::BLACK, 1 << 14);
+                        let mut lz77 = lz77::Encoder::new(Rgba8U::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -3049,7 +3166,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| lz77_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3080,7 +3197,8 @@ impl LZ77RansCalculatorNode {
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut color_lz77 = jkl::lz77::Encoder::new(Rgb565::BLACK, 1 << 14);
+                        let mut color_lz77 =
+                            lz77::Encoder::new(Rgb565::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -3114,7 +3232,7 @@ impl LZ77RansCalculatorNode {
 
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
                     let image = &image;
-                    (0..image.height()).map(move |y| match image.get(x, y) {
+                    (0..image.height()).flat_map(move |y| match image.get(x, y) {
                         PixelValue::BC1(b) => b.texels,
                         _ => unreachable!(),
                     })
@@ -3134,7 +3252,8 @@ impl LZ77RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         color_buffer.clear();
 
-                        let mut color_lz77 = jkl::lz77::Encoder::new(Rgb565::BLACK, 1 << 14);
+                        let mut color_lz77 =
+                            lz77::Encoder::new(Rgb565::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -3156,7 +3275,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         color_buffer
                             .iter()
-                            .for_each(|t| lz77_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3189,7 +3308,16 @@ impl LZ77RansCalculatorNode {
 
                                 match p {
                                     PixelValue::BC1(b) => {
-                                        if let Some(_) = texel_rans.encode(b.texels) {
+                                        if let Some(_) = texel_rans.encode(b.texels[0]) {
+                                            emitted += 32;
+                                        }
+                                        if let Some(_) = texel_rans.encode(b.texels[1]) {
+                                            emitted += 32;
+                                        }
+                                        if let Some(_) = texel_rans.encode(b.texels[2]) {
+                                            emitted += 32;
+                                        }
+                                        if let Some(_) = texel_rans.encode(b.texels[3]) {
                                             emitted += 32;
                                         }
                                     }
@@ -3210,7 +3338,7 @@ impl LZ77RansCalculatorNode {
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let mut lz77 = jkl::lz77::Encoder::new(bc1::Block::BLACK, 1 << 14);
+                        let mut lz77 = lz77::Encoder::new(bc1::Block::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -3245,7 +3373,7 @@ impl LZ77RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         buffer.clear();
 
-                        let mut lz77 = jkl::lz77::Encoder::new(bc1::Block::BLACK, 1 << 14);
+                        let mut lz77 = lz77::Encoder::new(bc1::Block::BLACK, 1 << self.window_size);
 
                         for dx in x..u32::min(x + 256, image.width()) {
                             for dy in y..u32::min(y + 256, image.height()) {
@@ -3266,7 +3394,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| lz77_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3332,34 +3460,22 @@ impl LZ77RansCalculatorNode {
                 ui.label("No input");
             }
             Some(PixelType::Rgb8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
             }
             Some(PixelType::Rgba8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
             }
             Some(PixelType::BC1) => {
                 if self.unzip_block {
-                    ui.label(format!(
-                        "MAP color: {}",
-                        human_readable_bits(self.map_sizes[0])
-                    ));
-                    ui.label(format!(
-                        "rANS color: {}",
-                        human_readable_bits(self.rans_sizes[0])
-                    ));
-                    ui.label(format!(
-                        "MAP texel: {}",
-                        human_readable_bits(self.map_sizes[1])
-                    ));
-                    ui.label(format!(
-                        "rANS texel: {}",
-                        human_readable_bits(self.rans_sizes[1])
-                    ));
+                    ui.label(format!("MAP color: {} bit", self.map_sizes[0]));
+                    ui.label(format!("rANS color: {} bit", self.rans_sizes[0]));
+                    ui.label(format!("MAP texel: {} bit", self.map_sizes[1]));
+                    ui.label(format!("rANS texel: {} bit", self.rans_sizes[1]));
                 } else {
-                    ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                    ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                    ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                    ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
                 }
             }
         });
@@ -3375,10 +3491,20 @@ impl LZ77RansCalculatorNode {
     }
 
     fn has_body(&self) -> bool {
-        matches!(self.input, Some(PixelType::BC1))
+        true
     }
 
     fn body_ui(&mut self, ui: &mut Ui) {
+        let r = ui.add(
+            egui::DragValue::new(&mut self.window_size)
+                .range(1..=16)
+                .clamp_existing_to_range(true),
+        );
+
+        if (r.changed() && !r.dragged()) || r.drag_stopped() {
+            self.rebuild();
+        }
+
         if matches!(self.input, Some(PixelType::BC1)) {
             let r = ui.checkbox(&mut self.unzip_block, "Unzip block");
             if r.changed() {
@@ -3402,7 +3528,7 @@ impl<'de> serde::Deserialize<'de> for LZ77RansCalculatorNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(LZ77RansCalculatorNode::new())
     }
 }
@@ -3544,7 +3670,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| lz78_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3631,7 +3757,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| lz78_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3738,7 +3864,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         color_buffer
                             .iter()
-                            .for_each(|t| lz78_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3848,7 +3974,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| lz78_token_size(*t, &mut write_bits));
+                            .for_each(|t| t.write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3914,34 +4040,22 @@ impl LZ78RansCalculatorNode {
                 ui.label("No input");
             }
             Some(PixelType::Rgb8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
             }
             Some(PixelType::Rgba8U) => {
-                ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
             }
             Some(PixelType::BC1) => {
                 if self.unzip_block {
-                    ui.label(format!(
-                        "MAP color: {}",
-                        human_readable_bits(self.map_sizes[0])
-                    ));
-                    ui.label(format!(
-                        "rANS color: {}",
-                        human_readable_bits(self.rans_sizes[0])
-                    ));
-                    ui.label(format!(
-                        "MAP texel: {}",
-                        human_readable_bits(self.map_sizes[1])
-                    ));
-                    ui.label(format!(
-                        "rANS texel: {}",
-                        human_readable_bits(self.rans_sizes[1])
-                    ));
+                    ui.label(format!("MAP color: {} bit", self.map_sizes[0]));
+                    ui.label(format!("rANS color: {} bit", self.rans_sizes[0]));
+                    ui.label(format!("MAP texel: {} bit", self.map_sizes[1]));
+                    ui.label(format!("rANS texel: {} bit", self.rans_sizes[1]));
                 } else {
-                    ui.label(format!("MAP: {}", human_readable_bits(self.map_sizes[0])));
-                    ui.label(format!("rANS: {}", human_readable_bits(self.rans_sizes[0])));
+                    ui.label(format!("MAP: {} bit", self.map_sizes[0]));
+                    ui.label(format!("rANS: {} bit", self.rans_sizes[0]));
                 }
             }
         });
@@ -3984,59 +4098,44 @@ impl<'de> serde::Deserialize<'de> for LZ78RansCalculatorNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(LZ78RansCalculatorNode::new())
     }
 }
 
-fn lz77_token_size<T>(token: jkl::lz77::Token<T>, writer: &mut WriteBits<&mut WriteSize>)
-where
-    T: FixedCode,
-{
-    match token {
-        jkl::lz77::Token::Reference { distance, length } => {
-            writer.write_bit(false).unwrap();
-            jkl::vle::encode(distance, writer).unwrap();
-            jkl::vle::encode(length, writer).unwrap();
-        }
-        jkl::lz77::Token::Literal { literal } => {
-                writer.write_bit(true).unwrap();
-            literal.write(writer).unwrap();
-        }
-    }
+struct ExtendLZ77<'a, 'b> {
+    write_bits: &'a mut WriteBits<&'b mut WriteSize>,
+    reference_count: usize,
+    literal_count: usize,
 }
 
-fn lz78_token_size<T>(token: jkl::lz78::Token<T>, writer: &mut WriteBits<&mut WriteSize>)
+impl<T> Extend<lz77::Token<T>> for ExtendLZ77<'_, '_>
 where
     T: FixedCode,
 {
-    let jkl::lz78::Token { prefix, literal } = token;
-    jkl::vle::encode(prefix, writer).unwrap();
-    literal.write(writer).unwrap();
-}
-
-struct ExtendLZ77BitsSize<'a, 'b>(&'a mut WriteBits<&'b mut WriteSize>);
-
-impl<T> Extend<jkl::lz77::Token<T>> for ExtendLZ77BitsSize<'_, '_>
-where
-    T: FixedCode,
-{
-    fn extend<I: IntoIterator<Item = jkl::lz77::Token<T>>>(&mut self, iter: I) {
+    fn extend<I: IntoIterator<Item = lz77::Token<T>>>(&mut self, iter: I) {
         for token in iter {
-            lz77_token_size(token, self.0);
+            match token {
+                lz77::Token::Reference { .. } => self.reference_count += 1,
+                lz77::Token::Literal { .. } => self.literal_count += 1,
+            }
+
+            token.write(self.write_bits).unwrap();
         }
     }
 }
 
-struct ExtendLZ78BitsSize<'a, 'b>(&'a mut WriteBits<&'b mut WriteSize>);
+struct ExtendLZ78<'a, 'b> {
+    write_bits: &'a mut WriteBits<&'b mut WriteSize>,
+}
 
-impl<T> Extend<jkl::lz78::Token<T>> for ExtendLZ78BitsSize<'_, '_>
+impl<T> Extend<jkl::lz78::Token<T>> for ExtendLZ78<'_, '_>
 where
     T: FixedCode,
 {
     fn extend<I: IntoIterator<Item = jkl::lz78::Token<T>>>(&mut self, iter: I) {
         for token in iter {
-            lz78_token_size(token, self.0);
+            token.write(self.write_bits).unwrap();
         }
     }
 }
@@ -4058,7 +4157,7 @@ impl AtlasNode {
         AtlasNode {
             size,
             inputs: array::from_fn(|_| None),
-            atlas: Image::new(size.0, size.1, Rgb8U::BLACK),
+            atlas: Image::solid(size.0, size.1, Rgb8U::BLACK),
             body: ImageWidget::new(),
         }
     }
@@ -4189,7 +4288,7 @@ impl AtlasNode {
     }
 
     fn rebuild(&mut self) {
-        self.atlas = Image::new(self.size.0, self.size.1, Rgb8U::BLACK);
+        self.atlas = Image::solid(self.size.0, self.size.1, Rgb8U::BLACK);
 
         let mut pack = MaximalRectangles::new(self.size.0, self.size.1);
 
@@ -4241,7 +4340,7 @@ impl<'de> serde::Deserialize<'de> for AtlasNode {
     where
         D: serde::Deserializer<'de>,
     {
-        let size = <(u32, u32) as Deserialize<'de>>::deserialize(deserializer)?;
+        let size = <(u32, u32) as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(AtlasNode::with_size(size))
     }
 }
@@ -4770,7 +4869,285 @@ impl<'de> serde::Deserialize<'de> for RleRansCalculatorNode {
     where
         D: serde::Deserializer<'de>,
     {
-        <() as Deserialize<'de>>::deserialize(deserializer)?;
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(RleRansCalculatorNode::new())
+    }
+}
+
+/// Builds texture atlas.
+struct ReferenceMapNode {
+    size: (usize, usize),
+    input: Option<Image<Rgb32F>>,
+    map: ReferenceMap<Rgb32F>,
+    body: ImageWidget,
+    batch_size: usize,
+    learning_rate: f32,
+}
+
+impl ReferenceMapNode {
+    fn new() -> Self {
+        ReferenceMapNode::with_size((0, 0))
+    }
+
+    fn with_size(size: (usize, usize)) -> Self {
+        let mut map = ReferenceMap::new(size.0, size.1, Rgb32F::BLACK);
+        map.as_mut().random_initialize(|| {
+            Rgb32F::new(
+                rand::random_range(0.0..=1.0),
+                rand::random_range(0.0..=1.0),
+                rand::random_range(0.0..=1.0),
+            )
+        });
+
+        ReferenceMapNode {
+            size,
+            input: None,
+            map,
+            body: ImageWidget::new(),
+            batch_size: 16,
+            learning_rate: 0.01,
+        }
+    }
+
+    fn prepare(&mut self, ctx: &egui::Context) {
+        self.body.make_texture(ctx, || egui::ColorImage {
+            size: [self.size.0, self.size.1],
+            source_size: egui::vec2(self.size.0 as f32, self.size.1 as f32),
+            pixels: self
+                .map
+                .as_ref()
+                .pixels()
+                .iter()
+                .map(|p| {
+                    egui::Color32::from_rgb(
+                        (p.r() * 255.0) as u8,
+                        (p.g() * 255.0) as u8,
+                        (p.b() * 255.0) as u8,
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    fn title(&self) -> String {
+        "Reference Map".to_owned()
+    }
+
+    fn inputs(&self) -> usize {
+        3
+    }
+
+    fn set_input_ty(&mut self, input: usize, ty: JackalType) -> bool {
+        match input {
+            0 | 1 => match ty {
+                JackalType::Uint => true,
+                _ => false,
+            },
+            2 => match ty {
+                JackalType::Null => {
+                    self.input = None;
+                    true
+                }
+                JackalType::Image(PixelType::Rgb8U) => {
+                    self.input = None;
+                    true
+                }
+                _ => false,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn input_ty(&self, input: usize) -> JackalType {
+        match input {
+            0 | 1 => JackalType::Uint,
+            2 => match &self.input {
+                None => JackalType::Null,
+                Some(_) => JackalType::Image(PixelType::Rgb8U),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
+        let rebuild = match input {
+            0 => ui
+                .add(
+                    egui::DragValue::new(&mut self.size.0)
+                        .range(1..=8192)
+                        .clamp_existing_to_range(true),
+                )
+                .changed(),
+            1 => ui
+                .add(
+                    egui::DragValue::new(&mut self.size.1)
+                        .range(1..=8192)
+                        .clamp_existing_to_range(true),
+                )
+                .changed(),
+            2 => false,
+            _ => unreachable!(),
+        };
+
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    fn set_input(&mut self, input: usize, value: JackalValue) {
+        match input {
+            0 => match value {
+                JackalValue::Uint(value) => {
+                    self.size.0 = value as usize;
+                }
+                _ => unreachable!(),
+            },
+            1 => match value {
+                JackalValue::Uint(value) => {
+                    self.size.1 = value as usize;
+                }
+                _ => unreachable!(),
+            },
+            2 => match value {
+                JackalValue::Null => {
+                    self.input = None;
+                }
+                JackalValue::Image(ImageValue::Rgb8U(image)) => {
+                    self.input = Some(Image::new(
+                        image.width,
+                        image.height,
+                        image.pixels.into_iter().map(Rgb8U::into_f32).collect(),
+                    ));
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+
+        self.rebuild();
+    }
+
+    fn outputs(&self) -> usize {
+        1
+    }
+
+    fn output_ty(&self, output: usize) -> JackalType {
+        assert_eq!(output, 0);
+        JackalType::Image(PixelType::Rgb8U)
+    }
+
+    fn output_ui(&mut self, output: usize, ui: &mut Ui) {
+        assert_eq!(output, 0);
+        ui.label("Rgb8U image");
+    }
+
+    fn get_output(&self, output: usize) -> JackalValue {
+        assert_eq!(output, 0);
+        JackalValue::Null
+    }
+
+    fn has_body(&self) -> bool {
+        true
+    }
+
+    fn body_ui(&mut self, ui: &mut Ui) {
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut self.batch_size)
+                        .range(1..=1 << 20)
+                        .clamp_existing_to_range(true),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut self.learning_rate)
+                        .range(0.01..=1.0)
+                        .speed(0.01)
+                        .clamp_existing_to_range(true),
+                );
+
+                let r = ui.small_button("train");
+                if r.clicked() {
+                    self.train();
+                }
+
+                let r = ui.small_button("reset");
+                if r.clicked() {
+                    self.rebuild();
+                }
+            });
+
+            self.body.show(ui);
+        });
+    }
+
+    fn rebuild(&mut self) {
+        self.body.unmake_texture();
+        self.map = ReferenceMap::new(self.size.0, self.size.1, Rgb32F::BLACK);
+
+        match &self.input {
+            None => {
+                self.map.as_mut().random_initialize(|| {
+                    Rgb32F::new(
+                        rand::random_range(0.0..=1.0),
+                        rand::random_range(0.0..=1.0),
+                        rand::random_range(0.0..=1.0),
+                    )
+                });
+            }
+            Some(input) => {
+                let block_size = 8;
+
+                self.map
+                    .as_mut()
+                    .initialize_patches(input.as_ref(), block_size);
+            }
+        };
+    }
+
+    fn train(&mut self) {
+        let Some(input) = &self.input else {
+            return;
+        };
+
+        self.body.unmake_texture();
+        let block_size = 8;
+        let batch_size = self.batch_size;
+
+        self.map.train(
+            input.as_ref(),
+            block_size,
+            batch_size,
+            |a, b| (Rgb32F::distance(a, b) + 1.0).log2(),
+            |a, b, e| {
+                let e = self.learning_rate / (1.0 + e) / block_size as f32 / block_size as f32;
+                Rgb32F::lerp(a, b, e.powf(0.1))
+            },
+            |a, b, e| {
+                let e = self.learning_rate * e / block_size as f32 / block_size as f32;
+                Rgb32F::lerp(a, b, e)
+            },
+        );
+    }
+}
+
+impl serde::Serialize for ReferenceMapNode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        (self.size.0 as u64, self.size.1 as u64).serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ReferenceMapNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let size = <(u64, u64) as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        Ok(ReferenceMapNode::with_size((
+            size.0 as usize,
+            size.1 as usize,
+        )))
     }
 }

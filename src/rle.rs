@@ -14,6 +14,10 @@ impl<T> Encode for Rle<T>
 where
     T: Encode,
 {
+    fn bit_len(&self) -> usize {
+        self.value.bit_len() + vle::encode_bit_len(self.count)
+    }
+
     fn write(&self, writer: &mut WriteBits<impl std::io::Write>) -> std::io::Result<()> {
         self.value.write(writer)?;
         vle::encode(self.count, writer)

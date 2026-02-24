@@ -70,6 +70,23 @@ macro_rules! impl_unsigned {
 
 impl_unsigned!(u8, u16, u32, u64, u128, usize);
 
+fn gamma_bit_len<T>(v: T) -> u32
+where
+    T: Unsigned,
+{
+    debug_assert_ne!(v, T::ZERO);
+
+    let msb = T::BITS - v.leading_zeros() - 1;
+
+    // Unary bits for `msb` and 1 bit for the first '1'.
+    let unary_bits = msb + 1;
+
+    // Tail bits in little-endian order.
+    let tail_bits = msb;
+
+    unary_bits + tail_bits
+}
+
 #[inline]
 fn encode_gamma<T, W>(v: T, writer: &mut WriteBits<W>) -> io::Result<()>
 where
@@ -95,6 +112,46 @@ where
     }
 
     Ok(())
+}
+
+pub fn encode_bit_len<T>(v: T) -> usize
+where
+    T: Unsigned,
+{
+    let msb = if v < T::MAX {
+        // Can safely compute v+1 without overflow since v < MAX.
+        let v = v.next();
+
+        // n = floor(log2(v))
+        let msb = T::BITS - v.leading_zeros() - 1;
+
+        msb
+    } else {
+        // v+1 is 2^BITS, so pos of MSB is BITS and the rest bits are 0.
+        T::BITS
+    };
+
+    // gamma encode `msb + 1`.
+    let gamma_bits = gamma_bit_len(msb + 1);
+
+    let tail_bits = msb;
+
+    (gamma_bits + tail_bits) as usize
+}
+
+pub fn encode_non_zero_bit_len<T>(v: T) -> usize
+where
+    T: Unsigned,
+{
+    // n = floor(log2(v))
+    let msb = T::BITS - v.leading_zeros() - 1;
+
+    // gamma encode `msb + 1`.
+    let gamma_bits = gamma_bit_len(msb + 1);
+
+    let tail_bits = msb;
+
+    (gamma_bits + tail_bits) as usize
 }
 
 /// Encode unsigned value `v`.
@@ -131,6 +188,33 @@ where
     Ok(())
 }
 
+/// Encode unsigned value `v`.
+///
+/// Encodes `v` using Elias delta code.
+pub fn encode_non_zero<T, W>(v: T, writer: &mut WriteBits<W>) -> io::Result<()>
+where
+    T: Unsigned,
+    W: io::Write,
+{
+    assert_ne!(v, T::ZERO);
+
+    // n = floor(log2(v))
+    let msb = T::BITS - v.leading_zeros() - 1;
+
+    let tail = v - T::pow2(msb);
+
+    // gamma encode `msb + 1`.
+    encode_gamma(msb + 1, &mut *writer)?;
+
+    if msb > 0 {
+        // write the remainig bits in LE
+        writer.write_all_bits(&tail.to_le_bytes(), 0, msb as usize)?;
+    }
+
+    Ok(())
+}
+
+/// Error specifies that the decoded value is too large to fit in the target type.
 #[derive(Clone, Copy, Debug)]
 pub struct TooLarge;
 
@@ -190,14 +274,39 @@ where
 
     let tail = T::from_le_bytes(buffer);
 
-    if msb == T::BITS {
+    if msb >= T::BITS {
         // If msb == BITS and tail is not zero, the value is larger than 2^BITS - 1, which is out of range for T.
-        if tail != T::ZERO {
+        if msb > T::BITS || tail != T::ZERO {
             return Err(io::Error::new(io::ErrorKind::InvalidData, TooLarge));
         }
+
+        return Ok(T::MAX);
     }
 
     Ok(T::pow2(msb) + tail - T::ONE)
+}
+
+/// Decode unsigned value.
+///
+/// Reads the value encoded by `encode` function.
+/// Returns an error if the encoded value is too large to fit in T.
+pub fn decode_non_zero<T, R>(reader: &mut ReadBits<R>) -> io::Result<T>
+where
+    T: Unsigned,
+    R: io::Read,
+{
+    let msb = decode_gamma::<u32, R>(reader)? - 1;
+
+    let mut buffer = [0u8; 16];
+    reader.read_all_bits(&mut buffer, 0, msb as usize)?;
+
+    let tail = T::from_le_bytes(buffer);
+
+    if msb >= T::BITS {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, TooLarge));
+    }
+
+    Ok(T::pow2(msb) + tail)
 }
 
 #[cfg(test)]

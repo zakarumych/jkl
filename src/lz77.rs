@@ -16,15 +16,25 @@ impl<T> Encode for Token<T>
 where
     T: Encode,
 {
-    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
-        match self {
+    fn bit_len(&self) -> usize {
+        match *self {
             Token::Reference { distance, length } => {
-                writer.write_bit(false)?;
-                vle::encode(*distance, writer)?;
-                vle::encode(*length, writer)?;
+                let length_bits = vle::encode_bit_len(length);
+                let distance_bits = vle::encode_bit_len(distance);
+                length_bits + distance_bits
             }
-            Token::Literal { literal } => {
-                writer.write_bit(true)?;
+            Token::Literal { ref literal } => 1 + literal.bit_len(),
+        }
+    }
+
+    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        match *self {
+            Token::Reference { distance, length } => {
+                vle::encode(length, writer)?;
+                vle::encode(distance, writer)?;
+            }
+            Token::Literal { ref literal } => {
+                vle::encode(0u8, writer)?;
                 literal.write(&mut *writer)?;
             }
         }
@@ -32,17 +42,17 @@ where
     }
 
     fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
-        let token_type = reader.read_bit()?;
+        let length = vle::decode::<usize, _>(reader)?;
 
-        match token_type {
-            false => {
-                let distance = vle::decode::<usize, _>(reader)?;
-                let length = vle::decode::<usize, _>(reader)?;
-                Ok(Token::Reference { distance, length })
-            }
-            true => {
+        match length {
+            // 0 => unreachable!(), // `decode_non_zero` can't return 0.
+            0 => {
                 let literal = T::read(&mut *reader)?;
                 Ok(Token::Literal { literal })
+            }
+            _ => {
+                let distance = vle::decode::<usize, _>(reader)?;
+                Ok(Token::Reference { distance, length })
             }
         }
     }
@@ -85,7 +95,7 @@ impl<T> Window<T> {
         let offset = self.idx(offset);
 
         if offset < self.head {
-            for i in (0..usize::min(offset + 1, self.head)).rev() {
+            for i in (0..offset + 1).rev() {
                 if self.buffer[i] == *elem {
                     return Some(self.idx(i));
                 }
@@ -96,7 +106,7 @@ impl<T> Window<T> {
                 }
             }
         } else {
-            for i in (self.head..usize::min(offset + 1, self.buffer.len())).rev() {
+            for i in (self.head..offset + 1).rev() {
                 if self.buffer[i] == *elem {
                     return Some(self.idx(i));
                 }
@@ -106,59 +116,118 @@ impl<T> Window<T> {
         None
     }
 
-    fn find_range(&self, offset: usize, distance: usize, length: usize) -> Option<usize>
+    // Searches window for a match of sequence specified by `distance`-`length` pair,
+    // and followed by `next` symbol.
+    // Only tries offsets larget than `distance`,
+    // since it should be impossible to find a match of required length at smaller offset.
+    fn find_extension(&self, distance: usize, length: usize, next: &T) -> Option<usize>
     where
         T: PartialEq,
     {
-        let offset = self.idx(offset);
         let d = self.idx(distance);
+
+        // m is the length after which match spills into negative window index,
+        // i.e. when it starts repeating until at least `length` symbols are matched.
         let m = if d < self.head {
             self.head - d
         } else {
-            self.buffer.len() + self.head - d
+            (self.buffer.len() - d) + self.head
         };
 
-        if offset < self.head {
-            'a: for i in (0..usize::min(offset, self.head)).rev() {
-                let n = self.head - i;
-                for j in 0..length {
-                    let idx1 = i + (j % n);
-                    let idx2 = (d + (j % m)) % self.buffer.len();
-                    if self.buffer[idx1] != self.buffer[idx2] {
+        if d < self.head {
+            // Consider offsets before current one
+            // In left part of the window.
+            'a: for p in (0..d).rev() {
+                // How many symbols there are until the end of the window,
+                // i.e. when it starts repeating until at least `length` symbols are matched.
+                let n = self.head - p;
+
+                // How many symbols must match before it is guaranteed that `length` symbols are matched
+                // Two repeating sequences match endlessly if they match on the sum of their repeating lengths.
+                let l = length.min(n + m);
+
+                // Check if there's match of required length.
+                for j in 0..l {
+                    let pj = p + (j % n);
+                    let dj = d + (j % m);
+                    if self.buffer[pj] != self.buffer[dj] {
+                        // Not a match, try next offset.
                         continue 'a;
                     }
                 }
 
-                return Some(self.idx(i));
+                let pl = p + (length % n);
+                if self.buffer[pl] != *next {
+                    // Not a match, try next offset.
+                    continue 'a;
+                }
+
+                // Found a match of required length, return offset.
+                return Some(self.idx(p));
             }
 
-            'a: for i in (self.head..self.buffer.len()).rev() {
-                let n = self.buffer.len() + self.head - i;
-                for j in 0..length {
-                    let idx1 = (i + (j % n)) % self.buffer.len();
-                    let idx2 = (d + (j % m)) % self.buffer.len();
-                    if self.buffer[idx1] != self.buffer[idx2] {
+            // Consider offsets after current one
+            // In right part of the window.
+            'a: for p in (self.head..self.buffer.len()).rev() {
+                // How many symbols there are until the end of the window,
+                // i.e. when it starts repeating until at least `length` symbols are matched.
+                let n = (self.buffer.len() - p) + self.head;
+
+                // How many symbols must match before it is guaranteed that `length` symbols are matched
+                // Two repeating sequences match endlessly if they match on the sum of their repeating lengths.
+                let l = length.min(n + m);
+
+                // Check if there's match of required length.
+                for j in 0..l {
+                    let pj = (p + (j % n)) % self.buffer.len();
+                    let dj = (d + (j % m)) % self.buffer.len();
+                    if self.buffer[pj] != self.buffer[dj] {
+                        // Not a match, try next offset.
                         continue 'a;
                     }
                 }
 
-                return Some(self.idx(i));
+                let pl = (p + (length % n)) % self.buffer.len();
+                if self.buffer[pl] != *next {
+                    // Not a match, try next offset.
+                    continue 'a;
+                }
+
+                // Found a match of required length, return offset.
+                return Some(self.idx(p));
             }
 
             None
         } else {
-            'a: for i in (self.head..usize::min(offset, self.buffer.len())).rev() {
-                let n = self.buffer.len() + self.head - i;
+            // Consider offsets before current one
+            // In right part of the window.
+            'a: for p in (self.head..d).rev() {
+                // How many symbols there are until the end of the window,
+                // i.e. when it starts repeating until at least `length` symbols are matched.
+                let n = (self.buffer.len() - p) + self.head;
 
-                for j in 0..length {
-                    let idx1 = (i + (j % n)) % self.buffer.len();
-                    let idx2 = (d + (j % m)) % self.buffer.len();
-                    if self.buffer[idx1] != self.buffer[idx2] {
+                // How many symbols must match before it is guaranteed that `length` symbols are matched
+                // Two repeating sequences match endlessly if they match on the sum of their repeating lengths.
+                let l = length.min(n + m);
+
+                // Check if there's match of required length.
+                for j in 0..l {
+                    let pj: usize = (p + (j % n)) % self.buffer.len();
+                    let dj = (d + (j % m)) % self.buffer.len();
+                    if self.buffer[pj] != self.buffer[dj] {
+                        // Not a match, try next offset.
                         continue 'a;
                     }
                 }
 
-                return Some(self.idx(i));
+                let pl = (p + (length % n)) % self.buffer.len();
+                if self.buffer[pl] != *next {
+                    // Not a match, try next offset.
+                    continue 'a;
+                }
+
+                // Found a match of required length, return offset.
+                return Some(self.idx(p));
             }
 
             None
@@ -174,18 +243,31 @@ pub struct Encoder<T> {
     window: Window<T>,
     distance: usize,
     length: usize,
+
+    // How many bits the match in form of literals would take.
+    match_bit_len: usize,
 }
 
 impl<T> Encoder<T>
 where
-    T: Copy + Eq,
+    T: Copy + Eq + Encode,
 {
     pub fn new(init: T, length: u32) -> Self {
         Encoder {
             window: Window::new(init, length),
             distance: 0,
             length: 0,
+            match_bit_len: 0,
         }
+    }
+
+    fn should_emit_reference(&self) -> bool {
+        self.length >= 1
+        // let reference = Token::<T>::Reference {
+        //     distance: self.distance,
+        //     length: self.length,
+        // };
+        // reference.bit_len() < self.match_bit_len
     }
 
     pub fn encode(&mut self, input: T, output: &mut impl Extend<Token<T>>) {
@@ -196,31 +278,27 @@ where
                 if *self.window.get(distance_index(self.distance, self.length)) == input {
                     // Input continues the current match.
                     self.length += 1;
+                    self.match_bit_len += Token::Literal { literal: input }.bit_len();
                     return;
                 }
 
-                // If input does not continues current match, try find another one and test if input continues it.
-                let mut offset = self.distance;
-                loop {
-                    match self.window.find_range(offset, self.distance, self.length) {
-                        None => break, // No more matches.
-                        Some(pos) => {
-                            if *self.window.get(distance_index(pos, self.length)) == input {
-                                self.distance = pos;
-                                self.length += 1;
-                                return;
-                            }
-
-                            offset = pos;
-                        }
-                    }
+                // If input does not continues current match, try find extension deeper in the window.
+                if let Some(pos) = self
+                    .window
+                    .find_extension(self.distance, self.length, &input)
+                {
+                    // Extension match found, update match to it and continue.
+                    self.distance = pos;
+                    self.length += 1;
+                    self.match_bit_len += Token::Literal { literal: input }.bit_len();
+                    return;
                 }
             }
 
             // Failed to continue current match, emit it and start anew.
-            let emit_reference = self.length >= 2;
+            let should_emit_reference = self.should_emit_reference();
 
-            if emit_reference {
+            if should_emit_reference {
                 output.extend(Some(Token::Reference {
                     distance: self.distance,
                     length: self.length,
@@ -233,7 +311,7 @@ where
                 self.window.push(elem);
                 self.distance += 1;
 
-                if !emit_reference {
+                if !should_emit_reference {
                     output.extend(Some(Token::Literal { literal: elem }));
                 }
             }
@@ -264,9 +342,9 @@ where
     }
 
     pub fn finish(mut self, output: &mut impl Extend<Token<T>>) {
-        let emit_reference = self.length >= 2;
+        let should_emit_reference = self.should_emit_reference();
 
-        if emit_reference {
+        if should_emit_reference {
             output.extend(Some(Token::Reference {
                 distance: self.distance,
                 length: self.length,

@@ -33,6 +33,7 @@ where
 impl_fixedcode_le_bytes!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64);
 
 pub trait Encode {
+    fn bit_len(&self) -> usize;
     fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()>;
     fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self>
     where
@@ -43,6 +44,10 @@ impl<T> Encode for T
 where
     T: FixedCode,
 {
+    fn bit_len(&self) -> usize {
+        Self::SIZE * 8
+    }
+
     #[inline]
     fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         io::Write::write_all(write, self.encode().as_ref())

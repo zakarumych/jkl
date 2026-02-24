@@ -146,6 +146,7 @@ pub mod lz77;
 pub mod lz78;
 pub mod math;
 pub mod max_rects;
+pub mod reference_map;
 pub mod rle;
 pub mod vle;
 pub mod z_curve;

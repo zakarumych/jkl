@@ -28,6 +28,10 @@ impl<T> Encode for Token<T>
 where
     T: Encode,
 {
+    fn bit_len(&self) -> usize {
+        vle::encode_bit_len(self.prefix) + self.literal.bit_len()
+    }
+
     fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         vle::encode(self.prefix, writer)?;
         self.literal.write(writer)
