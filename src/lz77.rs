@@ -1,4 +1,4 @@
-use std::io;
+use std::{error::Error, fmt, io};
 
 use crate::{
     bits::{ReadBits, WriteBits},
@@ -8,8 +8,19 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Token<T> {
-    Reference { distance: usize, length: usize },
-    Literal { literal: T },
+    Literal { symbol: T },
+    Reference { length: u32, distance: u32 },
+}
+
+impl<T> Default for Token<T>
+where
+    T: Default,
+{
+    fn default() -> Self {
+        Token::Literal {
+            symbol: T::default(),
+        }
+    }
 }
 
 impl<T> Encode for Token<T>
@@ -18,41 +29,43 @@ where
 {
     fn bit_len(&self) -> usize {
         match *self {
-            Token::Reference { distance, length } => {
-                let length_bits = vle::encode_bit_len(length);
+            Token::Reference { length, distance } => {
+                debug_assert!(length >= 2);
+                let length_bits = vle::encode_non_zero_bit_len(length);
                 let distance_bits = vle::encode_bit_len(distance);
                 length_bits + distance_bits
             }
-            Token::Literal { ref literal } => 1 + literal.bit_len(),
+            Token::Literal { ref symbol } => 1 + symbol.bit_len(),
         }
     }
 
     fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         match *self {
-            Token::Reference { distance, length } => {
-                vle::encode(length, writer)?;
+            Token::Reference { length, distance } => {
+                debug_assert!(length >= 2);
+                vle::encode_non_zero(length, writer)?;
                 vle::encode(distance, writer)?;
             }
-            Token::Literal { ref literal } => {
-                vle::encode(0u8, writer)?;
-                literal.write(&mut *writer)?;
+            Token::Literal { ref symbol } => {
+                vle::encode_non_zero(1u8, writer)?;
+                symbol.write(&mut *writer)?;
             }
         }
         Ok(())
     }
 
     fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
-        let length = vle::decode::<usize, _>(reader)?;
+        let length = vle::decode_non_zero::<u32, _>(reader)?;
 
         match length {
-            // 0 => unreachable!(), // `decode_non_zero` can't return 0.
-            0 => {
-                let literal = T::read(&mut *reader)?;
-                Ok(Token::Literal { literal })
+            0 => unreachable!("decode_non_zero must never return 0"),
+            1 => {
+                let symbol = T::read(&mut *reader)?;
+                Ok(Token::Literal { symbol })
             }
             _ => {
-                let distance = vle::decode::<usize, _>(reader)?;
-                Ok(Token::Reference { distance, length })
+                let distance = vle::decode::<u32, _>(reader)?;
+                Ok(Token::Reference { length, distance })
             }
         }
     }
@@ -64,17 +77,22 @@ struct Window<T> {
 }
 
 impl<T> Window<T> {
-    fn new(init: T, length: u32) -> Self
+    fn new(init: T, length: usize) -> Self
     where
         T: Copy,
     {
         Window {
-            buffer: vec![init; length as usize],
+            buffer: vec![init; length],
             head: 0,
         }
     }
 
+    fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
     fn idx(&self, index: usize) -> usize {
+        assert!(index < self.buffer.len());
         (self.head + self.buffer.len() - 1 - index) % self.buffer.len()
     }
 
@@ -243,76 +261,69 @@ pub struct Encoder<T> {
     window: Window<T>,
     distance: usize,
     length: usize,
-
-    // How many bits the match in form of literals would take.
-    match_bit_len: usize,
 }
 
 impl<T> Encoder<T>
 where
-    T: Copy + Eq + Encode,
+    T: Copy + Eq,
 {
     pub fn new(init: T, length: u32) -> Self {
+        debug_assert!(usize::try_from(length).is_ok());
+
         Encoder {
-            window: Window::new(init, length),
+            window: Window::new(init, length as usize),
             distance: 0,
             length: 0,
-            match_bit_len: 0,
         }
     }
 
-    fn should_emit_reference(&self) -> bool {
-        self.length >= 1
-        // let reference = Token::<T>::Reference {
-        //     distance: self.distance,
-        //     length: self.length,
-        // };
-        // reference.bit_len() < self.match_bit_len
-    }
-
-    pub fn encode(&mut self, input: T, output: &mut impl Extend<Token<T>>) {
+    #[inline]
+    pub fn encode(&mut self, symbol: T, output: &mut impl Extend<Token<T>>) {
         if self.length > 0 {
-            if self.length < usize::MAX {
+            let max = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
+
+            if self.length < max {
                 // If longer match is possible to represent.
 
-                if *self.window.get(distance_index(self.distance, self.length)) == input {
+                if *self.window.get(distance_index(self.distance, self.length)) == symbol {
                     // Input continues the current match.
                     self.length += 1;
-                    self.match_bit_len += Token::Literal { literal: input }.bit_len();
                     return;
                 }
 
                 // If input does not continues current match, try find extension deeper in the window.
                 if let Some(pos) = self
                     .window
-                    .find_extension(self.distance, self.length, &input)
+                    .find_extension(self.distance, self.length, &symbol)
                 {
                     // Extension match found, update match to it and continue.
                     self.distance = pos;
                     self.length += 1;
-                    self.match_bit_len += Token::Literal { literal: input }.bit_len();
                     return;
                 }
             }
 
             // Failed to continue current match, emit it and start anew.
-            let should_emit_reference = self.should_emit_reference();
+            let should_emit_reference = self.length >= 2;
 
             if should_emit_reference {
+                debug_assert!(u32::try_from(self.distance).is_ok());
+                debug_assert!(u32::try_from(self.length).is_ok());
+
                 output.extend(Some(Token::Reference {
-                    distance: self.distance,
-                    length: self.length,
+                    distance: self.distance as u32,
+                    length: self.length as u32,
                 }));
             }
 
             for i in 0..self.length {
                 // Rotate window and emit literals if current match is not long enough.
-                let elem = *self.window.get(distance_index(self.distance, i));
-                self.window.push(elem);
+                let symbol = *self.window.get(distance_index(self.distance, i));
+                self.window.push(symbol);
                 self.distance += 1;
 
                 if !should_emit_reference {
-                    output.extend(Some(Token::Literal { literal: elem }));
+                    output.extend(Some(Token::Literal { symbol }));
                 }
             }
 
@@ -320,16 +331,13 @@ where
             self.length = 0;
         }
 
-        match self.window.find_elem(0, &input) {
+        match self.window.find_elem(0, &symbol) {
             None => {
                 // Symbol is not in the window, emit it as literal and add to the window.
-
-                let emit = Token::Literal { literal: input };
-                self.window.push(input);
+                self.window.push(symbol);
                 self.distance = 0;
                 self.length = 0;
-                output.extend(Some(emit));
-                return;
+                output.extend(Some(Token::Literal { symbol }));
             }
             Some(pos) => {
                 // Symbol is in the window, start new match.
@@ -341,19 +349,22 @@ where
         }
     }
 
-    pub fn finish(mut self, output: &mut impl Extend<Token<T>>) {
-        let should_emit_reference = self.should_emit_reference();
+    pub fn finish(&mut self, output: &mut impl Extend<Token<T>>) {
+        let should_emit_reference = self.length >= 2;
 
         if should_emit_reference {
+            debug_assert!(u32::try_from(self.distance).is_ok());
+            debug_assert!(u32::try_from(self.length).is_ok());
+
             output.extend(Some(Token::Reference {
-                distance: self.distance,
-                length: self.length,
+                distance: self.distance as u32,
+                length: self.length as u32,
             }));
         } else {
             for i in 0..self.length {
-                let elem = *self.window.get(distance_index(self.distance, i));
+                let symbol = *self.window.get(distance_index(self.distance, i));
                 self.distance += 1;
-                output.extend(Some(Token::Literal { literal: elem }));
+                output.extend(Some(Token::Literal { symbol }));
             }
         }
     }
@@ -369,37 +380,80 @@ pub struct Decoder<T> {
     entry: Option<Entry>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DecodeError {
+    InvalidDistance { distance: usize, window: usize },
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            DecodeError::InvalidDistance { distance, window } => write!(
+                f,
+                "invalid distance {} for window of size {}",
+                distance, window
+            ),
+        }
+    }
+}
+
+impl Error for DecodeError {}
+
 impl<T> Decoder<T>
 where
     T: Copy + Eq,
 {
     pub fn new(init: T, length: u32) -> Self {
+        debug_assert!(usize::try_from(length).is_ok());
+
         Decoder {
-            window: Window::new(init, length),
+            window: Window::new(init, length as usize),
             entry: None,
         }
     }
 
-    pub fn decode(&mut self, tokens: &mut impl Iterator<Item = Token<T>>) -> Option<T> {
+    pub fn decode(
+        &mut self,
+        mut tokens: impl Iterator<Item = Token<T>>,
+    ) -> Result<Option<T>, DecodeError> {
         match &mut self.entry {
             None => {
-                let token = tokens.next()?;
+                let Some(token) = tokens.next() else {
+                    return Ok(None);
+                };
 
                 match token {
-                    Token::Reference { distance, length } => {
+                    Token::Reference { length, distance } => {
+                        let distance = usize::try_from(distance).map_err(|_| {
+                            DecodeError::InvalidDistance {
+                                distance: usize::MAX,
+                                window: self.window.len(),
+                            }
+                        })?;
+
+                        if distance >= self.window.len() {
+                            return Err(DecodeError::InvalidDistance {
+                                distance,
+                                window: self.window.len(),
+                            });
+                        }
+
+                        debug_assert!(length > 0);
                         let first = *self.window.get(distance as usize);
                         self.window.push(first);
 
-                        self.entry = Some(Entry {
-                            distance: distance as usize,
-                            length: length as usize - 1,
-                        });
+                        if length > 1 {
+                            self.entry = Some(Entry {
+                                distance: distance as usize,
+                                length: length as usize - 1,
+                            });
+                        }
 
-                        Some(first)
+                        Ok(Some(first))
                     }
-                    Token::Literal { literal } => {
-                        self.window.push(literal);
-                        return Some(literal);
+                    Token::Literal { symbol } => {
+                        self.window.push(symbol);
+                        Ok(Some(symbol))
                     }
                 }
             }
@@ -411,9 +465,61 @@ where
                 if entry.length == 0 {
                     self.entry = None;
                 }
-                Some(first)
+                Ok(Some(first))
             }
         }
+    }
+
+    pub fn decode_all(
+        &mut self,
+        mut tokens: impl Iterator<Item = Token<T>>,
+        extend: &mut impl Extend<T>,
+    ) -> Result<(), DecodeError> {
+        if let Some(mut entry) = self.entry.take() {
+            while entry.length > 0 {
+                debug_assert!(entry.length > 0);
+                let first = *self.window.get(entry.distance);
+                self.window.push(first);
+                entry.length -= 1;
+                extend.extend(Some(first));
+            }
+        }
+
+        while let Some(token) = tokens.next() {
+            match token {
+                Token::Reference {
+                    distance,
+                    mut length,
+                } => {
+                    let distance =
+                        usize::try_from(distance).map_err(|_| DecodeError::InvalidDistance {
+                            distance: usize::MAX,
+                            window: self.window.len(),
+                        })?;
+
+                    if distance >= self.window.len() {
+                        return Err(DecodeError::InvalidDistance {
+                            distance,
+                            window: self.window.len(),
+                        });
+                    }
+
+                    while length > 0 {
+                        debug_assert!(length > 0);
+                        let first = *self.window.get(distance);
+                        self.window.push(first);
+                        length -= 1;
+                        extend.extend(Some(first));
+                    }
+                }
+                Token::Literal { symbol } => {
+                    self.window.push(symbol);
+                    extend.extend(Some(symbol));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -446,9 +552,16 @@ fn test_u16() {
     let mut decoded = Vec::new();
 
     while decoded.len() < data.len() {
-        let elem = decoder.decode(&mut input).unwrap();
+        let elem = decoder.decode(&mut input).unwrap().unwrap();
         decoded.push(elem);
     }
+
+    assert_eq!(data[..], decoded[..]);
+
+    decoded.clear();
+    decoder
+        .decode_all(compressed.into_iter(), &mut decoded)
+        .unwrap();
 
     assert_eq!(data[..], decoded[..]);
 }

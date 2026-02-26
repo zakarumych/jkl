@@ -1,38 +1,46 @@
 use std::io;
 
 use crate::{
-    bc1,
-    encode::FixedCode,
-    jackal::{header::Compression, visit_superblock, JackalHeader},
+    image::ImageRef,
+    jackal::{compress::Compressor, SuperBlockSize},
     math::Rgb8U,
 };
 
-pub(super) trait AnyBlock: Copy + 'static + Sized {
+/// This trait is an interface for compressing images composed of blocks of a specific type.
+pub(super) trait AnyBlock: Sized + 'static {
     const ASPECTS: usize;
 
-    /// Compress specific block aspect.
-    ///
-    /// Writes compressed data into `writer`
-    fn compress<const ASPECT: usize>(
-        blocks: &[Self],
-        header: &JackalHeader,
-        write: impl io::Write + io::Seek,
-    ) -> io::Result<()>;
+    fn compress_aspect<C, const ASPECT: usize>(
+        image: ImageRef<'_, Self>,
+        compressor: C,
+    ) -> io::Result<()>
+    where
+        C: Compressor;
 }
 
 impl AnyBlock for Rgb8U {
-    const ASPECTS: usize = 3;
+    const ASPECTS: usize = 1;
 
-    fn compress<const ASPECT: usize>(
-        blocks: &[Self],
-        header: &JackalHeader,
-        write: impl io::Write + io::Seek,
-    ) -> io::Result<()> {
-        // let superblocks_extent = header.superblocks_extent();
-        // let mut superblocks = Vec::new();
+    fn compress_aspect<C, const ASPECT: usize>(
+        image: ImageRef<'_, Self>,
+        compressor: C,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        todo!()
+        // if image.width() < usize::from(superblock.width)
+        //     || image.height() < usize::from(superblock.height)
+        // {
+        //     // Only 1 superblock can fit.
 
-        todo!();
+        //     let ctx = compressor.build_context(image.pixels().iter().map(|p| {
+        //         let bits = p.bits_interleaved();
+        //         let [a, b, c, _] = bits.to_le_bytes();
+        //         [a, b, c]
+        //     }));
+        // }
 
-        Ok(())
+        // todo!()
     }
 }

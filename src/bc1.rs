@@ -27,20 +27,20 @@ impl_fixedcode_struct!(
 
 impl Block {
     pub const BLACK: Block = Block {
-        color0: Rgb565::WHITE,
+        color0: Rgb565::BLACK,
         color1: Rgb565::BLACK,
-        texels: [0xFF; 4],
+        texels: [0x00; 4],
     };
 
     pub const WHITE: Block = Block {
         color0: Rgb565::WHITE,
-        color1: Rgb565::BLACK,
+        color1: Rgb565::WHITE,
         texels: [0x00; 4],
     };
 
     pub const TRANSPARENT: Block = Block {
         color0: Rgb565::BLACK,
-        color1: Rgb565::BLACK,
+        color1: Rgb565::WHITE,
         texels: [0xFF; 4],
     };
 

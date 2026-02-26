@@ -141,6 +141,8 @@ pub mod bits;
 pub mod cluster_fit;
 pub mod encode;
 pub mod filter;
+pub mod image;
+pub mod infallible;
 pub mod jackal;
 pub mod lz77;
 pub mod lz78;

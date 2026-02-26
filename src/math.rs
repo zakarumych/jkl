@@ -35,6 +35,18 @@ impl Zero for u32 {
     }
 }
 
+impl Zero for i32 {
+    fn zero() -> Self {
+        0
+    }
+}
+
+impl Zero for usize {
+    fn zero() -> Self {
+        0
+    }
+}
+
 /// Trait to create additive identity element.
 pub trait One {
     fn one() -> Self;
@@ -47,6 +59,18 @@ impl One for f32 {
 }
 
 impl One for u32 {
+    fn one() -> Self {
+        1
+    }
+}
+
+impl One for i32 {
+    fn one() -> Self {
+        1
+    }
+}
+
+impl One for usize {
     fn one() -> Self {
         1
     }
@@ -3232,6 +3256,16 @@ impl Rgb8U {
         self.0
     }
 
+    pub const fn bits_interleaved(&self) -> u32 {
+        let [r, g, b] = self.0;
+        interleave8_3(r, b, g)
+    }
+
+    pub const fn from_bits_interleaved(bits: u32) -> Self {
+        let (r, b, g) = deinterleave8_3(bits);
+        Rgb8U::new(r, g, b)
+    }
+
     #[inline(always)]
     pub const fn r(&self) -> u8 {
         self.0[0]
@@ -3427,6 +3461,16 @@ impl Rgba8U {
         self.0
     }
 
+    pub const fn bits_interleaved(&self) -> u32 {
+        let [r, g, b, a] = self.0;
+        interleave8_4(r, b, g, a)
+    }
+
+    pub const fn from_bits_interleaved(bits: u32) -> Self {
+        let (r, b, g, a) = deinterleave8_4(bits);
+        Rgba8U::new(r, g, b, a)
+    }
+
     #[inline(always)]
     pub const fn r(&self) -> u8 {
         self.0[0]
@@ -3600,55 +3644,16 @@ impl Rgb565 {
     }
 
     pub const fn bits_interleaved(&self) -> u16 {
-        let r = self.r() as u16;
-        let g = self.g() as u16;
-        let b = self.b() as u16;
+        let r = self.r();
+        let g = self.g();
+        let b = self.b();
 
-        let mut bits = 0;
-
-        bits |= (g & 0b1) << 0;
-        bits |= (b & 0b1) << 1;
-        bits |= (r & 0b1) << 2;
-        bits |= (g & 0b10) << 2;
-        bits |= (b & 0b10) << 3;
-        bits |= (r & 0b10) << 4;
-        bits |= (g & 0b100) << 4;
-        bits |= (b & 0b100) << 5;
-        bits |= (r & 0b100) << 6;
-        bits |= (g & 0b1000) << 6;
-        bits |= (b & 0b1000) << 7;
-        bits |= (r & 0b1000) << 8;
-        bits |= (g & 0b10000) << 8;
-        bits |= (b & 0b10000) << 9;
-        bits |= (r & 0b10000) << 10;
-        bits |= (g & 0b100000) << 10;
-
-        bits
+        interleave655_3(g, r, b)
     }
 
     pub const fn from_bits_interleaved(bits: u16) -> Self {
-        let mut r = 0;
-        let mut g = 0;
-        let mut b = 0;
-
-        g |= (bits & 0b1) >> 0;
-        b |= (bits & 0b10) >> 1;
-        r |= (bits & 0b100) >> 2;
-        g |= (bits & 0b1000) >> 2;
-        b |= (bits & 0b10000) >> 3;
-        r |= (bits & 0b100000) >> 4;
-        g |= (bits & 0b1000000) >> 4;
-        b |= (bits & 0b10000000) >> 5;
-        r |= (bits & 0b100000000) >> 6;
-        g |= (bits & 0b1000000000) >> 6;
-        b |= (bits & 0b10000000000) >> 7;
-        r |= (bits & 0b100000000000) >> 8;
-        g |= (bits & 0b1000000000000) >> 8;
-        b |= (bits & 0b10000000000000) >> 9;
-        r |= (bits & 0b100000000000000) >> 10;
-        g |= (bits & 0b1000000000000000) >> 10;
-
-        Rgb565::new(r as u8, g as u8, b as u8)
+        let (g, r, b) = deinterleave655_3(bits);
+        Rgb565::new(r, g, b)
     }
 
     /// Return color from raw bytes.
@@ -4057,4 +4062,160 @@ fn test_round_up() {
     assert_eq!(14, round_up(13, 7));
     assert_eq!(14, round_up(14, 7));
     assert_eq!(21, round_up(15, 7));
+}
+
+#[inline(always)]
+pub const fn spread32_2(x: u32) -> u64 {
+    let mut x = x as u64;
+    x = (x | (x << 16)) & 0x0000FFFF0000FFFF;
+    x = (x | (x << 8)) & 0x00FF00FF00FF00FF;
+    x = (x | (x << 4)) & 0x0F0F0F0F0F0F0F0F;
+    x = (x | (x << 2)) & 0x3333333333333333;
+    x = (x | (x << 1)) & 0x5555555555555555;
+    x
+}
+
+#[inline(always)]
+pub const fn interleave32_2(x: u32, y: u32) -> u64 {
+    spread32_2(x) | (spread32_2(y) << 1)
+}
+
+#[inline(always)]
+pub const fn compact32_2(x: u64) -> u32 {
+    let mut x = x;
+    x = x & 0x5555555555555555;
+    x = (x | (x >> 1)) & 0x3333333333333333;
+    x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F;
+    x = (x | (x >> 4)) & 0x00FF00FF00FF00FF;
+    x = (x | (x >> 8)) & 0x0000FFFF0000FFFF;
+    x = (x | (x >> 16)) & 0x00000000FFFFFFFF;
+    x as u32
+}
+
+#[inline(always)]
+pub const fn deinterleave32_2(x: u64) -> (u32, u32) {
+    (compact32_2(x), compact32_2(x >> 1))
+}
+
+#[inline(always)]
+pub const fn spread16_2(x: u16) -> u32 {
+    let mut x = x as u32;
+    x = (x | (x << 8)) & 0x00FF00FF;
+    x = (x | (x << 4)) & 0x0F0F0F0F;
+    x = (x | (x << 2)) & 0x33333333;
+    x = (x | (x << 1)) & 0x55555555;
+    x
+}
+
+#[inline(always)]
+pub const fn interleave16_2(x: u16, y: u16) -> u32 {
+    spread16_2(x) | (spread16_2(y) << 1)
+}
+
+#[inline(always)]
+pub const fn compact16_2(x: u32) -> u16 {
+    let mut x = x;
+    x = x & 0x55555555;
+    x = (x | (x >> 1)) & 0x33333333;
+    x = (x | (x >> 2)) & 0x0F0F0F0F;
+    x = (x | (x >> 4)) & 0x00FF00FF;
+    x = (x | (x >> 8)) & 0x0000FFFF;
+    x as u16
+}
+
+#[inline(always)]
+pub const fn deinterleave16_2(x: u32) -> (u16, u16) {
+    (compact16_2(x), compact16_2(x >> 1))
+}
+
+#[inline(always)]
+pub const fn spread8_3(x: u8) -> u32 {
+    let mut x = x as u32;
+    x = (x | (x << 8)) & 0x00F00F;
+    x = (x | (x << 4)) & 0x0C30C3;
+    x = (x | (x << 2)) & 0x249249;
+    x
+}
+
+#[inline(always)]
+pub const fn interleave8_3(x: u8, y: u8, z: u8) -> u32 {
+    spread8_3(x) | (spread8_3(y) << 1) | (spread8_3(z) << 2)
+}
+
+#[inline(always)]
+pub const fn compact8_3(x: u32) -> u8 {
+    let mut x = x;
+    x = x & 0x249249;
+    x = (x | (x >> 2)) & 0x0C30C3;
+    x = (x | (x >> 4)) & 0x00F00F;
+    x = (x | (x >> 8)) & 0x00000FFF;
+    x as u8
+}
+
+#[inline(always)]
+pub const fn deinterleave8_3(x: u32) -> (u8, u8, u8) {
+    (compact8_3(x), compact8_3(x >> 1), compact8_3(x >> 2))
+}
+
+#[inline(always)]
+pub const fn spread6_3(x: u8) -> u16 {
+    let mut x = x as u16;
+    x = (x | (x << 8)) & 0x300F;
+    x = (x | (x << 4)) & 0x30C3;
+    x = (x | (x << 2)) & 0x9249;
+    x
+}
+
+#[inline(always)]
+pub const fn interleave655_3(x: u8, y: u8, z: u8) -> u16 {
+    spread6_3(x) | (spread6_3(y) << 1) | (spread6_3(z) << 2)
+}
+
+#[inline(always)]
+pub const fn compact6_3(x: u16) -> u8 {
+    let mut x = x;
+    x = x & 0x9249;
+    x = (x | (x >> 2)) & 0x30C3;
+    x = (x | (x >> 4)) & 0xF00F;
+    x = (x | (x >> 8)) & 0x003F;
+    x as u8
+}
+
+#[inline(always)]
+pub const fn deinterleave655_3(x: u16) -> (u8, u8, u8) {
+    (compact6_3(x), compact6_3(x >> 1), compact6_3(x >> 2))
+}
+
+#[inline(always)]
+pub const fn spread8_4(x: u8) -> u32 {
+    let mut x = x as u32;
+    x = (x | (x << 12)) & 0x000F_000F;
+    x = (x | (x << 6)) & 0x0303_0303;
+    x = (x | (x << 3)) & 0x1111_1111;
+    x
+}
+
+#[inline(always)]
+pub const fn interleave8_4(x: u8, y: u8, z: u8, w: u8) -> u32 {
+    spread8_4(x) | (spread8_4(y) << 1) | (spread8_4(z) << 2) | (spread8_4(w) << 3)
+}
+
+#[inline(always)]
+pub const fn compact8_4(x: u32) -> u8 {
+    let mut x = x;
+    x = x & 0x1111_1111;
+    x = (x | (x >> 3)) & 0x0303_0303;
+    x = (x | (x >> 6)) & 0x000F_000F;
+    x = (x | (x >> 12)) & 0x000000FF;
+    x as u8
+}
+
+#[inline(always)]
+pub const fn deinterleave8_4(x: u32) -> (u8, u8, u8, u8) {
+    (
+        compact8_4(x),
+        compact8_4(x >> 1),
+        compact8_4(x >> 2),
+        compact8_4(x >> 3),
+    )
 }

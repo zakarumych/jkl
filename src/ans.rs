@@ -1,4 +1,4 @@
-use std::{hash::Hash, io};
+use std::{cmp, error::Error, fmt, hash::Hash, io};
 
 use hashbrown::HashMap;
 
@@ -21,6 +21,9 @@ where
     T: Eq + Hash + Copy,
 {
     // Build context from sorted frequencies and frequency map.
+    ///
+    /// Frequency sequence is sorted by symbols.
+    /// Frequency map is provided if it was already built.
     fn build(
         freqs_sorted: impl IntoIterator<Item = (T, u64)>,
         freqs: Option<HashMap<T, u64>>,
@@ -48,11 +51,11 @@ where
             accum = 2;
         }
 
-        if accum > (1 << 31) {
+        if accum >= 0x8000_0000 {
             panic!("Too many symbols");
         }
 
-        assert!(accum <= (1 << 31));
+        assert!(accum < 0x8000_0000);
 
         let mut map = cumul.iter().map(|(s, c)| (*c, *s)).collect::<Vec<_>>();
         map.sort_unstable_by_key(|(c, _)| *c);
@@ -66,26 +69,53 @@ where
     }
 
     /// Build context from sorted frequencies.
+    ///
+    /// Frequency sequence is sorted by symbols.
     pub fn from_sorted_frequencies(freqs_sorted: impl IntoIterator<Item = (T, u64)>) -> Self {
         Self::build(freqs_sorted, None)
     }
 
     /// Build context from frequency map.
-    pub fn from_frequency_map(freqs: HashMap<T, u64>) -> Self {
+    pub fn from_frequency_map(freqs: HashMap<T, u64>) -> Self
+    where
+        T: Ord,
+    {
+        Self::from_frequency_map_ord_by(freqs, |a, b| a.cmp(&b))
+    }
+
+    /// Build context from frequency map.
+    /// Uses provided order for symbols.
+    pub fn from_frequency_map_ord_by(
+        freqs: HashMap<T, u64>,
+        ord: impl Fn(T, T) -> cmp::Ordering,
+    ) -> Self {
         let mut freqs_sorted = freqs.iter().map(|(s, c)| (*s, *c)).collect::<Vec<_>>();
-        freqs_sorted.sort_unstable_by_key(|(_, count)| *count);
+        freqs_sorted.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
         Self::build(freqs_sorted, Some(freqs))
     }
 
     /// Build context from input data.
-    pub fn from_input(input: impl IntoIterator<Item = T>) -> Self {
+    pub fn from_input(input: impl IntoIterator<Item = T>) -> Self
+    where
+        T: Ord,
+    {
+        Self::from_input_ord_by(input, |a, b| a.cmp(&b))
+    }
+
+    /// Build context from input data.
+    ///
+    /// Uses provided order for symbols.
+    pub fn from_input_ord_by(
+        input: impl IntoIterator<Item = T>,
+        ord: impl Fn(T, T) -> cmp::Ordering,
+    ) -> Self {
         let mut freqs = HashMap::<T, u64>::new();
 
         input.into_iter().for_each(|symbol| {
             *freqs.entry(symbol).or_default() += 1;
         });
 
-        Self::from_frequency_map(freqs)
+        Self::from_frequency_map_ord_by(freqs, ord)
     }
 
     pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, u64)> + '_ {
@@ -93,73 +123,144 @@ where
     }
 
     /// Write minimal header for Ans encoding.
-    pub fn write(&self, mut writer: &mut impl io::Write) -> io::Result<()>
+    pub fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()>
     where
-        T: Encode,
+        T: Ord + Encode,
     {
         let mut freqs = self.freqs().collect::<Vec<_>>();
-        freqs.sort_unstable_by_key(|(_, count)| *count);
-
-        // Delta-code frequencies.
-        let mut last = 0;
-        for (_, slot) in freqs.iter_mut() {
-            let count = *slot;
-            let delta = count - last;
-            *slot = delta;
-            last = count;
-        }
+        freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
 
         {
             // Write number of symbols.
-            let mut bit_writer = WriteBits::new(&mut writer);
-            vle::encode(freqs.len(), &mut bit_writer)?;
+            vle::encode(freqs.len(), writer)?;
 
-            // Encode frequency deltas.
-            for (_, delta) in &freqs {
-                vle::encode(*delta, &mut bit_writer)?;
+            // Encode frequencies.
+            for (symbol, count) in &freqs {
+                vle::encode(*count, writer)?;
+                symbol.write(writer)?;
             }
-
-            // Write symbols.
-            for (symbol, _) in &freqs {
-                symbol.write(&mut bit_writer)?;
-            }
-
-            bit_writer.finish()?;
         }
 
         Ok(())
     }
 
     /// Write minimal header for Ans encoding.
-    pub fn read(mut reader: &mut impl io::Read) -> io::Result<Self>
+    pub fn write_ord_by(
+        &self,
+        writer: &mut WriteBits<impl io::Write>,
+        ord: impl Fn(T, T) -> cmp::Ordering,
+    ) -> io::Result<()>
     where
         T: Encode,
     {
-        let mut bit_reader = ReadBits::new(&mut reader);
+        let mut freqs = self.freqs().collect::<Vec<_>>();
+        freqs.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
 
-        // Read number of symbols.
-        let count = { vle::decode::<usize, _>(&mut bit_reader)? };
+        {
+            // Write number of symbols.
+            vle::encode(freqs.len(), writer)?;
 
-        let deltas = {
-            // Read frequency deltas.
-            (0..count)
-                .map(|_| vle::decode::<u64, _>(&mut bit_reader))
-                .collect::<Result<Vec<u64>, _>>()?
-        };
-
-        // Read symbols and build frequency map.
-        let mut freqs = Vec::<(T, u64)>::new();
-
-        let mut last = 0;
-        for delta in deltas {
-            let count = last + delta;
-            last = count;
-
-            let symbol = T::read(&mut bit_reader)?;
-            freqs.push((symbol, count));
+            // Encode frequencies.
+            for (symbol, count) in &freqs {
+                vle::encode(*count, writer)?;
+                symbol.write(writer)?;
+            }
         }
 
-        Ok(Self::from_sorted_frequencies(freqs))
+        Ok(())
+    }
+
+    /// Write minimal header for Ans encoding.
+    /// Uses provided order and delta function for symbols.
+    /// Encodes deltas between symbols, which can be more efficient.
+    pub fn write_with_delta<U>(
+        &self,
+        writer: &mut WriteBits<impl io::Write>,
+        init: T,
+        ord: impl Fn(T, T) -> cmp::Ordering,
+        delta: impl Fn(T, T) -> U,
+    ) -> io::Result<()>
+    where
+        U: Encode,
+    {
+        let mut freqs = self.freqs().collect::<Vec<_>>();
+        freqs.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
+
+        {
+            // Write number of symbols.
+            vle::encode(freqs.len(), writer)?;
+
+            // Encode frequencies.
+            let mut last = init;
+            for (symbol, count) in &freqs {
+                vle::encode(*count, writer)?;
+
+                let d = delta(last, *symbol);
+                last = *symbol;
+                d.write(writer)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Write minimal header for Ans encoding.
+    ///
+    /// Should be used if context was writtent without delta encoding.
+    pub fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self>
+    where
+        T: Encode,
+    {
+        // Read number of symbols.
+        let len = { vle::decode::<usize, _>(reader)? };
+
+        // Read symbols and build frequency map.
+        let mut freqs_sorted = Vec::<(T, u64)>::new();
+        freqs_sorted.reserve(len);
+
+        for _ in 0..len {
+            let count = vle::decode::<u64, _>(reader)?;
+
+            let symbol = T::read(reader)?;
+            freqs_sorted.push((symbol, count));
+        }
+
+        Ok(Self::from_sorted_frequencies(freqs_sorted))
+    }
+
+    /// Write minimal header for Ans encoding.
+    ///
+    /// Uses provided order and delta function for symbols.
+    /// Decodes deltas between symbols, which can be more efficient.
+    ///
+    /// Should be used if context was writtent with delta encoding.
+    /// Using same order and delta function as for writing is required for correct decoding.
+    pub fn read_with_delta<U>(
+        reader: &mut ReadBits<impl io::Read>,
+        init: T,
+        from_delta: impl Fn(T, U) -> T,
+    ) -> io::Result<Self>
+    where
+        U: Encode,
+    {
+        // Read number of symbols.
+        let len = { vle::decode::<usize, _>(reader)? };
+
+        // Read symbols and build frequency map.
+        let mut freqs_sorted = Vec::<(T, u64)>::new();
+        freqs_sorted.reserve(len);
+
+        let mut last = init;
+        for _ in 0..len {
+            let count = vle::decode::<u64, _>(reader)?;
+
+            let d = U::read(reader)?;
+            let symbol = from_delta(last, d);
+            last = symbol;
+            freqs_sorted.push((symbol, count));
+        }
+
+        Ok(Self::from_sorted_frequencies(freqs_sorted))
     }
 }
 
@@ -175,34 +276,60 @@ where
     /// Prepare Ans encoder.
     pub fn new(ctx: &'a Context<T>) -> Self {
         Encoder {
-            state: 1 << 31,
+            // Starting state value is as large as maximum ctx.total.
+            // It guarantees that any symbol will grow the state.
+            // After first symbol state is guaranteed to be at least 0x8000_0000
+            // This works in favor of decoder,
+            // where it knows that state below 0x8000_0000 means that more bits need to be read.
+            // And if there are none, decoding finished.
+            state: 0x7FFF_FFFF,
             ctx,
         }
     }
 
     pub fn encode(&mut self, symbol: T) -> Option<u32> {
+        let freq = self.ctx.freqs[&symbol];
+        let cumul = self.ctx.cumul[&symbol];
+
         let mut emit = None;
 
-        let freq = self.ctx.freqs[&symbol];
+        // Checks that new state is guaranteed to be flushable.
+        // And guards against overflow in new state calculation.
+        if 0x8000_0000_0000_0000 / self.ctx.total <= self.state / freq {
+            let lo_state = self.state & 0xFFFF_FFFF;
+            let hi_state = self.state >> 32;
 
-        if (1 << 63) / self.ctx.total < self.state / freq {
-            emit = Some((self.state & 0xFFFF_FFFF) as u32);
-            self.state = self.state >> 32;
+            emit = Some(lo_state as u32);
+
+            // Calculate new state.
+            let new_state = (hi_state / freq) * self.ctx.total + hi_state % freq + cumul;
+
+            debug_assert!(new_state >= 0x8000_0000);
+            debug_assert!(new_state < 0x8000_0000_0000_0000);
+
+            self.state = new_state;
+        } else {
+            // Calculate new state.
+            let mut new_state = (self.state / freq) * self.ctx.total + self.state % freq + cumul;
+
+            debug_assert!(freq < self.ctx.total);
+            debug_assert!(new_state > self.state);
+
+            // If it's too big, emit some bits and reduce it.
+            if new_state >= 0x8000_0000_0000_0000 {
+                let lo_state = self.state & 0xFFFF_FFFF;
+                let hi_state = self.state >> 32;
+
+                emit = Some(lo_state as u32);
+
+                new_state = (hi_state / freq) * self.ctx.total + hi_state % freq + cumul;
+
+                debug_assert!(new_state >= 0x8000_0000);
+                debug_assert!(new_state < 0x8000_0000_0000_0000);
+            }
+
+            self.state = new_state;
         }
-
-        let mut new_state =
-            (self.state / freq) * self.ctx.total + self.state % freq + self.ctx.cumul[&symbol];
-
-        if new_state >= (1 << 63) {
-            debug_assert!(emit.is_none());
-            emit = Some((self.state & 0xFFFF_FFFF) as u32);
-            self.state = self.state >> 32;
-
-            new_state =
-                (self.state / freq) * self.ctx.total + self.state % freq + self.ctx.cumul[&symbol];
-        }
-
-        self.state = new_state;
 
         emit
     }
@@ -210,7 +337,34 @@ where
     pub fn state(&self) -> u64 {
         self.state
     }
+
+    pub fn finish(self) -> [u32; 2] {
+        debug_assert!(self.state >= 0x0000_0000_8000_0000);
+        debug_assert!(self.state < 0x8000_0000_0000_0000);
+
+        let hi_state = self.state >> 32;
+        let lo_state = self.state & 0xFFFF_FFFF;
+
+        [lo_state as u32, hi_state as u32]
+    }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DecodeError {
+    /// Signals that decoder did not end in finil state,
+    /// which means that compressed data is corrupted or truncated.
+    Incomplete,
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecodeError::Incomplete => write!(f, "Decoding did not finish in final state"),
+        }
+    }
+}
+
+impl Error for DecodeError {}
 
 pub struct Decoder<'a, T> {
     state: u64,
@@ -219,15 +373,22 @@ pub struct Decoder<'a, T> {
 
 impl<'a, T> Decoder<'a, T>
 where
-    T: Ord + Hash + Copy,
+    T: Eq + Hash + Copy,
 {
-    pub fn new(state: u64, ctx: &'a Context<T>) -> Self {
-        Self { state, ctx }
+    pub fn new(ctx: &'a Context<T>) -> Self {
+        Self { state: 0, ctx }
     }
 
-    pub fn decode(&mut self, mut next_token: impl FnMut() -> Option<u32>) -> Option<T> {
-        if self.state < (1 << 31) {
-            return None;
+    pub fn decode(&mut self, mut tokens: impl Iterator<Item = u32>) -> Option<T> {
+        if self.state < 0x8000_0000 {
+            let token = tokens.next()?;
+            self.state = (self.state << 32) | u64::from(token);
+        }
+
+        if unlikely(self.state < 0x8000_0000) {
+            // Only occurs on first symbol.
+            let token = tokens.next()?;
+            self.state = (self.state << 32) | u64::from(token);
         }
 
         let c = self.state % self.ctx.total;
@@ -245,13 +406,55 @@ where
 
         self.state = new_state;
 
-        if self.state < (1 << 31) {
-            if let Some(token) = next_token() {
-                self.state = (self.state << 32) | u64::from(token);
-            }
+        Some(symbol)
+    }
+
+    pub fn decode_all(
+        &mut self,
+        mut tokens: impl Iterator<Item = u32>,
+        extend: &mut impl Extend<T>,
+    ) {
+        if self.state < 0x8000_0000 {
+            let Some(token) = tokens.next() else {
+                return;
+            };
+            self.state = (self.state << 32) | u64::from(token);
         }
 
-        Some(symbol)
+        loop {
+            if self.state < 0x8000_0000 {
+                let Some(token) = tokens.next() else {
+                    return;
+                };
+                self.state = (self.state << 32) | u64::from(token);
+            }
+
+            let c = self.state % self.ctx.total;
+
+            let index = match self.ctx.map.binary_search_by_key(&c, |(start, _)| *start) {
+                Ok(index) => index,
+                Err(next) => next - 1,
+            };
+
+            let symbol = self.ctx.map[index].1;
+
+            let new_state = (self.state / self.ctx.total) * self.ctx.freqs[&symbol]
+                + (self.state % self.ctx.total)
+                - self.ctx.cumul[&symbol];
+
+            self.state = new_state;
+
+            extend.extend(Some(symbol));
+        }
+    }
+
+    // If decoding finished correctly, state should be exactly 0x7FFF_FFFF, which is the initial state of encoder.
+    pub fn finish(&self) -> Result<(), DecodeError> {
+        if self.state == 0x7FFF_FFFF {
+            Ok(())
+        } else {
+            Err(DecodeError::Incomplete)
+        }
     }
 }
 
@@ -275,23 +478,26 @@ fn test_u16() {
     let mut compressed = Vec::new();
 
     for symbol in data {
-        if let Some(token) = encoder.encode(symbol) {
-            compressed.push(token);
-        }
+        compressed.extend(encoder.encode(symbol));
     }
 
-    let mut ctx_buf = Vec::new();
-    ctx.write(&mut ctx_buf).unwrap();
-    let ctx2 = Context::read(&mut &ctx_buf[..]).unwrap();
+    compressed.extend(encoder.finish());
 
-    let mut decoder = Decoder::new(encoder.state(), &ctx2);
+    let mut ctx_buf = Vec::new();
+    let mut bit_writer = WriteBits::new(&mut ctx_buf);
+    ctx.write(&mut bit_writer).unwrap();
+    bit_writer.finish().unwrap();
+    let mut bit_reader = ReadBits::new(&ctx_buf[..]);
+    let ctx2 = Context::read(&mut bit_reader).unwrap();
+
+    let mut decoder = Decoder::new(&ctx2);
 
     let mut decoded = Vec::new();
     let mut iter = compressed.iter().copied().rev();
 
     while decoded.len() < data.len() {
-        match decoder.decode(|| iter.next()) {
-            None => break,
+        match decoder.decode(&mut iter) {
+            None => panic!(),
             Some(symbol) => {
                 decoded.push(symbol);
             }
@@ -301,4 +507,28 @@ fn test_u16() {
     decoded.reverse();
 
     assert_eq!(data[..], decoded[..]);
+
+    assert!(decoder.finish().is_ok());
+
+    decoded.clear();
+    let mut decoder = Decoder::new(&ctx2);
+    decoder.decode_all(compressed.into_iter().rev(), &mut decoded);
+    decoded.reverse();
+
+    assert_eq!(data[..], decoded[..]);
+
+    assert!(decoder.finish().is_ok());
 }
+
+#[inline(always)]
+fn unlikely(condition: bool) -> bool {
+    if condition {
+        cold_path();
+        true
+    } else {
+        false
+    }
+}
+
+#[cold]
+fn cold_path() {}

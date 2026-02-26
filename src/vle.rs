@@ -1,6 +1,9 @@
 use std::{error::Error, fmt, io, ops};
 
-use crate::bits::{ReadBits, WriteBits};
+use crate::{
+    bits::{ReadBits, WriteBits},
+    encode::Encode,
+};
 
 pub trait Unsigned:
     fmt::Debug + Ord + ops::Add<Output = Self> + ops::Sub<Output = Self> + Eq + Copy + 'static
@@ -307,6 +310,27 @@ where
     }
 
     Ok(T::pow2(msb) + tail)
+}
+
+/// Wrapper type to encode values using variable-length encoding.
+pub struct Vle<T>(pub T);
+
+impl<T> Encode for Vle<T>
+where
+    T: Unsigned,
+{
+    fn bit_len(&self) -> usize {
+        encode_bit_len(self.0)
+    }
+
+    fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        encode(self.0, write)
+    }
+
+    fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+        let value = decode(read)?;
+        Ok(Self(value))
+    }
 }
 
 #[cfg(test)]

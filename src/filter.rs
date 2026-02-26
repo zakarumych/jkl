@@ -6,7 +6,7 @@ pub trait Filterable: Add<Output = Self> + Sub<Output = Self> + Copy + Sized {
 }
 
 // Paeth filter is based on an algorithm by Alan W. Paeth
-fn filter_paeth<T>(a: T, b: T, c: T) -> T
+pub fn filter_paeth<T>(a: T, b: T, c: T) -> T
 where
     T: Filterable,
 {
@@ -23,11 +23,4 @@ where
     } else {
         c
     }
-}
-
-pub fn filter<T>(a: T, b: T, c: T) -> T
-where
-    T: Filterable,
-{
-    filter_paeth(a, b, c)
 }

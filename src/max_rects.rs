@@ -14,18 +14,18 @@ pub enum Heuristic {
 
 /// 2d bin packer that uses maximal rectangles algorithm.
 pub struct MaximalRectangles {
-    bin_w: u32,
-    bin_h: u32,
-    used: Vec<Rect<u32>>,
-    free: Vec<Rect<u32>>,
+    bin_w: usize,
+    bin_h: usize,
+    used: Vec<Rect<usize>>,
+    free: Vec<Rect<usize>>,
     heuristic: Heuristic,
     allow_rotation: bool,
-    quantization: (u32, u32),
+    quantization: (usize, usize),
 }
 
 impl MaximalRectangles {
     /// Create new maximal rectangles packer with single empty region with specified dimensions
-    pub fn new(width: u32, height: u32) -> Self {
+    pub fn new(width: usize, height: usize) -> Self {
         let mut free = Vec::new();
         if width > 0 && height > 0 {
             free.push(Rect {
@@ -63,7 +63,7 @@ impl MaximalRectangles {
     /// # Panics
     ///
     /// This function panics if either value is 0.
-    pub fn with_quantization(&mut self, x: u32, y: u32) -> &mut Self {
+    pub fn with_quantization(&mut self, x: usize, y: usize) -> &mut Self {
         assert_ne!(x, 0);
         assert_ne!(y, 0);
         self.quantization = (x, y);
@@ -72,17 +72,17 @@ impl MaximalRectangles {
 
     /// Returns occupancy - ratio between used area and total area.
     pub fn occupancy(&self) -> f32 {
-        let used_area: u32 = self.used.iter().map(|r| r.area()).sum();
+        let used_area: usize = self.used.iter().map(|r| r.area()).sum();
         used_area as f32 / (self.bin_w * self.bin_h) as f32
     }
 
     /// Returns bin width
-    pub fn width(&self) -> u32 {
+    pub fn width(&self) -> usize {
         self.bin_w
     }
 
     /// Returns bin height
-    pub fn height(&self) -> u32 {
+    pub fn height(&self) -> usize {
         self.bin_h
     }
 
@@ -97,22 +97,22 @@ impl MaximalRectangles {
     }
 
     /// Returns current quantization for rectangle placement.
-    pub fn quantization(&mut self) -> (u32, u32) {
+    pub fn quantization(&mut self) -> (usize, usize) {
         self.quantization
     }
 
     /// Returns iterator over used rectangles.
-    pub fn used(&self) -> impl Iterator<Item = Rect<u32>> + '_ {
+    pub fn used(&self) -> impl Iterator<Item = Rect<usize>> + '_ {
         self.used.iter().copied()
     }
 
     /// Returns iterator over free rectangles.
-    pub fn free(&self) -> impl Iterator<Item = Rect<u32>> + '_ {
+    pub fn free(&self) -> impl Iterator<Item = Rect<usize>> + '_ {
         self.free.iter().copied()
     }
 
     /// Inserts rectangle with specified size.
-    pub fn insert(&mut self, w: u32, h: u32) -> Option<Rect<u32>> {
+    pub fn insert(&mut self, w: usize, h: usize) -> Option<Rect<usize>> {
         let r = self.find_position(w, h);
         match r {
             None => None,
@@ -124,13 +124,13 @@ impl MaximalRectangles {
     }
 
     /// Core logic to search for best candidate.
-    fn find_position(&self, w: u32, h: u32) -> Option<Rect<u32>> {
+    fn find_position(&self, w: usize, h: usize) -> Option<Rect<usize>> {
         let (qx, qy) = self.quantization;
         // let w = round_up(w, qx);
         // let h = round_up(h, qy);
         let mut best_placement = None;
-        let mut best1 = u32::MAX;
-        let mut best2 = u32::MAX;
+        let mut best1 = usize::MAX;
+        let mut best2 = usize::MAX;
 
         for &fr in self.free.iter() {
             let fr = fr.round_in(qx, qy);
@@ -163,7 +163,7 @@ impl MaximalRectangles {
         })
     }
 
-    fn score(&self, f: Rect<u32>, w: u32, h: u32) -> (u32, u32) {
+    fn score(&self, f: Rect<usize>, w: usize, h: usize) -> (usize, usize) {
         debug_assert!(f.w >= w);
         debug_assert!(f.h >= h);
 
@@ -182,7 +182,7 @@ impl MaximalRectangles {
     }
 
     /// Emplaces rect and splits all free rectangles.
-    fn place_rect(&mut self, used: Rect<u32>) {
+    fn place_rect(&mut self, used: Rect<usize>) {
         let mut i = 0;
 
         while i < self.free.len() {
@@ -197,7 +197,7 @@ impl MaximalRectangles {
         self.used.push(used.clone());
     }
 
-    fn split_free_node(&mut self, idx: usize, used: Rect<u32>) -> bool {
+    fn split_free_node(&mut self, idx: usize, used: Rect<usize>) -> bool {
         let fr = &self.free[idx];
 
         if used.x >= fr.x + fr.w

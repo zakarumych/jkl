@@ -1,8 +1,8 @@
-use std::{array, io, path::PathBuf, u32};
+use std::{array, io, path::PathBuf, usize};
 
 use egui::{
-    emath::TSTransform, load::SizedTexture, CentralPanel, Color32, Pos2, Stroke, TextureHandle,
-    TextureOptions, Ui, Vec2,
+    emath::TSTransform, load::SizedTexture, output, CentralPanel, Color32, Pos2, Stroke,
+    TextureHandle, TextureOptions, Ui, Vec2,
 };
 use egui_snarl::{
     ui::{PinInfo, SnarlViewer, SnarlWidget},
@@ -12,11 +12,14 @@ use jkl::{
     bc1,
     bits::WriteBits,
     encode::{Encode, FixedCode},
+    image::{ImageMut, ImageRef},
     lz77,
-    math::{Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3},
+    math::{interleave16_2, Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3},
     max_rects::MaximalRectangles,
-    reference_map::{ImageMut, ImageRef, ReferenceMap},
+    reference_map::ReferenceMap,
     rle::{rle_with_cfg, RleCfg},
+    vle::{self, Vle},
+    zigzaq::ZigZag,
 };
 
 fn main() {
@@ -173,6 +176,7 @@ impl SnarlViewer<JackalNode> for JackalViewer {
 
     fn disconnect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<JackalNode>) {
         let to_node = &mut snarl[to.id.node];
+        to_node.set_input_ty(to.id.input, JackalType::Null);
         to_node.set_input(to.id.input, JackalValue::Null);
         snarl.disconnect(from.id, to.id);
     }
@@ -308,6 +312,12 @@ impl SnarlViewer<JackalNode> for JackalViewer {
             if r.clicked() {
                 snarl.insert_node(pos, JackalNode::ReferenceMap(ReferenceMapNode::new()));
             }
+
+            let r = ui.button("Add Block Copy Node");
+            let r = r.on_hover_text("Add a Block Copy node");
+            if r.clicked() {
+                snarl.insert_node(pos, JackalNode::BlockCopyNode(BlockCopyNode::new()));
+            }
         });
     }
 }
@@ -336,7 +346,7 @@ impl PixelType {
         }
     }
 
-    fn bit_size(&self) -> u64 {
+    fn bit_size(&self) -> usize {
         match self {
             PixelType::Rgb8U => 24,
             PixelType::Rgba8U => 32,
@@ -388,21 +398,21 @@ impl PixelValue {
         JackalType::Pixel(self.pixel_ty())
     }
 
-    fn hash(&self) -> u64 {
+    fn hash(&self) -> usize {
         match self {
             PixelValue::Rgb8U(pixel) => {
-                (pixel.r() as u64) * 43 + (pixel.g() as u64) * 31 + (pixel.b() as u64) * 29
+                (pixel.r() as usize) * 43 + (pixel.g() as usize) * 31 + (pixel.b() as usize) * 29
             }
             PixelValue::Rgba8U(pixel) => {
-                (pixel.r() as u64) * 43
-                    + (pixel.g() as u64) * 31
-                    + (pixel.b() as u64) * 29
-                    + (pixel.a() as u64) * 83
+                (pixel.r() as usize) * 43
+                    + (pixel.g() as usize) * 31
+                    + (pixel.b() as usize) * 29
+                    + (pixel.a() as usize) * 83
             }
             PixelValue::BC1(block) => {
-                block.color0.bits() as u64 * 43
-                    + block.color1.bits() as u64 * 31
-                    + u32::from_le_bytes(block.texels) as u64
+                block.color0.bits() as usize * 43
+                    + block.color1.bits() as usize * 31
+                    + u32::from_le_bytes(block.texels) as usize
             }
         }
     }
@@ -432,7 +442,7 @@ enum ImageValue {
 }
 
 impl ImageValue {
-    pub fn new(width: u32, height: u32, pixel_type: PixelType) -> Self {
+    pub fn new(width: usize, height: usize, pixel_type: PixelType) -> Self {
         match pixel_type {
             PixelType::Rgb8U => ImageValue::Rgb8U(Image::solid(width, height, Rgb8U::BLACK)),
             PixelType::Rgba8U => ImageValue::Rgba8U(Image::solid(width, height, Rgba8U::BLACK)),
@@ -456,7 +466,7 @@ impl ImageValue {
         self.pixel_ty().name()
     }
 
-    fn width(&self) -> u32 {
+    fn width(&self) -> usize {
         match self {
             ImageValue::Rgb8U(image) => image.width,
             ImageValue::Rgba8U(image) => image.width,
@@ -464,7 +474,7 @@ impl ImageValue {
         }
     }
 
-    fn height(&self) -> u32 {
+    fn height(&self) -> usize {
         match self {
             ImageValue::Rgb8U(image) => image.height,
             ImageValue::Rgba8U(image) => image.height,
@@ -480,7 +490,7 @@ impl ImageValue {
         }
     }
 
-    fn get(&self, x: u32, y: u32) -> PixelValue {
+    fn get(&self, x: usize, y: usize) -> PixelValue {
         match self {
             ImageValue::Rgb8U(image) => PixelValue::Rgb8U(image.get(x, y)),
             ImageValue::Rgba8U(image) => PixelValue::Rgba8U(image.get(x, y)),
@@ -488,7 +498,7 @@ impl ImageValue {
         }
     }
 
-    fn set(&mut self, x: u32, y: u32, pixel: PixelValue) {
+    fn set(&mut self, x: usize, y: usize, pixel: PixelValue) {
         match (self, pixel) {
             (ImageValue::Rgb8U(image), PixelValue::Rgb8U(pixel)) => image.set(x, y, pixel),
             (ImageValue::Rgba8U(image), PixelValue::Rgba8U(pixel)) => image.set(x, y, pixel),
@@ -501,7 +511,7 @@ impl ImageValue {
 #[derive(Clone)]
 enum JackalValue {
     Null,
-    Uint(u64),
+    Uint(usize),
     Pixel(PixelValue),
     Image(ImageValue),
 }
@@ -532,6 +542,7 @@ enum JackalNode {
     RleRansCalculator(RleRansCalculatorNode),
     Atlas(AtlasNode),
     ReferenceMap(ReferenceMapNode),
+    BlockCopyNode(BlockCopyNode),
 }
 
 impl JackalNode {
@@ -550,6 +561,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.title(),
             JackalNode::Atlas(node) => node.title(),
             JackalNode::ReferenceMap(node) => node.title(),
+            JackalNode::BlockCopyNode(node) => node.title(),
         }
     }
 
@@ -568,6 +580,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.inputs(),
             JackalNode::Atlas(node) => node.inputs(),
             JackalNode::ReferenceMap(node) => node.inputs(),
+            JackalNode::BlockCopyNode(node) => node.inputs(),
         }
     }
 
@@ -590,6 +603,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.set_input_ty(input, ty),
             JackalNode::Atlas(node) => node.set_input_ty(input, ty),
             JackalNode::ReferenceMap(node) => node.set_input_ty(input, ty),
+            JackalNode::BlockCopyNode(node) => node.set_input_ty(input, ty),
         }
     }
 
@@ -611,6 +625,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.input_ty(input),
             JackalNode::Atlas(node) => node.input_ty(input),
             JackalNode::ReferenceMap(node) => node.input_ty(input),
+            JackalNode::BlockCopyNode(node) => node.input_ty(input),
         }
     }
 
@@ -632,6 +647,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.input_ui(input, ui),
             JackalNode::Atlas(node) => node.input_ui(input, ui),
             JackalNode::ReferenceMap(node) => node.input_ui(input, ui),
+            JackalNode::BlockCopyNode(node) => node.input_ui(input, ui),
         }
     }
 
@@ -650,6 +666,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.outputs(),
             JackalNode::Atlas(node) => node.outputs(),
             JackalNode::ReferenceMap(node) => node.outputs(),
+            JackalNode::BlockCopyNode(node) => node.outputs(),
         }
     }
 
@@ -671,6 +688,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.output_ty(output),
             JackalNode::Atlas(node) => node.output_ty(output),
             JackalNode::ReferenceMap(node) => node.output_ty(output),
+            JackalNode::BlockCopyNode(node) => node.output_ty(output),
         }
     }
 
@@ -692,6 +710,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.output_ui(output, ui),
             JackalNode::Atlas(node) => node.output_ui(output, ui),
             JackalNode::ReferenceMap(node) => node.output_ui(output, ui),
+            JackalNode::BlockCopyNode(node) => node.output_ui(output, ui),
         }
     }
 
@@ -710,6 +729,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.has_body(),
             JackalNode::Atlas(node) => node.has_body(),
             JackalNode::ReferenceMap(node) => node.has_body(),
+            JackalNode::BlockCopyNode(node) => node.has_body(),
         }
     }
 
@@ -728,6 +748,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.body_ui(ui),
             JackalNode::Atlas(node) => node.body_ui(ui),
             JackalNode::ReferenceMap(node) => node.body_ui(ui),
+            JackalNode::BlockCopyNode(node) => node.body_ui(ui),
         }
     }
 
@@ -749,6 +770,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.get_output(output),
             JackalNode::Atlas(node) => node.get_output(output),
             JackalNode::ReferenceMap(node) => node.get_output(output),
+            JackalNode::BlockCopyNode(node) => node.get_output(output),
         }
     }
 
@@ -770,6 +792,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.set_input(input, data),
             JackalNode::Atlas(node) => node.set_input(input, data),
             JackalNode::ReferenceMap(node) => node.set_input(input, data),
+            JackalNode::BlockCopyNode(node) => node.set_input(input, data),
         }
     }
 
@@ -788,6 +811,7 @@ impl JackalNode {
             JackalNode::RleRansCalculator(node) => node.prepare(ctx),
             JackalNode::Atlas(node) => node.prepare(ctx),
             JackalNode::ReferenceMap(node) => node.prepare(ctx),
+            JackalNode::BlockCopyNode(node) => node.prepare(ctx),
         }
     }
 }
@@ -1016,7 +1040,7 @@ impl FilterNode {
                             && y + j >= 3
                             && y + j - 3 < image.height()
                         {
-                            block[j as usize][i as usize] = image.get(x + i - 3, y + j - 3);
+                            block[j][i] = image.get(x + i - 3, y + j - 3);
                         }
                     }
                 }
@@ -1145,7 +1169,7 @@ impl Filter {
         }
     }
 
-    fn step(&self) -> (u32, u32) {
+    fn step(&self) -> (usize, usize) {
         match self {
             Filter::StripAlpha => (1, 1),
             Filter::Paeth => (1, 1),
@@ -1310,13 +1334,13 @@ fn rgb565_to_egui(rgb: Rgb565) -> egui::Color32 {
 fn convert_image(image: image::DynamicImage) -> ImageValue {
     match image {
         image::DynamicImage::ImageRgb8(rgb_image) => ImageValue::Rgb8U(Image {
-            width: rgb_image.width(),
-            height: rgb_image.height(),
+            width: rgb_image.width() as usize,
+            height: rgb_image.height() as usize,
             pixels: rgb_image.pixels().map(|p| rgb_image_to_jkl(*p)).collect(),
         }),
         image::DynamicImage::ImageRgba8(rgba_image) => ImageValue::Rgba8U(Image {
-            width: rgba_image.width(),
-            height: rgba_image.height(),
+            width: rgba_image.width() as usize,
+            height: rgba_image.height() as usize,
             pixels: rgba_image
                 .pixels()
                 .map(|p| Rgba8U::new(p[0], p[1], p[2], p[3]))
@@ -1328,8 +1352,8 @@ fn convert_image(image: image::DynamicImage) -> ImageValue {
 
 #[derive(Clone)]
 struct Image<T> {
-    width: u32,
-    height: u32,
+    width: usize,
+    height: usize,
     pixels: Vec<T>,
 }
 
@@ -1338,32 +1362,22 @@ where
     T: Copy,
 {
     fn as_ref(&self) -> ImageRef<'_, T> {
-        ImageRef {
-            width: self.width as usize,
-            height: self.height as usize,
-            pixels: &self.pixels,
-            stride: self.width as usize,
-        }
+        ImageRef::new(self.width, self.height, &self.pixels)
     }
 
     fn as_mut(&mut self) -> ImageMut<'_, T> {
-        ImageMut {
-            width: self.width as usize,
-            height: self.height as usize,
-            pixels: &mut self.pixels,
-            stride: self.width as usize,
-        }
+        ImageMut::new(self.width, self.height, &mut self.pixels)
     }
 
-    fn solid(width: u32, height: u32, fill: T) -> Self {
+    fn solid(width: usize, height: usize, fill: T) -> Self {
         Image {
             width,
             height,
-            pixels: vec![fill; (width * height) as usize],
+            pixels: vec![fill; (width * height)],
         }
     }
 
-    fn new(width: u32, height: u32, pixels: Vec<T>) -> Self {
+    fn new(width: usize, height: usize, pixels: Vec<T>) -> Self {
         Image {
             width,
             height,
@@ -1371,19 +1385,19 @@ where
         }
     }
 
-    fn get(&self, x: u32, y: u32) -> T {
-        self.pixels[(y * self.width + x) as usize]
+    fn get(&self, x: usize, y: usize) -> T {
+        self.pixels[y * self.width + x]
     }
 
-    fn set(&mut self, x: u32, y: u32, value: T) {
-        self.pixels[(y * self.width + x) as usize] = value;
+    fn set(&mut self, x: usize, y: usize, value: T) {
+        self.pixels[y * self.width + x] = value;
     }
 }
 
 impl Image<Rgb8U> {
     fn to_egui(&self) -> egui::ColorImage {
         egui::ColorImage {
-            size: [self.width as usize, self.height as usize],
+            size: [self.width, self.height],
             source_size: egui::Vec2::new(self.width as f32, self.height as f32),
             pixels: self.pixels.iter().copied().map(rgb8u_to_egui).collect(),
         }
@@ -1393,7 +1407,7 @@ impl Image<Rgb8U> {
 impl Image<Rgba8U> {
     fn to_egui(&self) -> egui::ColorImage {
         egui::ColorImage {
-            size: [self.width as usize, self.height as usize],
+            size: [self.width, self.height],
             source_size: egui::Vec2::new(self.width as f32, self.height as f32),
             pixels: self.pixels.iter().copied().map(rgba8u_to_egui).collect(),
         }
@@ -1403,19 +1417,18 @@ impl Image<Rgba8U> {
 impl Image<bc1::Block> {
     fn to_egui(&self) -> egui::ColorImage {
         egui::ColorImage {
-            size: [self.width as usize * 4, self.height as usize * 4],
+            size: [self.width * 4, self.height * 4],
             source_size: egui::Vec2::new(self.width as f32 * 4.0, self.height as f32 * 4.0),
             pixels: {
-                let mut pixels =
-                    vec![egui::Color32::BLACK; (self.width * self.height * 16) as usize];
+                let mut pixels = vec![egui::Color32::BLACK; (self.width * self.height * 16)];
 
                 for y in 0..self.height {
                     for x in 0..self.width {
                         let block = self.get(x, y).decode();
                         for j in 0..4 {
                             for i in 0..4 {
-                                let pixel = block[j as usize][i as usize];
-                                pixels[(((y * 4 + j) * self.width + x) * 4 + i) as usize] =
+                                let pixel = block[j][i];
+                                pixels[((y * 4 + j) * self.width + x) * 4 + i] =
                                     rgb32f_to_egui(pixel);
                             }
                         }
@@ -1479,9 +1492,9 @@ impl ImageWidget {
 /// Calculates output size of LZP compression.
 struct LZPCalculatorNode {
     input: Option<PixelType>,
-    window_size: u64,
-    cache_size_pow: u64,
-    lzp_size: u64,
+    window_size: usize,
+    cache_size_pow: usize,
+    lzp_size: usize,
 }
 
 impl LZPCalculatorNode {
@@ -1570,9 +1583,9 @@ impl LZPCalculatorNode {
 
                 let input = self.input.unwrap();
 
-                let mut window = vec![input.default(); self.window_size as usize];
+                let mut window = vec![input.default(); self.window_size];
 
-                let cache_size = 1 << (self.cache_size_pow as usize);
+                let cache_size = 1 << (self.cache_size_pow);
                 let mut cache = vec![input.default(); cache_size];
 
                 let mut total_bits = 0;
@@ -1581,9 +1594,9 @@ impl LZPCalculatorNode {
                     for y in 0..image.height() {
                         let t = image.get(x, y);
 
-                        let h = window.iter().fold(1, |acc, c| acc * 17 + c.hash());
-                        let p = cache[(h as usize) % cache_size];
-                        cache[(h as usize) % cache_size] = t;
+                        let h = window.iter().fold(1, |acc, c| acc * 17 + c.hash()) as usize;
+                        let p = cache[(h) % cache_size];
+                        cache[(h) % cache_size] = t;
 
                         if p == t {
                             total_bits += 1;
@@ -1600,11 +1613,11 @@ impl LZPCalculatorNode {
                 self.lzp_size = total_bits;
             }
             1 => match value {
-                JackalValue::Uint(value) => self.window_size = value,
+                JackalValue::Uint(value) => self.window_size = value as usize,
                 _ => unreachable!(),
             },
             2 => match value {
-                JackalValue::Uint(value) => self.cache_size_pow = value,
+                JackalValue::Uint(value) => self.cache_size_pow = value as usize,
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -1667,7 +1680,7 @@ impl<'de> serde::Deserialize<'de> for LZPCalculatorNode {
 /// Calculates output size of LZP compression.
 struct SizeOfNode {
     input: JackalType,
-    size: u64,
+    size: usize,
 }
 
 impl SizeOfNode {
@@ -1724,8 +1737,9 @@ impl SizeOfNode {
             }
             JackalValue::Image(image) => {
                 assert_eq!(self.input, JackalType::Image(image.pixel_ty()));
-                self.size =
-                    image.pixel_ty().bit_size() * (image.width() as u64) * (image.height() as u64);
+                self.size = image.pixel_ty().bit_size()
+                    * (image.width() as usize)
+                    * (image.height() as usize);
             }
         }
     }
@@ -1780,7 +1794,7 @@ impl<'de> serde::Deserialize<'de> for SizeOfNode {
     }
 }
 
-fn human_readable_bits(bits: u64) -> String {
+fn human_readable_bits(bits: usize) -> String {
     match bits {
         ..0x1000 => format!("{} bit", bits),
         ..0x400000 => format!("{} Kbit", bits / 0x400),
@@ -1822,7 +1836,7 @@ struct LZ77CalculatorNode {
     input: Option<PixelType>,
     image: Option<ImageValue>,
     window_size: u32,
-    sizes: [u64; 2],
+    sizes: [usize; 2],
     unzip_block: bool,
 }
 
@@ -1905,8 +1919,8 @@ impl LZ77CalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut encoder = lz77::Encoder::new(Rgb8U::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -1926,7 +1940,7 @@ impl LZ77CalculatorNode {
                 );
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
             }
             PixelType::Rgba8U => {
                 let mut write_size = WriteSize::new();
@@ -1943,8 +1957,8 @@ impl LZ77CalculatorNode {
                         let mut encoder =
                             lz77::Encoder::<Rgba8U>::new(Rgba8U::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -1964,7 +1978,7 @@ impl LZ77CalculatorNode {
                 );
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
             }
             PixelType::BC1 if self.unzip_block => {
                 let mut write_size = WriteSize::new();
@@ -1981,8 +1995,8 @@ impl LZ77CalculatorNode {
                         let mut encoder =
                             lz77::Encoder::<Rgb565>::new(Rgb565::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2003,7 +2017,7 @@ impl LZ77CalculatorNode {
                 );
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
 
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
@@ -2018,8 +2032,8 @@ impl LZ77CalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut encoder = lz77::Encoder::<[u8; 4]>::new([0u8; 4], self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2039,7 +2053,7 @@ impl LZ77CalculatorNode {
                 );
 
                 write_bits.finish().unwrap();
-                self.sizes[1] = write_size.size as u64 * 8;
+                self.sizes[1] = write_size.size as usize * 8;
             }
             PixelType::BC1 => {
                 let mut write_size = WriteSize::new();
@@ -2058,8 +2072,8 @@ impl LZ77CalculatorNode {
                             1 << self.window_size,
                         );
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2079,7 +2093,7 @@ impl LZ77CalculatorNode {
                 );
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
             }
         }
     }
@@ -2088,7 +2102,7 @@ impl LZ77CalculatorNode {
         match input {
             0 => {
                 match value {
-                    JackalValue::Null => return,
+                    JackalValue::Null => self.image = None,
                     JackalValue::Image(image) => {
                         assert_eq!(Some(image.pixel_ty()), self.input);
                         self.image = Some(image);
@@ -2193,7 +2207,7 @@ impl<'de> serde::Deserialize<'de> for LZ77CalculatorNode {
 struct LZ78CalculatorNode {
     input: Option<PixelType>,
     image: Option<ImageValue>,
-    sizes: [u64; 2],
+    sizes: [usize; 2],
     unzip_block: bool,
 }
 
@@ -2273,8 +2287,8 @@ impl LZ78CalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut encoder = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2289,7 +2303,7 @@ impl LZ78CalculatorNode {
                 }
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
             }
             PixelType::Rgba8U => {
                 let mut write_size = WriteSize::new();
@@ -2303,8 +2317,8 @@ impl LZ78CalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut encoder = jkl::lz78::Encoder::<Rgba8U>::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2319,7 +2333,7 @@ impl LZ78CalculatorNode {
                 }
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
             }
             PixelType::BC1 if self.unzip_block => {
                 let mut write_size = WriteSize::new();
@@ -2333,8 +2347,8 @@ impl LZ78CalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut encoder = jkl::lz78::Encoder::<Rgb565>::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2350,7 +2364,7 @@ impl LZ78CalculatorNode {
                 }
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
 
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
@@ -2363,8 +2377,8 @@ impl LZ78CalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut encoder = jkl::lz78::Encoder::<[u8; 4]>::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2379,7 +2393,7 @@ impl LZ78CalculatorNode {
                 }
 
                 write_bits.finish().unwrap();
-                self.sizes[1] = write_size.size as u64 * 8;
+                self.sizes[1] = write_size.size as usize * 8;
             }
             PixelType::BC1 => {
                 let mut write_size = WriteSize::new();
@@ -2393,8 +2407,8 @@ impl LZ78CalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut encoder = jkl::lz78::Encoder::<bc1::Block>::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2409,7 +2423,7 @@ impl LZ78CalculatorNode {
                 }
 
                 write_bits.finish().unwrap();
-                self.sizes[0] = write_size.size as u64 * 8;
+                self.sizes[0] = write_size.size as usize * 8;
             }
         }
     }
@@ -2418,7 +2432,7 @@ impl LZ78CalculatorNode {
         match input {
             0 => {
                 match value {
-                    JackalValue::Null => return,
+                    JackalValue::Null => self.image = None,
                     JackalValue::Image(image) => {
                         assert_eq!(Some(image.pixel_ty()), self.input);
                         self.image = Some(image);
@@ -2513,8 +2527,8 @@ impl<'de> serde::Deserialize<'de> for LZ78CalculatorNode {
 struct RansCalculatorNode {
     input: Option<PixelType>,
     image: Option<ImageValue>,
-    map_sizes: [u64; 2],
-    rans_sizes: [u64; 2],
+    map_sizes: [usize; 2],
+    rans_sizes: [usize; 2],
     unzip_block: bool,
 }
 
@@ -2594,23 +2608,26 @@ impl RansCalculatorNode {
                     })
                 });
 
-                let ctx = jkl::ans::Context::from_input(data);
+                let ctx = jkl::ans::Context::from_input_ord_by(data, rgb8u_ord);
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write_with_delta(&mut write_bits, Rgb8U::BLACK, rgb8u_ord, rgb8u_delta)
+                    .unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let data = (x..u32::min(x + 256, image.width())).flat_map(|dx| {
+                        let data = (x..usize::min(x + 256, image.width())).flat_map(|dx| {
                             let image = &image;
-                            (y..u32::min(y + 256, image.height())).map(move |dy| {
+                            (y..usize::min(y + 256, image.height())).map(move |dy| {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2640,29 +2657,40 @@ impl RansCalculatorNode {
             }
 
             PixelType::Rgba8U => {
-                let ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
-                    let image = &image;
-                    (0..image.height()).map(move |y| match image.get(x, y) {
-                        PixelValue::Rgba8U(c) => c,
-                        _ => unreachable!(),
-                    })
-                }));
+                let ctx = jkl::ans::Context::from_input_ord_by(
+                    (0..image.width()).flat_map(|x| {
+                        let image = &image;
+                        (0..image.height()).map(move |y| match image.get(x, y) {
+                            PixelValue::Rgba8U(c) => c,
+                            _ => unreachable!(),
+                        })
+                    }),
+                    |a, b| a.bytes().cmp(&b.bytes()),
+                );
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write_with_delta(
+                    &mut write_bits,
+                    Rgba8U::TRANSPARENT,
+                    rgba8u_ord,
+                    rgba8u_delta,
+                )
+                .unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let data = (x..u32::min(x + 256, image.width())).flat_map(|dx| {
+                        let data = (x..usize::min(x + 256, image.width())).flat_map(|dx| {
                             let image = &image;
-                            (y..u32::min(y + 256, image.height())).map(move |dy| {
+                            (y..usize::min(y + 256, image.height())).map(move |dy| {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2692,13 +2720,16 @@ impl RansCalculatorNode {
             }
 
             PixelType::BC1 if self.unzip_block => {
-                let color_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
-                    let image = &image;
-                    (0..image.height()).flat_map(move |y| match image.get(x, y) {
-                        PixelValue::BC1(b) => [b.color0, b.color1],
-                        _ => unreachable!(),
-                    })
-                }));
+                let color_ctx = jkl::ans::Context::from_input_ord_by(
+                    (0..image.width()).flat_map(|x| {
+                        let image = &image;
+                        (0..image.height()).flat_map(move |y| match image.get(x, y) {
+                            PixelValue::BC1(b) => [b.color0, b.color1],
+                            _ => unreachable!(),
+                        })
+                    }),
+                    rgb565_ord,
+                );
 
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
                     let image = &image;
@@ -2709,30 +2740,36 @@ impl RansCalculatorNode {
                 }));
 
                 let mut write_size = WriteSize::new();
-                color_ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                color_ctx
+                    .write_with_delta(&mut write_bits, Rgb565::BLACK, rgb565_ord, rgb565_delta)
+                    .unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP color {} -> {}",
                     color_ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 let mut write_size = WriteSize::new();
-                texel_ctx.write(&mut write_size).unwrap();
-                self.map_sizes[1] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                texel_ctx.write(&mut write_bits).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[1] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP texel {} -> {}",
                     texel_ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let data = (x..u32::min(x + 256, image.width())).flat_map(|dx| {
+                        let data = (x..usize::min(x + 256, image.width())).flat_map(|dx| {
                             let image = &image;
-                            (y..u32::min(y + 256, image.height())).map(move |dy| {
+                            (y..usize::min(y + 256, image.height())).map(move |dy| {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2787,29 +2824,35 @@ impl RansCalculatorNode {
                 }
             }
             PixelType::BC1 => {
-                let ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
-                    let image = &image;
-                    (0..image.height()).map(move |y| match image.get(x, y) {
-                        PixelValue::BC1(c) => c,
-                        _ => unreachable!(),
-                    })
-                }));
+                let ctx = jkl::ans::Context::from_input_ord_by(
+                    (0..image.width()).flat_map(|x| {
+                        let image = &image;
+                        (0..image.height()).map(move |y| match image.get(x, y) {
+                            PixelValue::BC1(c) => c,
+                            _ => unreachable!(),
+                        })
+                    }),
+                    bc1_ord,
+                );
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write_with_delta(&mut write_bits, bc1::Block::BLACK, bc1_ord, bc1_delta)
+                    .unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
                     for y in (0..image.height()).step_by(256) {
-                        let data = (x..u32::min(x + 256, image.width())).flat_map(|dx| {
+                        let data = (x..usize::min(x + 256, image.width())).flat_map(|dx| {
                             let image = &image;
-                            (y..u32::min(y + 256, image.height())).map(move |dy| {
+                            (y..usize::min(y + 256, image.height())).map(move |dy| {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -2844,7 +2887,7 @@ impl RansCalculatorNode {
         match input {
             0 => {
                 match value {
-                    JackalValue::Null => return,
+                    JackalValue::Null => self.image = None,
                     JackalValue::Image(image) => {
                         assert_eq!(Some(image.pixel_ty()), self.input);
                         self.image = Some(image);
@@ -2945,8 +2988,8 @@ struct LZ77RansCalculatorNode {
     input: Option<PixelType>,
     image: Option<ImageValue>,
     window_size: usize,
-    map_sizes: [u64; 2],
-    rans_sizes: [u64; 2],
+    map_sizes: [usize; 2],
+    rans_sizes: [usize; 2],
     unzip_block: bool,
 }
 
@@ -3025,8 +3068,8 @@ impl LZ77RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut lz77 = lz77::Encoder::new(Rgb8U::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3042,16 +3085,26 @@ impl LZ77RansCalculatorNode {
                     }
                 }
 
-                let ctx = jkl::ans::Context::from_input(buffer.iter().copied());
+                let ctx = jkl::ans::Context::from_input_ord_by(buffer.iter().copied(), lzrgb8u_ord);
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write_with_delta(
+                    &mut write_bits,
+                    lz77::Token::Literal {
+                        symbol: Rgb8U::BLACK,
+                    },
+                    lzrgb8u_ord,
+                    lzrgb8u_delta,
+                )
+                .unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3060,8 +3113,8 @@ impl LZ77RansCalculatorNode {
 
                         let mut lz77 = lz77::Encoder::new(Rgb8U::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3085,7 +3138,7 @@ impl LZ77RansCalculatorNode {
                         println!(
                             "LZ77 Tokens {} -> {}",
                             buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut rans = jkl::ans::Encoder::new(&ctx);
@@ -3112,8 +3165,8 @@ impl LZ77RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut lz77 = lz77::Encoder::new(Rgba8U::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3129,16 +3182,27 @@ impl LZ77RansCalculatorNode {
                     }
                 }
 
-                let ctx = jkl::ans::Context::from_input(buffer.iter().copied());
+                let ctx =
+                    jkl::ans::Context::from_input_ord_by(buffer.iter().copied(), lzrgba8u_ord);
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write_with_delta(
+                    &mut write_bits,
+                    lz77::Token::Literal {
+                        symbol: Rgba8U::TRANSPARENT,
+                    },
+                    lzrgba8u_ord,
+                    lzrgba8u_delta,
+                )
+                .unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3147,8 +3211,8 @@ impl LZ77RansCalculatorNode {
 
                         let mut lz77 = lz77::Encoder::new(Rgba8U::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3172,7 +3236,7 @@ impl LZ77RansCalculatorNode {
                         println!(
                             "LZ77 Tokens {} -> {}",
                             buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut rans = jkl::ans::Encoder::new(&ctx);
@@ -3200,8 +3264,8 @@ impl LZ77RansCalculatorNode {
                         let mut color_lz77 =
                             lz77::Encoder::new(Rgb565::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3218,16 +3282,30 @@ impl LZ77RansCalculatorNode {
                     }
                 }
 
-                let color_ctx = jkl::ans::Context::from_input(color_buffer.iter().copied());
+                let color_ctx = jkl::ans::Context::from_input_ord_by(
+                    color_buffer.iter().copied(),
+                    lzrgb565_ord,
+                );
 
                 let mut write_size = WriteSize::new();
-                color_ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                color_ctx
+                    .write_with_delta(
+                        &mut write_bits,
+                        lz77::Token::Literal {
+                            symbol: Rgb565::BLACK,
+                        },
+                        lzrgb565_ord,
+                        lzrgb565_delta,
+                    )
+                    .unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP color {} -> {}",
                     color_ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
@@ -3239,13 +3317,15 @@ impl LZ77RansCalculatorNode {
                 }));
 
                 let mut write_size = WriteSize::new();
-                texel_ctx.write(&mut write_size).unwrap();
-                self.map_sizes[1] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                texel_ctx.write(&mut write_bits).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[1] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP texel {} -> {}",
                     texel_ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3255,8 +3335,8 @@ impl LZ77RansCalculatorNode {
                         let mut color_lz77 =
                             lz77::Encoder::new(Rgb565::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3281,7 +3361,7 @@ impl LZ77RansCalculatorNode {
                         println!(
                             "LZ77 Tokens color {} -> {}",
                             color_buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut color_rans = jkl::ans::Encoder::new(&color_ctx);
@@ -3302,8 +3382,8 @@ impl LZ77RansCalculatorNode {
 
                         let mut emitted = 0;
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3340,8 +3420,8 @@ impl LZ77RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut lz77 = lz77::Encoder::new(bc1::Block::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3357,16 +3437,18 @@ impl LZ77RansCalculatorNode {
                     }
                 }
 
-                let ctx = jkl::ans::Context::from_input(buffer.iter().copied());
+                let ctx = jkl::ans::Context::from_input_ord_by(buffer.iter().copied(), lzbc1_ord);
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write_ord_by(&mut write_bits, lzbc1_ord).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3375,8 +3457,8 @@ impl LZ77RansCalculatorNode {
 
                         let mut lz77 = lz77::Encoder::new(bc1::Block::BLACK, 1 << self.window_size);
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3400,7 +3482,7 @@ impl LZ77RansCalculatorNode {
                         println!(
                             "LZ77 Tokens {} -> {}",
                             buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut rans = jkl::ans::Encoder::new(&ctx);
@@ -3427,7 +3509,7 @@ impl LZ77RansCalculatorNode {
         match input {
             0 => {
                 match value {
-                    JackalValue::Null => return,
+                    JackalValue::Null => self.image = None,
                     JackalValue::Image(image) => {
                         assert_eq!(Some(image.pixel_ty()), self.input);
                         self.image = Some(image);
@@ -3537,8 +3619,8 @@ impl<'de> serde::Deserialize<'de> for LZ77RansCalculatorNode {
 struct LZ78RansCalculatorNode {
     input: Option<PixelType>,
     image: Option<ImageValue>,
-    map_sizes: [u64; 2],
-    rans_sizes: [u64; 2],
+    map_sizes: [usize; 2],
+    rans_sizes: [usize; 2],
     unzip_block: bool,
 }
 
@@ -3616,13 +3698,13 @@ impl LZ78RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::Rgb8U(c) => {
-                                        buffer.extend(lz78.encode(c));
+                                        buffer.extend(lz78.encode(c.bits_interleaved()));
                                     }
                                     _ => {}
                                 }
@@ -3636,13 +3718,15 @@ impl LZ78RansCalculatorNode {
                 let ctx = jkl::ans::Context::from_input(buffer.iter().copied());
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write(&mut write_bits).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3651,13 +3735,13 @@ impl LZ78RansCalculatorNode {
 
                         let mut lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::Rgb8U(c) => {
-                                        buffer.extend(lz78.encode(c));
+                                        buffer.extend(lz78.encode(c.bits_interleaved()));
                                     }
                                     _ => {}
                                 }
@@ -3676,7 +3760,7 @@ impl LZ78RansCalculatorNode {
                         println!(
                             "LZ78 Tokens {} -> {}",
                             buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut rans = jkl::ans::Encoder::new(&ctx);
@@ -3703,13 +3787,13 @@ impl LZ78RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::Rgba8U(c) => {
-                                        buffer.extend(lz78.encode(c));
+                                        buffer.extend(lz78.encode(c.bits_interleaved()));
                                     }
                                     _ => {}
                                 }
@@ -3723,13 +3807,15 @@ impl LZ78RansCalculatorNode {
                 let ctx = jkl::ans::Context::from_input(buffer.iter().copied());
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write(&mut write_bits).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3738,13 +3824,13 @@ impl LZ78RansCalculatorNode {
 
                         let mut lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::Rgba8U(c) => {
-                                        buffer.extend(lz78.encode(c));
+                                        buffer.extend(lz78.encode(c.bits_interleaved()));
                                     }
                                     _ => {}
                                 }
@@ -3763,7 +3849,7 @@ impl LZ78RansCalculatorNode {
                         println!(
                             "LZ78 Tokens {} -> {}",
                             buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut rans = jkl::ans::Encoder::new(&ctx);
@@ -3790,14 +3876,16 @@ impl LZ78RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut color_lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::BC1(b) => {
-                                        color_buffer.extend(color_lz78.encode(b.color0));
-                                        color_buffer.extend(color_lz78.encode(b.color1));
+                                        color_buffer
+                                            .extend(color_lz78.encode(b.color0.bits_interleaved()));
+                                        color_buffer
+                                            .extend(color_lz78.encode(b.color1.bits_interleaved()));
                                     }
                                     _ => {}
                                 }
@@ -3811,13 +3899,15 @@ impl LZ78RansCalculatorNode {
                 let color_ctx = jkl::ans::Context::from_input(color_buffer.iter().copied());
 
                 let mut write_size = WriteSize::new();
-                color_ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                color_ctx.write(&mut write_bits).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP color {} -> {}",
                     color_ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
@@ -3829,13 +3919,15 @@ impl LZ78RansCalculatorNode {
                 }));
 
                 let mut write_size = WriteSize::new();
-                texel_ctx.write(&mut write_size).unwrap();
-                self.map_sizes[1] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                texel_ctx.write(&mut write_bits).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[1] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP texel {} -> {}",
                     texel_ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3844,14 +3936,16 @@ impl LZ78RansCalculatorNode {
 
                         let mut color_lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::BC1(b) => {
-                                        color_buffer.extend(color_lz78.encode(b.color0));
-                                        color_buffer.extend(color_lz78.encode(b.color1));
+                                        color_buffer
+                                            .extend(color_lz78.encode(b.color0.bits_interleaved()));
+                                        color_buffer
+                                            .extend(color_lz78.encode(b.color1.bits_interleaved()));
                                     }
                                     _ => {}
                                 }
@@ -3870,7 +3964,7 @@ impl LZ78RansCalculatorNode {
                         println!(
                             "LZ78 Tokens color {} -> {}",
                             color_buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut color_rans = jkl::ans::Encoder::new(&color_ctx);
@@ -3891,8 +3985,8 @@ impl LZ78RansCalculatorNode {
 
                         let mut emitted = 0;
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
@@ -3920,13 +4014,13 @@ impl LZ78RansCalculatorNode {
                     for y in (0..image.height()).step_by(256) {
                         let mut lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::BC1(b) => {
-                                        buffer.extend(lz78.encode(b));
+                                        buffer.extend(lz78.encode(b.bytes()));
                                     }
                                     _ => {}
                                 }
@@ -3940,13 +4034,15 @@ impl LZ78RansCalculatorNode {
                 let ctx = jkl::ans::Context::from_input(buffer.iter().copied());
 
                 let mut write_size = WriteSize::new();
-                ctx.write(&mut write_size).unwrap();
-                self.map_sizes[0] += write_size.size as u64 * 8;
+                let mut write_bits = WriteBits::new(&mut write_size);
+                ctx.write(&mut write_bits).unwrap();
+                write_bits.finish().unwrap();
+                self.map_sizes[0] += write_size.size as usize * 8;
 
                 println!(
                     "rANS MAP {} -> {}",
                     ctx.freqs().len(),
-                    human_readable_bits(write_size.size as u64 * 8)
+                    human_readable_bits(write_size.size as usize * 8)
                 );
 
                 for x in (0..image.width()).step_by(256) {
@@ -3955,13 +4051,13 @@ impl LZ78RansCalculatorNode {
 
                         let mut lz78 = jkl::lz78::Encoder::new();
 
-                        for dx in x..u32::min(x + 256, image.width()) {
-                            for dy in y..u32::min(y + 256, image.height()) {
+                        for dx in x..usize::min(x + 256, image.width()) {
+                            for dy in y..usize::min(y + 256, image.height()) {
                                 let p = image.get(dx, dy);
 
                                 match p {
                                     PixelValue::BC1(b) => {
-                                        buffer.extend(lz78.encode(b));
+                                        buffer.extend(lz78.encode(b.bytes()));
                                     }
                                     _ => {}
                                 }
@@ -3980,7 +4076,7 @@ impl LZ78RansCalculatorNode {
                         println!(
                             "LZ78 Tokens {} -> {}",
                             buffer.len(),
-                            human_readable_bits(write_size.size as u64 * 8)
+                            human_readable_bits(write_size.size as usize * 8)
                         );
 
                         let mut rans = jkl::ans::Encoder::new(&ctx);
@@ -4007,7 +4103,7 @@ impl LZ78RansCalculatorNode {
         match input {
             0 => {
                 match value {
-                    JackalValue::Null => return,
+                    JackalValue::Null => self.image = None,
                     JackalValue::Image(image) => {
                         assert_eq!(Some(image.pixel_ty()), self.input);
                         self.image = Some(image);
@@ -4142,7 +4238,7 @@ where
 
 /// Builds texture atlas.
 struct AtlasNode {
-    size: (u32, u32),
+    size: (usize, usize),
     inputs: [Option<ImageValue>; 8],
     atlas: Image<Rgb8U>,
     body: ImageWidget,
@@ -4153,7 +4249,7 @@ impl AtlasNode {
         AtlasNode::with_size((0, 0))
     }
 
-    fn with_size(size: (u32, u32)) -> Self {
+    fn with_size(size: (usize, usize)) -> Self {
         AtlasNode {
             size,
             inputs: array::from_fn(|_| None),
@@ -4235,13 +4331,13 @@ impl AtlasNode {
         match input {
             0 => match value {
                 JackalValue::Uint(value) => {
-                    self.size.0 = value as u32;
+                    self.size.0 = value as usize;
                 }
                 _ => unreachable!(),
             },
             1 => match value {
                 JackalValue::Uint(value) => {
-                    self.size.1 = value as u32;
+                    self.size.1 = value as usize;
                 }
                 _ => unreachable!(),
             },
@@ -4297,7 +4393,7 @@ impl AtlasNode {
         order.sort_by_key(|i| {
             self.inputs[*i]
                 .as_ref()
-                .map_or(u32::MAX, |img| !(img.height() * img.width()))
+                .map_or(usize::MAX, |img| !(img.height() * img.width()))
         });
 
         for idx in order {
@@ -4340,7 +4436,7 @@ impl<'de> serde::Deserialize<'de> for AtlasNode {
     where
         D: serde::Deserializer<'de>,
     {
-        let size = <(u32, u32) as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        let size = <(usize, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(AtlasNode::with_size(size))
     }
 }
@@ -4352,7 +4448,7 @@ struct RleRansCalculatorNode {
     only_power_of_two: bool,
     unzip: bool,
     input: Option<PixelType>,
-    rans_size: u64,
+    rans_size: usize,
     image: Option<ImageValue>,
 }
 
@@ -4472,386 +4568,416 @@ impl RleRansCalculatorNode {
     }
 
     fn rebuild(&mut self) {
-        let Some(image) = &self.image else {
-            return;
-        };
-
-        self.rans_size = 0;
-        let rle_cfg = RleCfg {
-            only_power_of_two: self.only_power_of_two,
-            ..Default::default()
-        };
-
-        if self.unzip {
-            match self.input {
-                None => {}
-                Some(PixelType::Rgb8U) => {
-                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
-                        (0..image.height()).step_by(256).flat_map(move |y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgb8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            rle_with_cfg(data, rle_cfg)
-                            // data
-                        })
-                    });
-
-                    let (rle, color) = rle_data
-                        .map(|rle| (rle.count, rle.value))
-                        .unzip::<_, _, Vec<_>, Vec<_>>();
-
-                    let ctx_rle = jkl::ans::Context::from_input(rle);
-                    let ctx_color = jkl::ans::Context::from_input(color);
-
-                    let mut write_size = WriteSize::new();
-                    ctx_rle.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    let mut write_size = WriteSize::new();
-                    ctx_color.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    (0..image.width()).step_by(256).for_each(|x| {
-                        (0..image.height()).step_by(256).for_each(|y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgb8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            let rle_data = rle_with_cfg(data, rle_cfg);
-                            // let rle_data = data;
-
-                            let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
-                            let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
-
-                            rle_data.for_each(|p| {
-                                if let Some(_) = encoder_rle.encode(p.count) {
-                                    self.rans_size += 32;
-                                }
-                                if let Some(_) = encoder_color.encode(p.value) {
-                                    self.rans_size += 32;
-                                }
-                            });
-
-                            self.rans_size += 64;
-                        })
-                    });
-                }
-
-                Some(PixelType::Rgba8U) => {
-                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
-                        (0..image.height()).step_by(256).flat_map(move |y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgba8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            rle_with_cfg(data, rle_cfg)
-                            // data
-                        })
-                    });
-
-                    let (rle, color) = rle_data
-                        .map(|rle| (rle.count, rle.value))
-                        .unzip::<_, _, Vec<_>, Vec<_>>();
-
-                    let ctx_rle = jkl::ans::Context::from_input(rle);
-                    let ctx_color = jkl::ans::Context::from_input(color);
-
-                    let mut write_size = WriteSize::new();
-                    ctx_rle.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    let mut write_size = WriteSize::new();
-                    ctx_color.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    (0..image.width()).step_by(256).for_each(|x| {
-                        (0..image.height()).step_by(256).for_each(|y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgba8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            let rle_data = rle_with_cfg(data, rle_cfg);
-                            // let rle_data = data;
-
-                            let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
-                            let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
-
-                            rle_data.for_each(|p| {
-                                if let Some(_) = encoder_rle.encode(p.count) {
-                                    self.rans_size += 32;
-                                }
-                                if let Some(_) = encoder_color.encode(p.value) {
-                                    self.rans_size += 32;
-                                }
-                            });
-
-                            self.rans_size += 64;
-                        })
-                    });
-                }
-
-                Some(PixelType::BC1) => {
-                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
-                        (0..image.height()).step_by(256).flat_map(move |y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::BC1(b) => b,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            rle_with_cfg(data, rle_cfg)
-                            // data
-                        })
-                    });
-
-                    let (rle, color) = rle_data
-                        .map(|rle| (rle.count, rle.value))
-                        .unzip::<_, _, Vec<_>, Vec<_>>();
-
-                    let ctx_rle = jkl::ans::Context::from_input(rle);
-                    let ctx_color = jkl::ans::Context::from_input(color);
-
-                    let mut write_size = WriteSize::new();
-                    ctx_rle.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    let mut write_size = WriteSize::new();
-                    ctx_color.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    (0..image.width()).step_by(256).for_each(|x| {
-                        (0..image.height()).step_by(256).for_each(|y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::BC1(b) => b,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            let rle_data = rle_with_cfg(data, rle_cfg);
-                            // let rle_data = data;
-
-                            let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
-                            let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
-
-                            rle_data.for_each(|p| {
-                                if let Some(_) = encoder_rle.encode(p.count) {
-                                    self.rans_size += 32;
-                                }
-                                if let Some(_) = encoder_color.encode(p.value) {
-                                    self.rans_size += 32;
-                                }
-                            });
-
-                            self.rans_size += 64;
-                        })
-                    });
-                }
-            }
-        } else {
-            match self.input {
-                None => {}
-                Some(PixelType::Rgb8U) => {
-                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
-                        (0..image.height()).step_by(256).flat_map(move |y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgb8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            rle_with_cfg(data, rle_cfg)
-                            // data
-                        })
-                    });
-
-                    let ctx = jkl::ans::Context::from_input(rle_data);
-
-                    let mut write_size = WriteSize::new();
-                    ctx.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    (0..image.width()).step_by(256).for_each(|x| {
-                        (0..image.height()).step_by(256).for_each(|y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgb8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            let rle_data = rle_with_cfg(data, rle_cfg);
-                            // let rle_data = data;
-
-                            let mut encoder = jkl::ans::Encoder::new(&ctx);
-
-                            rle_data.for_each(|p| {
-                                if let Some(_) = encoder.encode(p) {
-                                    self.rans_size += 32;
-                                }
-                            });
-
-                            self.rans_size += 64;
-                        })
-                    });
-                }
-
-                Some(PixelType::Rgba8U) => {
-                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
-                        (0..image.height()).step_by(256).flat_map(move |y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgba8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            rle_with_cfg(data, rle_cfg)
-                            // data
-                        })
-                    });
-
-                    let ctx = jkl::ans::Context::from_input(rle_data);
-
-                    let mut write_size = WriteSize::new();
-                    ctx.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    (0..image.width()).step_by(256).for_each(|x| {
-                        (0..image.height()).step_by(256).for_each(|y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::Rgba8U(c) => c,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            let rle_data = rle_with_cfg(data, rle_cfg);
-                            // let rle_data = data;
-
-                            let mut encoder = jkl::ans::Encoder::new(&ctx);
-
-                            rle_data.for_each(|p| {
-                                if let Some(_) = encoder.encode(p) {
-                                    self.rans_size += 32;
-                                }
-                            });
-
-                            self.rans_size += 64;
-                        })
-                    });
-                }
-
-                Some(PixelType::BC1) => {
-                    let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
-                        (0..image.height()).step_by(256).flat_map(move |y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::BC1(b) => b,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            rle_with_cfg(data, rle_cfg)
-                            // data
-                        })
-                    });
-
-                    let ctx = jkl::ans::Context::from_input(rle_data);
-
-                    let mut write_size = WriteSize::new();
-                    ctx.write(&mut write_size).unwrap();
-                    self.rans_size += write_size.size as u64 * 8;
-
-                    (0..image.width()).step_by(256).for_each(|x| {
-                        (0..image.height()).step_by(256).for_each(|y| {
-                            let data = (x..u32::min(x + 256, image.width())).flat_map(move |dx| {
-                                (y..u32::min(y + 256, image.height())).map(move |dy| {
-                                    let p = image.get(dx, dy);
-
-                                    match p {
-                                        PixelValue::BC1(b) => b,
-                                        _ => unreachable!(),
-                                    }
-                                })
-                            });
-
-                            let rle_data = rle_with_cfg(data, rle_cfg);
-                            // let rle_data = data;
-
-                            let mut encoder = jkl::ans::Encoder::new(&ctx);
-
-                            rle_data.for_each(|p| {
-                                if let Some(_) = encoder.encode(p) {
-                                    self.rans_size += 32;
-                                }
-                            });
-
-                            self.rans_size += 64;
-                        })
-                    });
-                }
-            }
-        }
+        // let Some(image) = &self.image else {
+        //     return;
+        // };
+
+        // self.rans_size = 0;
+        // let rle_cfg = RleCfg {
+        //     only_power_of_two: self.only_power_of_two,
+        //     ..Default::default()
+        // };
+
+        // if self.unzip {
+        //     match self.input {
+        //         None => {}
+        //         Some(PixelType::Rgb8U) => {
+        //             let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+        //                 (0..image.height()).step_by(256).flat_map(move |y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgb8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     rle_with_cfg(data, rle_cfg)
+        //                     // data
+        //                 })
+        //             });
+
+        //             let (rle, color) = rle_data
+        //                 .map(|rle| (rle.count, rle.value))
+        //                 .unzip::<_, _, Vec<_>, Vec<_>>();
+
+        //             let ctx_rle = jkl::ans::Context::from_input(rle);
+        //             let ctx_color = jkl::ans::Context::from_input(color);
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx_rle.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx_color.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             (0..image.width()).step_by(256).for_each(|x| {
+        //                 (0..image.height()).step_by(256).for_each(|y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgb8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     let rle_data = rle_with_cfg(data, rle_cfg);
+        //                     // let rle_data = data;
+
+        //                     let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
+        //                     let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
+
+        //                     rle_data.for_each(|p| {
+        //                         if let Some(_) = encoder_rle.encode(p.count) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                         if let Some(_) = encoder_color.encode(p.value) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                     });
+
+        //                     self.rans_size += 64;
+        //                 })
+        //             });
+        //         }
+
+        //         Some(PixelType::Rgba8U) => {
+        //             let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+        //                 (0..image.height()).step_by(256).flat_map(move |y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgba8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     rle_with_cfg(data, rle_cfg)
+        //                     // data
+        //                 })
+        //             });
+
+        //             let (rle, color) = rle_data
+        //                 .map(|rle| (rle.count, rle.value))
+        //                 .unzip::<_, _, Vec<_>, Vec<_>>();
+
+        //             let ctx_rle = jkl::ans::Context::from_input(rle);
+        //             let ctx_color = jkl::ans::Context::from_input(color);
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx_rle.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx_color.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             (0..image.width()).step_by(256).for_each(|x| {
+        //                 (0..image.height()).step_by(256).for_each(|y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgba8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     let rle_data = rle_with_cfg(data, rle_cfg);
+        //                     // let rle_data = data;
+
+        //                     let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
+        //                     let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
+
+        //                     rle_data.for_each(|p| {
+        //                         if let Some(_) = encoder_rle.encode(p.count) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                         if let Some(_) = encoder_color.encode(p.value) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                     });
+
+        //                     self.rans_size += 64;
+        //                 })
+        //             });
+        //         }
+
+        //         Some(PixelType::BC1) => {
+        //             let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+        //                 (0..image.height()).step_by(256).flat_map(move |y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::BC1(b) => b,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     rle_with_cfg(data, rle_cfg)
+        //                     // data
+        //                 })
+        //             });
+
+        //             let (rle, color) = rle_data
+        //                 .map(|rle| (rle.count, rle.value))
+        //                 .unzip::<_, _, Vec<_>, Vec<_>>();
+
+        //             let ctx_rle = jkl::ans::Context::from_input(rle);
+        //             let ctx_color = jkl::ans::Context::from_input(color);
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx_rle.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx_color.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             (0..image.width()).step_by(256).for_each(|x| {
+        //                 (0..image.height()).step_by(256).for_each(|y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::BC1(b) => b,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     let rle_data = rle_with_cfg(data, rle_cfg);
+        //                     // let rle_data = data;
+
+        //                     let mut encoder_rle = jkl::ans::Encoder::new(&ctx_rle);
+        //                     let mut encoder_color = jkl::ans::Encoder::new(&ctx_color);
+
+        //                     rle_data.for_each(|p| {
+        //                         if let Some(_) = encoder_rle.encode(p.count) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                         if let Some(_) = encoder_color.encode(p.value) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                     });
+
+        //                     self.rans_size += 64;
+        //                 })
+        //             });
+        //         }
+        //     }
+        // } else {
+        //     match self.input {
+        //         None => {}
+        //         Some(PixelType::Rgb8U) => {
+        //             let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+        //                 (0..image.height()).step_by(256).flat_map(move |y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgb8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     rle_with_cfg(data, rle_cfg)
+        //                     // data
+        //                 })
+        //             });
+
+        //             let ctx = jkl::ans::Context::from_input(rle_data);
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             (0..image.width()).step_by(256).for_each(|x| {
+        //                 (0..image.height()).step_by(256).for_each(|y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgb8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     let rle_data = rle_with_cfg(data, rle_cfg);
+        //                     // let rle_data = data;
+
+        //                     let mut encoder = jkl::ans::Encoder::new(&ctx);
+
+        //                     rle_data.for_each(|p| {
+        //                         if let Some(_) = encoder.encode(p) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                     });
+
+        //                     self.rans_size += 64;
+        //                 })
+        //             });
+        //         }
+
+        //         Some(PixelType::Rgba8U) => {
+        //             let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+        //                 (0..image.height()).step_by(256).flat_map(move |y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgba8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     rle_with_cfg(data, rle_cfg)
+        //                     // data
+        //                 })
+        //             });
+
+        //             let ctx = jkl::ans::Context::from_input(rle_data);
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             (0..image.width()).step_by(256).for_each(|x| {
+        //                 (0..image.height()).step_by(256).for_each(|y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::Rgba8U(c) => c,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     let rle_data = rle_with_cfg(data, rle_cfg);
+        //                     // let rle_data = data;
+
+        //                     let mut encoder = jkl::ans::Encoder::new(&ctx);
+
+        //                     rle_data.for_each(|p| {
+        //                         if let Some(_) = encoder.encode(p) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                     });
+
+        //                     self.rans_size += 64;
+        //                 })
+        //             });
+        //         }
+
+        //         Some(PixelType::BC1) => {
+        //             let rle_data = (0..image.width()).step_by(256).flat_map(move |x| {
+        //                 (0..image.height()).step_by(256).flat_map(move |y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::BC1(b) => b,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     rle_with_cfg(data, rle_cfg)
+        //                     // data
+        //                 })
+        //             });
+
+        //             let ctx = jkl::ans::Context::from_input(rle_data);
+
+        //             let mut write_size = WriteSize::new();
+        //             let mut write_bits = WriteBits::new(&mut write_size);
+        //             ctx.write(&mut write_bits).unwrap();
+        //             write_bits.finish().unwrap();
+        //             self.rans_size += write_size.size as usize * 8;
+
+        //             (0..image.width()).step_by(256).for_each(|x| {
+        //                 (0..image.height()).step_by(256).for_each(|y| {
+        //                     let data =
+        //                         (x..usize::min(x + 256, image.width())).flat_map(move |dx| {
+        //                             (y..usize::min(y + 256, image.height())).map(move |dy| {
+        //                                 let p = image.get(dx, dy);
+
+        //                                 match p {
+        //                                     PixelValue::BC1(b) => b,
+        //                                     _ => unreachable!(),
+        //                                 }
+        //                             })
+        //                         });
+
+        //                     let rle_data = rle_with_cfg(data, rle_cfg);
+        //                     // let rle_data = data;
+
+        //                     let mut encoder = jkl::ans::Encoder::new(&ctx);
+
+        //                     rle_data.for_each(|p| {
+        //                         if let Some(_) = encoder.encode(p) {
+        //                             self.rans_size += 32;
+        //                         }
+        //                     });
+
+        //                     self.rans_size += 64;
+        //                 })
+        //             });
+        //         }
+        //     }
+        // }
     }
 }
 
@@ -4874,7 +5000,7 @@ impl<'de> serde::Deserialize<'de> for RleRansCalculatorNode {
     }
 }
 
-/// Builds texture atlas.
+/// Builds reference map
 struct ReferenceMapNode {
     size: (usize, usize),
     input: Option<Image<Rgb32F>>,
@@ -4891,7 +5017,7 @@ impl ReferenceMapNode {
 
     fn with_size(size: (usize, usize)) -> Self {
         let mut map = ReferenceMap::new(size.0, size.1, Rgb32F::BLACK);
-        map.as_mut().random_initialize(|| {
+        map.random_initialize(|| {
             Rgb32F::new(
                 rand::random_range(0.0..=1.0),
                 rand::random_range(0.0..=1.0),
@@ -4998,13 +5124,13 @@ impl ReferenceMapNode {
         match input {
             0 => match value {
                 JackalValue::Uint(value) => {
-                    self.size.0 = value as usize;
+                    self.size.0 = value;
                 }
                 _ => unreachable!(),
             },
             1 => match value {
                 JackalValue::Uint(value) => {
-                    self.size.1 = value as usize;
+                    self.size.1 = value;
                 }
                 _ => unreachable!(),
             },
@@ -5060,7 +5186,7 @@ impl ReferenceMapNode {
                 );
                 ui.add(
                     egui::DragValue::new(&mut self.learning_rate)
-                        .range(0.01..=1.0)
+                        .range(0.01..=10.0)
                         .speed(0.01)
                         .clamp_existing_to_range(true),
                 );
@@ -5084,24 +5210,24 @@ impl ReferenceMapNode {
         self.body.unmake_texture();
         self.map = ReferenceMap::new(self.size.0, self.size.1, Rgb32F::BLACK);
 
-        match &self.input {
-            None => {
-                self.map.as_mut().random_initialize(|| {
-                    Rgb32F::new(
-                        rand::random_range(0.0..=1.0),
-                        rand::random_range(0.0..=1.0),
-                        rand::random_range(0.0..=1.0),
-                    )
-                });
-            }
-            Some(input) => {
-                let block_size = 8;
+        // match &self.input {
+        //     None => {
+        self.map.random_initialize(|| {
+            Rgb32F::new(
+                rand::random_range(0.0..=1.0),
+                rand::random_range(0.0..=1.0),
+                rand::random_range(0.0..=1.0),
+            )
+        });
+        //     }
+        //     Some(input) => {
+        //         let block_size = 8;
 
-                self.map
-                    .as_mut()
-                    .initialize_patches(input.as_ref(), block_size);
-            }
-        };
+        //         self.map
+        //             .as_mut()
+        //             .initialize_patches(input.as_ref(), block_size);
+        //     }
+        // };
     }
 
     fn train(&mut self) {
@@ -5113,19 +5239,19 @@ impl ReferenceMapNode {
         let block_size = 8;
         let batch_size = self.batch_size;
 
-        self.map.train(
+        self.map.train2(
             input.as_ref(),
             block_size,
             batch_size,
             |a, b| (Rgb32F::distance(a, b) + 1.0).log2(),
             |a, b, e| {
-                let e = self.learning_rate / (1.0 + e) / block_size as f32 / block_size as f32;
-                Rgb32F::lerp(a, b, e.powf(0.1))
-            },
-            |a, b, e| {
-                let e = self.learning_rate * e / block_size as f32 / block_size as f32;
+                let e = self.learning_rate / (1.0 + e).powi(1);
                 Rgb32F::lerp(a, b, e)
             },
+            // |a, b, e| {
+            //     let e = self.learning_rate * e / block_size as f32 / block_size as f32;
+            //     Rgb32F::lerp(a, b, e)
+            // },
         );
     }
 }
@@ -5135,7 +5261,7 @@ impl serde::Serialize for ReferenceMapNode {
     where
         S: serde::Serializer,
     {
-        (self.size.0 as u64, self.size.1 as u64).serialize(serializer)
+        (self.size.0 as usize, self.size.1 as usize).serialize(serializer)
     }
 }
 
@@ -5144,10 +5270,560 @@ impl<'de> serde::Deserialize<'de> for ReferenceMapNode {
     where
         D: serde::Deserializer<'de>,
     {
-        let size = <(u64, u64) as serde::Deserialize<'de>>::deserialize(deserializer)?;
-        Ok(ReferenceMapNode::with_size((
-            size.0 as usize,
-            size.1 as usize,
-        )))
+        let size = <(usize, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        Ok(ReferenceMapNode::with_size((size.0, size.1)))
+    }
+}
+
+/// Finds simlar patches in earlier encoded image part
+/// writes reference to the patch and residual.
+struct BlockCopyNode {
+    input: Option<Image<Rgb8U>>,
+    output: Option<Image<Rgb8U>>,
+    ref_size: usize,
+    block_size: usize,
+    window_size: usize,
+    body: ImageWidget,
+}
+
+impl BlockCopyNode {
+    fn new() -> Self {
+        BlockCopyNode {
+            input: None,
+            output: None,
+            ref_size: 0,
+            block_size: 8,
+            window_size: 8,
+            body: ImageWidget::new(),
+        }
+    }
+
+    fn prepare(&mut self, ctx: &egui::Context) {
+        let Some(output) = &self.output else {
+            return;
+        };
+
+        self.body.make_texture(ctx, || output.to_egui())
+    }
+
+    fn title(&self) -> String {
+        "Block Copy".to_owned()
+    }
+
+    fn inputs(&self) -> usize {
+        3
+    }
+
+    fn set_input_ty(&mut self, input: usize, ty: JackalType) -> bool {
+        match input {
+            0 | 1 => match ty {
+                JackalType::Uint => true,
+                _ => false,
+            },
+            2 => match ty {
+                JackalType::Null => {
+                    self.input = None;
+                    true
+                }
+                JackalType::Image(PixelType::Rgb8U) => {
+                    self.input = None;
+                    true
+                }
+                _ => false,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn input_ty(&self, input: usize) -> JackalType {
+        match input {
+            0 | 1 => JackalType::Uint,
+            2 => match &self.input {
+                None => JackalType::Null,
+                Some(_) => JackalType::Image(PixelType::Rgb8U),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
+        let rebuild = match input {
+            0 => ui
+                .add(
+                    egui::DragValue::new(&mut self.block_size)
+                        .range(1..=8192)
+                        .clamp_existing_to_range(true),
+                )
+                .changed(),
+            1 => ui
+                .add(
+                    egui::DragValue::new(&mut self.window_size)
+                        .range(1..=8192)
+                        .clamp_existing_to_range(true),
+                )
+                .changed(),
+            2 => false,
+            _ => unreachable!(),
+        };
+
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    fn set_input(&mut self, input: usize, value: JackalValue) {
+        match input {
+            0 => match value {
+                JackalValue::Uint(value) => {
+                    self.block_size = value;
+                }
+                _ => unreachable!(),
+            },
+            1 => match value {
+                JackalValue::Uint(value) => {
+                    self.window_size = value;
+                }
+                _ => unreachable!(),
+            },
+            2 => match value {
+                JackalValue::Null => {
+                    self.input = None;
+                }
+                JackalValue::Image(ImageValue::Rgb8U(image)) => {
+                    self.input = Some(image);
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+
+        self.rebuild();
+    }
+
+    fn outputs(&self) -> usize {
+        2
+    }
+
+    fn output_ty(&self, output: usize) -> JackalType {
+        match output {
+            0 => JackalType::Uint,
+            1 => JackalType::Image(PixelType::Rgb8U),
+            _ => unreachable!(),
+        }
+    }
+
+    fn output_ui(&mut self, output: usize, ui: &mut Ui) {
+        match output {
+            0 => {
+                let human_readable = human_readable_bits(self.ref_size);
+                let r = ui.label(human_readable);
+                r.on_hover_ui(|ui| {
+                    ui.label(format!("{} bit", self.ref_size));
+                });
+            }
+            1 => {
+                ui.label("Rgb8U image");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_output(&self, output: usize) -> JackalValue {
+        match output {
+            0 => JackalValue::Uint(self.ref_size as usize),
+            1 => match &self.output {
+                None => JackalValue::Null,
+                Some(image) => JackalValue::Image(ImageValue::Rgb8U(image.clone())),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn has_body(&self) -> bool {
+        true
+    }
+
+    fn body_ui(&mut self, ui: &mut Ui) {
+        self.body.show(ui);
+    }
+
+    fn rebuild(&mut self) {
+        self.body.unmake_texture();
+
+        let Some(input) = &self.input else {
+            return;
+        };
+
+        let mut output = match &mut self.output {
+            Some(output) if output.width == input.width && output.height == input.height => {
+                output.as_mut()
+            }
+            _ => {
+                self.output = None;
+                let image = Image::solid(input.width, input.height, Rgb8U::BLACK);
+                self.output.get_or_insert(image).as_mut()
+            }
+        };
+
+        let mut write_size = WriteSize::new();
+        let mut write_bits = WriteBits::new(&mut write_size);
+
+        for y in (0..input.height).step_by(self.block_size) {
+            for x in (0..input.width).step_by(self.block_size) {
+                if x == 0 && y == 0 {
+                    // skip first block
+                    continue;
+                }
+
+                let bw = usize::min(self.block_size, input.width - x);
+                let bh = usize::min(self.block_size, input.height - y);
+
+                let from_x = x.saturating_sub(self.window_size);
+                let to_x = (x + bw + self.window_size).min(input.width);
+                let from_y = y.saturating_sub(self.window_size);
+
+                let block = input.as_ref().get_range(x, y, bw, bh);
+
+                let (best_error1, best_match1) = if y > 0 {
+                    let to_y = y + bh - 1;
+
+                    let (error, (mx, my)) = input
+                        .as_ref()
+                        .get_range(from_x, from_y, to_x - from_x, to_y - from_y)
+                        .find_best_match(1, 1, block, Rgb8U::distance);
+
+                    (error, (mx + from_x, my + from_y))
+                } else {
+                    (f32::INFINITY, (0, 0))
+                };
+
+                let (best_error2, best_match2) = if x > 0 {
+                    let to_x = x + bw - 1;
+                    let from_y = y;
+                    let to_y = y + bh;
+
+                    let (error, (mx, my)) = input
+                        .as_ref()
+                        .get_range(from_x, from_y, to_x - from_x, to_y - from_y)
+                        .find_best_match(1, 1, block, Rgb8U::distance);
+
+                    (error, (mx + from_x, my + from_y))
+                } else {
+                    (f32::INFINITY, (0, 0))
+                };
+
+                assert!(best_error1.is_finite() || best_error2.is_finite());
+
+                let out_block = output.get_range_mut(x, y, bw, bh);
+
+                if best_error1 < best_error2 {
+                    input.as_ref().residual(
+                        best_match1.0,
+                        best_match1.1,
+                        block,
+                        out_block,
+                        Rgb8U::wrapping_sub,
+                    );
+
+                    vle::encode(
+                        (x as isize - best_match1.0 as isize).zigzag(),
+                        &mut write_bits,
+                    )
+                    .unwrap();
+                    vle::encode(y - best_match1.1, &mut write_bits).unwrap();
+                } else {
+                    input.as_ref().residual(
+                        best_match2.0,
+                        best_match2.1,
+                        block,
+                        out_block,
+                        Rgb8U::wrapping_sub,
+                    );
+
+                    vle::encode(
+                        (x as isize - best_match2.0 as isize).zigzag(),
+                        &mut write_bits,
+                    )
+                    .unwrap();
+                    vle::encode(y - best_match2.1, &mut write_bits).unwrap();
+                }
+            }
+        }
+
+        self.ref_size = write_size.size as usize * 8;
+    }
+}
+
+impl serde::Serialize for BlockCopyNode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        <() as serde::Serialize>::serialize(&(), serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BlockCopyNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        Ok(BlockCopyNode::new())
+    }
+}
+
+fn rgb8u_ord(a: Rgb8U, b: Rgb8U) -> std::cmp::Ordering {
+    a.bits_interleaved().cmp(&b.bits_interleaved())
+}
+
+fn rgb8u_delta(a: Rgb8U, b: Rgb8U) -> Vle<u32> {
+    Vle(b.bits_interleaved() - a.bits_interleaved())
+}
+
+fn rgba8u_ord(a: Rgba8U, b: Rgba8U) -> std::cmp::Ordering {
+    a.bits_interleaved().cmp(&b.bits_interleaved())
+}
+
+fn rgba8u_delta(a: Rgba8U, b: Rgba8U) -> Vle<u32> {
+    Vle(b.bits_interleaved() - a.bits_interleaved())
+}
+
+fn rgb565_ord(a: Rgb565, b: Rgb565) -> std::cmp::Ordering {
+    a.bits_interleaved().cmp(&b.bits_interleaved())
+}
+
+fn rgb565_delta(a: Rgb565, b: Rgb565) -> Vle<u16> {
+    Vle(b.bits_interleaved() - a.bits_interleaved())
+}
+
+fn bc1_ord(a: bc1::Block, b: bc1::Block) -> std::cmp::Ordering {
+    let a0 = a.color0.bits_interleaved();
+    let a1 = a.color1.bits_interleaved();
+    let a = interleave16_2(a0, a1);
+    let b0 = b.color0.bits_interleaved();
+    let b1 = b.color1.bits_interleaved();
+    let b = interleave16_2(b0, b1);
+    a.cmp(&b)
+}
+
+fn bc1_delta(a: bc1::Block, b: bc1::Block) -> Vle<u64> {
+    let a0 = a.color0.bits_interleaved();
+    let a1 = a.color1.bits_interleaved();
+    let ai = interleave16_2(a0, a1);
+    let b0 = b.color0.bits_interleaved();
+    let b1 = b.color1.bits_interleaved();
+    let bi = interleave16_2(b0, b1);
+
+    let hi = bi - ai;
+    let lo = u32::from_le_bytes(b.texels);
+    Vle(((hi as u64) << 32) | lo as u64)
+}
+
+fn lzrgb8u_ord(a: lz77::Token<Rgb8U>, b: lz77::Token<Rgb8U>) -> std::cmp::Ordering {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => rgb8u_ord(a, b),
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { .. }) => std::cmp::Ordering::Less,
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => std::cmp::Ordering::Greater,
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => (al, ad).cmp(&(bl, bd)),
+    }
+}
+
+fn lzrgb8u_delta(a: lz77::Token<Rgb8U>, b: lz77::Token<Rgb8U>) -> lz77::Token<Vle<u32>> {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => {
+            lz77::Token::Literal {
+                symbol: rgb8u_delta(a, b),
+            }
+        }
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { length, distance }) => {
+            lz77::Token::Reference { length, distance }
+        }
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => {
+            unreachable!()
+        }
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => {
+            assert!(bl >= al);
+
+            lz77::Token::Reference {
+                length: bl - al + 2,
+                distance: if bl > al { bd } else { bd - ad },
+            }
+        }
+    }
+}
+
+fn lzrgba8u_ord(a: lz77::Token<Rgba8U>, b: lz77::Token<Rgba8U>) -> std::cmp::Ordering {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => {
+            rgba8u_ord(a, b)
+        }
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { .. }) => std::cmp::Ordering::Less,
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => std::cmp::Ordering::Greater,
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => (al, ad).cmp(&(bl, bd)),
+    }
+}
+
+fn lzrgba8u_delta(a: lz77::Token<Rgba8U>, b: lz77::Token<Rgba8U>) -> lz77::Token<Vle<u32>> {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => {
+            lz77::Token::Literal {
+                symbol: rgba8u_delta(a, b),
+            }
+        }
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { length, distance }) => {
+            lz77::Token::Reference { length, distance }
+        }
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => {
+            unreachable!()
+        }
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => {
+            assert!(bl >= al);
+
+            lz77::Token::Reference {
+                length: bl - al + 2,
+                distance: if bl > al { bd } else { bd - ad },
+            }
+        }
+    }
+}
+
+fn lzrgb565_ord(a: lz77::Token<Rgb565>, b: lz77::Token<Rgb565>) -> std::cmp::Ordering {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => {
+            rgb565_ord(a, b)
+        }
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { .. }) => std::cmp::Ordering::Less,
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => std::cmp::Ordering::Greater,
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => (al, ad).cmp(&(bl, bd)),
+    }
+}
+
+fn lzrgb565_delta(a: lz77::Token<Rgb565>, b: lz77::Token<Rgb565>) -> lz77::Token<Vle<u16>> {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => {
+            lz77::Token::Literal {
+                symbol: rgb565_delta(a, b),
+            }
+        }
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { length, distance }) => {
+            lz77::Token::Reference { length, distance }
+        }
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => {
+            unreachable!()
+        }
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => {
+            assert!(bl >= al);
+
+            lz77::Token::Reference {
+                length: bl - al + 2,
+                distance: if bl > al { bd } else { bd - ad },
+            }
+        }
+    }
+}
+
+fn lzbc1_ord(a: lz77::Token<bc1::Block>, b: lz77::Token<bc1::Block>) -> std::cmp::Ordering {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => bc1_ord(a, b),
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { .. }) => std::cmp::Ordering::Less,
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => std::cmp::Ordering::Greater,
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => (al, ad).cmp(&(bl, bd)),
+    }
+}
+
+fn lzbc1_delta(a: lz77::Token<bc1::Block>, b: lz77::Token<bc1::Block>) -> lz77::Token<Vle<u64>> {
+    match (a, b) {
+        (lz77::Token::Literal { symbol: a }, lz77::Token::Literal { symbol: b }) => {
+            lz77::Token::Literal {
+                symbol: bc1_delta(a, b),
+            }
+        }
+        (lz77::Token::Literal { .. }, lz77::Token::Reference { length, distance }) => {
+            lz77::Token::Reference { length, distance }
+        }
+        (lz77::Token::Reference { .. }, lz77::Token::Literal { .. }) => {
+            unreachable!()
+        }
+        (
+            lz77::Token::Reference {
+                length: al,
+                distance: ad,
+            },
+            lz77::Token::Reference {
+                length: bl,
+                distance: bd,
+            },
+        ) => {
+            assert!(bl >= al);
+
+            lz77::Token::Reference {
+                length: bl - al + 2,
+                distance: if bl > al { bd } else { bd - ad },
+            }
+        }
     }
 }
