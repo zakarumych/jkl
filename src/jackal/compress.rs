@@ -34,7 +34,7 @@ pub trait Compressor {
         &self,
         cx: &Self::Context<T>,
         input: impl Iterator<Item = Self::Token<T>>,
-        output: &mut Vec<T>,
+        output: &mut impl Extend<T>,
     ) -> io::Result<()>;
 }
 
@@ -66,27 +66,25 @@ impl Compressor for LZ77Compressor {
     type Token<T: Symbol> = lz77::Token<T>;
     type Context<T: Symbol> = LZ77Context;
 
-    fn compress_symbols<T: Symbol>(
+    fn compress_symbols<'a, T: Symbol>(
         &self,
         input: impl Iterator<Item = impl Iterator<Item = T>>,
         output: &mut Vec<Vec<lz77::Token<T>>>,
-    ) -> io::Result<LZ77Context> {
+    ) -> io::Result<Self::Context<T>> {
         for (i, chunk) in input.enumerate() {
             let mut encoder = lz77::Encoder::new(T::default(), self.window_size);
-
             if output.len() == i {
                 output.push(Vec::new());
             }
-            let out_slice = &mut output[i];
-            out_slice.clear();
+
+            let stream = &mut output[i];
 
             for symbol in chunk {
-                encoder.encode(symbol, out_slice);
+                encoder.encode(symbol, stream);
             }
 
-            encoder.finish(out_slice);
+            encoder.finish(stream);
         }
-
         Ok(LZ77Context)
     }
 
@@ -94,13 +92,13 @@ impl Compressor for LZ77Compressor {
         &self,
         _cx: &LZ77Context,
         mut input: impl Iterator<Item = lz77::Token<T>>,
-        output: &mut Vec<T>,
+        output: &mut impl Extend<T>,
     ) -> io::Result<()> {
         let mut decoder = lz77::Decoder::new(T::default(), self.window_size);
 
         loop {
             match decoder.decode(input.by_ref()) {
-                Ok(Some(symbol)) => output.push(symbol),
+                Ok(Some(symbol)) => output.extend(std::iter::once(symbol)),
                 Ok(None) => break,
                 Err(err) => return Err(io::Error::new(io::ErrorKind::InvalidData, err)),
             }
@@ -124,30 +122,22 @@ impl Compressor for AnsCompressor {
         &self,
         input: impl Iterator<Item = impl DoubleEndedIterator<Item = T>> + Clone,
         output: &mut Vec<Vec<u32>>,
-    ) -> io::Result<ans::Context<T>> {
+    ) -> io::Result<Self::Context<T>> {
         let cx = ans::Context::from_input(input.clone().flatten());
 
         for (i, chunk) in input.enumerate() {
+            let mut encoder = ans::Encoder::new(&cx);
+
             if output.len() == i {
                 output.push(Vec::new());
             }
-
-            let out_slice = &mut output[i];
-            out_slice.clear();
-
-            let mut encoder = ans::Encoder::new(&cx);
+            let stream = &mut output[i];
 
             for symbol in chunk.rev() {
-                if let Some(code) = encoder.encode(symbol) {
-                    out_slice.push(code);
-                }
+                stream.extend(encoder.encode(symbol));
             }
 
-            let [x, y] = encoder.finish();
-            out_slice.push(x);
-            out_slice.push(y);
-
-            out_slice.reverse();
+            stream.extend(encoder.finish());
         }
 
         Ok(cx)
@@ -157,22 +147,21 @@ impl Compressor for AnsCompressor {
         &self,
         cx: &ans::Context<T>,
         mut input: impl Iterator<Item = u32>,
-        output: &mut Vec<T>,
+        output: &mut impl Extend<T>,
     ) -> io::Result<()> {
         let mut decoder = ans::Decoder::new(&cx);
 
         loop {
             match decoder.decode(input.by_ref()) {
-                Some(symbol) => output.push(symbol),
+                Some(symbol) => output.extend(std::iter::once(symbol)),
                 None => break,
             }
         }
 
-        if let Err(err) = decoder.finish() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, err));
+        match decoder.finish() {
+            Ok(()) => Ok(()),
+            Err(err) => Err(io::Error::new(io::ErrorKind::InvalidData, err)),
         }
-
-        Ok(())
     }
 }
 
@@ -202,7 +191,7 @@ where
         &self,
         cx: &Self::Context<T>,
         input: impl Iterator<Item = B::Token<A::Token<T>>>,
-        output: &mut Vec<T>,
+        output: &mut impl Extend<T>,
     ) -> io::Result<()> {
         let (a, b) = self;
 

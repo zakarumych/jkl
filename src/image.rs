@@ -150,6 +150,15 @@ impl<'a, T> ImageRef<'a, T> {
         &self.pixels
     }
 
+    /// Returns an iterator over all pixels in this image in row-major order.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &'a T> {
+        let width = self.width;
+        self.pixels
+            .chunks(self.stride)
+            .take(self.height)
+            .flat_map(move |row| &row[..width])
+    }
+
     /// Calculates total error between the reference map patch and the given block using the provided error function.
     ///
     /// Compares each pixel in `block` against the corresponding pixel in `self` starting
@@ -503,6 +512,33 @@ impl<'a, T> ImageMut<'a, T> {
     /// Returns the raw underlying pixel slice.
     pub fn pixels_mut(&mut self) -> &mut [T] {
         &mut *self.pixels
+    }
+
+    /// Returns an iterator over all pixels in this image in row-major order.
+    pub fn iter(&self) -> impl Iterator<Item = &'_ T> {
+        let width = self.width;
+        self.pixels
+            .chunks(self.stride)
+            .take(self.height)
+            .flat_map(move |row| &row[..width])
+    }
+
+    /// Returns an iterator over all pixels in this image in row-major order.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &'_ mut T> {
+        let width = self.width;
+        self.pixels
+            .chunks_mut(self.stride)
+            .take(self.height)
+            .flat_map(move |row| &mut row[..width])
+    }
+
+    /// Returns an iterator over all pixels in this image in row-major order.
+    pub fn into_iter(self) -> impl Iterator<Item = &'a mut T> {
+        let width = self.width;
+        self.pixels
+            .chunks_mut(self.stride)
+            .take(self.height)
+            .flat_map(move |row| &mut row[..width])
     }
 
     /// Returns a immutable sub-region of this image as a new `ImageRef`.
