@@ -3,6 +3,7 @@ use std::{error::Error, fmt, io};
 use crate::{
     bits::{ReadBits, WriteBits},
     encode::Encode,
+    math::Delta,
     vle,
 };
 
@@ -23,10 +24,70 @@ where
     }
 }
 
+impl<T> Delta for Token<T>
+where
+    T: Delta,
+{
+    #[inline]
+    fn delta(self, base: Self) -> Token<T> {
+        match (self, base) {
+            (Token::Literal { symbol: me }, Token::Literal { symbol: base }) => Token::Literal {
+                symbol: me.delta(base),
+            },
+            (
+                Token::Reference {
+                    length: me,
+                    distance: me_d,
+                },
+                Token::Reference {
+                    length: base,
+                    distance: base_d,
+                },
+            ) => Token::Reference {
+                length: me - base,
+                distance: if me == base { me_d - base_d } else { me_d },
+            },
+            (me, Token::Reference { .. }) => me,
+            (me, Token::Literal { .. }) => me,
+        }
+    }
+
+    #[inline]
+    fn from_delta(base: Self, delta: Token<T>) -> Token<T> {
+        match (base, delta) {
+            (Token::Literal { symbol: base }, Token::Literal { symbol: delta }) => Token::Literal {
+                symbol: T::from_delta(base, delta),
+            },
+            (Token::Literal { .. }, Token::Reference { length, distance }) => {
+                Token::Reference { length, distance }
+            }
+            (Token::Reference { .. }, Token::Literal { symbol }) => Token::Literal { symbol },
+            (
+                Token::Reference {
+                    length: length_a,
+                    distance: distance_a,
+                },
+                Token::Reference {
+                    length: length_b,
+                    distance: distance_b,
+                },
+            ) => Token::Reference {
+                length: length_a + length_b,
+                distance: if length_a == length_b {
+                    distance_a + distance_b
+                } else {
+                    distance_b
+                },
+            },
+        }
+    }
+}
+
 impl<T> Encode for Token<T>
 where
     T: Encode,
 {
+    #[inline]
     fn bit_len(&self) -> usize {
         match *self {
             Token::Reference { length, distance } => {
@@ -39,6 +100,7 @@ where
         }
     }
 
+    #[inline]
     fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         match *self {
             Token::Reference { length, distance } => {
@@ -54,6 +116,7 @@ where
         Ok(())
     }
 
+    #[inline]
     fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
         let length = vle::decode_non_zero::<u32, _>(reader)?;
 
@@ -87,25 +150,30 @@ impl<T> Window<T> {
         }
     }
 
+    #[inline]
     fn len(&self) -> usize {
         self.buffer.len()
     }
 
+    #[inline]
     fn idx(&self, index: usize) -> usize {
         assert!(index < self.buffer.len());
         (self.head + self.buffer.len() - 1 - index) % self.buffer.len()
     }
 
+    #[inline]
     fn push(&mut self, value: T) {
         self.buffer[self.head] = value;
         self.head = (self.head + 1) % self.buffer.len();
     }
 
+    #[inline]
     fn get(&self, index: usize) -> &T {
         let idx = self.idx(index);
         &self.buffer[idx]
     }
 
+    #[inline]
     fn find_elem(&self, offset: usize, elem: &T) -> Option<usize>
     where
         T: PartialEq,
@@ -138,6 +206,7 @@ impl<T> Window<T> {
     // and followed by `next` symbol.
     // Only tries offsets larget than `distance`,
     // since it should be impossible to find a match of required length at smaller offset.
+    #[inline]
     fn find_extension(&self, distance: usize, length: usize, next: &T) -> Option<usize>
     where
         T: PartialEq,
@@ -253,6 +322,7 @@ impl<T> Window<T> {
     }
 }
 
+#[inline]
 fn distance_index(distance: usize, index: usize) -> usize {
     distance - (index % (distance + 1))
 }
@@ -267,6 +337,7 @@ impl<T> Encoder<T>
 where
     T: Copy + Eq,
 {
+    #[inline]
     pub fn new(init: T, length: u32) -> Self {
         debug_assert!(usize::try_from(length).is_ok());
 
@@ -349,6 +420,7 @@ where
         }
     }
 
+    #[inline]
     pub fn finish(&mut self, output: &mut impl Extend<Token<T>>) {
         let should_emit_reference = self.length >= 2;
 
@@ -403,6 +475,7 @@ impl<T> Decoder<T>
 where
     T: Copy + Eq,
 {
+    #[inline]
     pub fn new(init: T, length: u32) -> Self {
         debug_assert!(usize::try_from(length).is_ok());
 
@@ -412,6 +485,7 @@ where
         }
     }
 
+    #[inline]
     pub fn decode(
         &mut self,
         mut tokens: impl Iterator<Item = Token<T>>,
@@ -470,6 +544,7 @@ where
         }
     }
 
+    #[inline]
     pub fn decode_all(
         &mut self,
         mut tokens: impl Iterator<Item = Token<T>>,

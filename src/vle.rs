@@ -1,8 +1,9 @@
-use std::{error::Error, fmt, io, ops};
+use std::{error::Error, fmt, io, ops, process::Output};
 
 use crate::{
     bits::{ReadBits, WriteBits},
     encode::Encode,
+    math::Delta,
 };
 
 pub trait Unsigned:
@@ -313,7 +314,23 @@ where
 }
 
 /// Wrapper type to encode values using variable-length encoding.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Vle<T>(pub T);
+
+impl<T> Delta for Vle<T>
+where
+    T: Delta,
+{
+    #[inline]
+    fn delta(self, base: Self) -> Vle<T> {
+        Vle(self.0.delta(base.0))
+    }
+
+    #[inline]
+    fn from_delta(base: Self, delta: Vle<T>) -> Self {
+        Vle(T::from_delta(base.0, delta.0))
+    }
+}
 
 impl<T> Encode for Vle<T>
 where

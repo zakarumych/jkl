@@ -1,14 +1,7 @@
 use core::f32;
-use std::{
-    convert::Infallible,
-    io::{Read, Write},
-};
+use std::convert::Infallible;
 
-use crate::{
-    ans::Context,
-    encode::FixedCode,
-    jackal::{DecodeError, DecompressError},
-};
+use crate::{encode::FixedCode, jackal::DecodeError};
 
 /// Size of the super-block in number of blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -409,8 +402,10 @@ impl FixedCode for Extent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Compression {
     None = 0,
-    Ans = 1,
-    Lz77Ans = 2,
+    Lz77 = 1,
+    Ans = 2,
+    Lz77Ans = 3,
+    RleAns = 4,
 }
 
 impl FixedCode for Compression {
@@ -426,8 +421,10 @@ impl FixedCode for Compression {
         let value = input[0];
         let compression = match value {
             0 => Compression::None,
-            1 => Compression::Ans,
-            2 => Compression::Lz77Ans,
+            1 => Compression::Lz77,
+            2 => Compression::Ans,
+            3 => Compression::Lz77Ans,
+            4 => Compression::RleAns,
             _ => return Err(DecodeError::InvalidCompression),
         };
         Ok(compression)

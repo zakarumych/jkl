@@ -30,7 +30,74 @@ where
     }
 }
 
+macro_rules! impl_fixedcode_le_bytes {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl $crate::encode::FixedCode for $t {
+                const SIZE: usize = std::mem::size_of::<Self>();
+                type Array = [u8; Self::SIZE];
+                type Error = std::convert::Infallible;
+
+                fn encode(&self) -> Self::Array {
+                    self.to_le_bytes()
+                }
+
+                fn decode(input: &Self::Array) -> Result<Self, Self::Error> {
+                    Ok(Self::from_le_bytes(*input))
+                }
+            }
+        )*
+    };
+}
+
 impl_fixedcode_le_bytes!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64);
+
+macro_rules! impl_fixedcode_tuple {
+    () => {
+        impl Encode for () {
+            fn bit_len(&self) -> usize {
+                0
+            }
+
+            fn write(&self, _write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn read(_read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+                Ok(())
+            }
+        }
+    };
+    ($($a:ident)+) => {
+        impl<$($a),*> Encode for ($($a,)*)
+        where
+            $($a: Encode),*
+        {
+            fn bit_len(&self) -> usize {
+                let ($($a,)*) = self;
+                0 $(+ $a.bit_len())*
+            }
+
+            fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+                let ($($a,)*) = self;
+                $(
+                    $a.write(write)?;
+                )*
+                Ok(())
+            }
+
+            fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+                Ok((
+                    $(
+                        $a::read(read)?,
+                    )*
+                ))
+            }
+        }
+    };
+}
+
+for_tuple!(impl_fixedcode_tuple);
 
 pub trait Encode {
     fn bit_len(&self) -> usize;

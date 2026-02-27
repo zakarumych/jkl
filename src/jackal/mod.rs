@@ -15,8 +15,8 @@ use crate::encode::FixedCode;
 
 pub use self::header::{Extent, Format, JackalBlock, JackalHeader, MipLevels, SuperBlockSize};
 
-mod block;
-mod compress;
+// mod block;
+// mod compress;
 mod header;
 
 #[derive(Clone, Copy, Debug)]

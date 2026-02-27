@@ -6,6 +6,8 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, Sub, SubAssign},
 };
 
+use crate::encode::Encode;
+
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     // This lerp is monotonic and produces exactly a for t = 0 and b for t = 1.
@@ -4219,3 +4221,39 @@ pub const fn deinterleave8_4(x: u32) -> (u8, u8, u8, u8) {
         compact8_4(x >> 3),
     )
 }
+
+/// Delta allows calculating "difference" between base and current value,
+/// and reconstructing current value from base and delta.
+///
+/// Computed deltas should reduce the entropy of the data, so that they can be efficiently compressed.
+pub trait Delta: Ord + Sized {
+    /// Calculate the delta between self and base.
+    /// Base must be less than or equal to self.
+    ///
+    /// Using base that is greater than self may produce inadequate deltas
+    /// or even panic in debug mode.
+    fn delta(self, base: Self) -> Self;
+
+    /// Reconstruct the original value from base and delta.
+    fn from_delta(base: Self, delta: Self) -> Self;
+}
+
+macro_rules! impl_delta_for_numeric {
+    ($($num:ty)*) => {
+        $(
+            impl Delta for $num {
+                #[inline(always)]
+                fn delta(self, base: Self) -> Self {
+                    self - base
+                }
+
+                #[inline(always)]
+                fn from_delta(base: Self, delta: Self) -> Self {
+                    base + delta
+                }
+            }
+        )*
+    };
+}
+
+impl_delta_for_numeric!(u8 u16 u32 u64 i8 i16 i32 i64);

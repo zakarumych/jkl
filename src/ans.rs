@@ -1,10 +1,11 @@
-use std::{cmp, error::Error, fmt, hash::Hash, io};
+use std::{cmp, error::Error, fmt, hash::Hash, io, ops};
 
 use hashbrown::HashMap;
 
 use crate::{
     bits::{ReadBits, WriteBits},
     encode::Encode,
+    math::Delta,
     vle,
 };
 
@@ -16,10 +17,7 @@ pub struct Context<T> {
     total: u64,
 }
 
-impl<T> Context<T>
-where
-    T: Eq + Hash + Copy,
-{
+impl<T> Context<T> {
     // Build context from sorted frequencies and frequency map.
     ///
     /// Frequency sequence is sorted by symbols.
@@ -27,7 +25,10 @@ where
     fn build(
         freqs_sorted: impl IntoIterator<Item = (T, u64)>,
         freqs: Option<HashMap<T, u64>>,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Eq + Hash + Copy,
+    {
         let mut cumul = HashMap::<T, u64>::new();
         let mut accum = 0u64;
         let build_freqs = freqs.is_none();
@@ -71,14 +72,17 @@ where
     /// Build context from sorted frequencies.
     ///
     /// Frequency sequence is sorted by symbols.
-    pub fn from_sorted_frequencies(freqs_sorted: impl IntoIterator<Item = (T, u64)>) -> Self {
+    pub fn from_sorted_frequencies(freqs_sorted: impl IntoIterator<Item = (T, u64)>) -> Self
+    where
+        T: Eq + Hash + Copy,
+    {
         Self::build(freqs_sorted, None)
     }
 
     /// Build context from frequency map.
     pub fn from_frequency_map(freqs: HashMap<T, u64>) -> Self
     where
-        T: Ord,
+        T: Ord + Hash + Copy,
     {
         Self::from_frequency_map_ord_by(freqs, |a, b| a.cmp(&b))
     }
@@ -88,7 +92,10 @@ where
     pub fn from_frequency_map_ord_by(
         freqs: HashMap<T, u64>,
         ord: impl Fn(T, T) -> cmp::Ordering,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Eq + Hash + Copy,
+    {
         let mut freqs_sorted = freqs.iter().map(|(s, c)| (*s, *c)).collect::<Vec<_>>();
         freqs_sorted.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
         Self::build(freqs_sorted, Some(freqs))
@@ -97,7 +104,7 @@ where
     /// Build context from input data.
     pub fn from_input(input: impl IntoIterator<Item = T>) -> Self
     where
-        T: Ord,
+        T: Ord + Hash + Copy,
     {
         Self::from_input_ord_by(input, |a, b| a.cmp(&b))
     }
@@ -108,7 +115,10 @@ where
     pub fn from_input_ord_by(
         input: impl IntoIterator<Item = T>,
         ord: impl Fn(T, T) -> cmp::Ordering,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Ord + Hash + Copy,
+    {
         let mut freqs = HashMap::<T, u64>::new();
 
         input.into_iter().for_each(|symbol| {
@@ -118,14 +128,44 @@ where
         Self::from_frequency_map_ord_by(freqs, ord)
     }
 
-    pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, u64)> + '_ {
+    pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, u64)> + '_
+    where
+        T: Copy,
+    {
         self.freqs.iter().map(|(s, c)| (*s, *c))
+    }
+
+    fn bit_len(&self) -> usize
+    where
+        T: Copy + Default + Ord + Delta + Encode,
+    {
+        let mut bit_len = 0;
+
+        let mut freqs = self.freqs().collect::<Vec<_>>();
+        freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
+
+        {
+            // Write number of symbols.
+            bit_len += vle::encode_bit_len(freqs.len());
+
+            // Encode frequencies.
+            let mut last = T::default();
+            for (symbol, count) in &freqs {
+                bit_len += vle::encode_bit_len(*count);
+
+                let d = symbol.delta(last);
+                last = *symbol;
+                bit_len += d.bit_len();
+            }
+        }
+
+        bit_len
     }
 
     /// Write minimal header for Ans encoding.
     pub fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()>
     where
-        T: Ord + Encode,
+        T: Copy + Default + Ord + Delta + Encode,
     {
         let mut freqs = self.freqs().collect::<Vec<_>>();
         freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
@@ -135,35 +175,13 @@ where
             vle::encode(freqs.len(), writer)?;
 
             // Encode frequencies.
+            let mut last = T::default();
             for (symbol, count) in &freqs {
                 vle::encode(*count, writer)?;
-                symbol.write(writer)?;
-            }
-        }
 
-        Ok(())
-    }
-
-    /// Write minimal header for Ans encoding.
-    pub fn write_ord_by(
-        &self,
-        writer: &mut WriteBits<impl io::Write>,
-        ord: impl Fn(T, T) -> cmp::Ordering,
-    ) -> io::Result<()>
-    where
-        T: Encode,
-    {
-        let mut freqs = self.freqs().collect::<Vec<_>>();
-        freqs.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
-
-        {
-            // Write number of symbols.
-            vle::encode(freqs.len(), writer)?;
-
-            // Encode frequencies.
-            for (symbol, count) in &freqs {
-                vle::encode(*count, writer)?;
-                symbol.write(writer)?;
+                let d = symbol.delta(last);
+                last = *symbol;
+                d.write(writer)?;
             }
         }
 
@@ -181,6 +199,7 @@ where
         delta: impl Fn(T, T) -> U,
     ) -> io::Result<()>
     where
+        T: Copy,
         U: Encode,
     {
         let mut freqs = self.freqs().collect::<Vec<_>>();
@@ -209,7 +228,7 @@ where
     /// Should be used if context was writtent without delta encoding.
     pub fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self>
     where
-        T: Encode,
+        T: Copy + Default + Eq + Hash + Delta + Encode,
     {
         // Read number of symbols.
         let len = { vle::decode::<usize, _>(reader)? };
@@ -218,10 +237,13 @@ where
         let mut freqs_sorted = Vec::<(T, u64)>::new();
         freqs_sorted.reserve(len);
 
+        let mut last = T::default();
         for _ in 0..len {
             let count = vle::decode::<u64, _>(reader)?;
 
-            let symbol = T::read(reader)?;
+            let d = T::read(reader)?;
+            let symbol = T::from_delta(last, d);
+            last = symbol;
             freqs_sorted.push((symbol, count));
         }
 
@@ -241,6 +263,7 @@ where
         from_delta: impl Fn(T, U) -> T,
     ) -> io::Result<Self>
     where
+        T: Copy + Eq + Hash,
         U: Encode,
     {
         // Read number of symbols.
@@ -261,6 +284,23 @@ where
         }
 
         Ok(Self::from_sorted_frequencies(freqs_sorted))
+    }
+}
+
+impl<T> Encode for Context<T>
+where
+    T: Copy + Default + Ord + Hash + Delta + Encode,
+{
+    fn bit_len(&self) -> usize {
+        Context::bit_len(self)
+    }
+
+    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        Context::write(self, writer)
+    }
+
+    fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+        Context::read(read)
     }
 }
 

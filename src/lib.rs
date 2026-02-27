@@ -73,26 +73,6 @@ macro_rules! impl_fixedcode_struct {
     }
 }
 
-macro_rules! impl_fixedcode_le_bytes {
-    ($($t:ty),* $(,)?) => {
-        $(
-            impl $crate::encode::FixedCode for $t {
-                const SIZE: usize = std::mem::size_of::<Self>();
-                type Array = [u8; Self::SIZE];
-                type Error = std::convert::Infallible;
-
-                fn encode(&self) -> Self::Array {
-                    self.to_le_bytes()
-                }
-
-                fn decode(input: &Self::Array) -> Result<Self, Self::Error> {
-                    Ok(Self::from_le_bytes(*input))
-                }
-            }
-        )*
-    };
-}
-
 macro_rules! impl_fixedcode_array {
     ($name:ident([$e:ty; $n:literal]) | $error:ty) => {
         impl $crate::encode::FixedCode for $name {
@@ -128,6 +108,19 @@ macro_rules! impl_fixedcode_array {
                 Ok($name(result.map(|slot| slot.unwrap())))
             }
         }
+    };
+}
+
+macro_rules! for_tuple {
+    ($macro:ident) => {
+        for_tuple!($macro for A B C D E F G H I J K L M N O P);
+    };
+    ($macro:ident for ) => {
+        $macro!();
+    };
+    ($macro:ident for $head:ident $($tail:ident)*) => {
+        for_tuple!($macro for $($tail)*);
+        $macro!($head $($tail)*);
     };
 }
 
