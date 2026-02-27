@@ -388,7 +388,7 @@ impl AnyFormat for bc4::Block {
         let mut texels = Vec::new();
         compressor.decompress_tokens(texel_cx, texel_tokens.into_iter(), &mut texels)?;
 
-        if colors.len() % 2 != 0 || texels.len() % 6 != 0 || colors.len() / 2 != texels.len() / 6 {
+        if colors.len() % 2 != 0 || texels.len() % 6 != 0 || colors.len() * 3 != texels.len() {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Corrupt BC4 chunk"));
         }
 
@@ -491,7 +491,7 @@ impl AnyFormat for bc5::Block {
         let mut texels = Vec::new();
         compressor.decompress_tokens(texel_cx, texel_tokens.into_iter(), &mut texels)?;
 
-        if colors.len() % 4 != 0 || texels.len() % 12 != 0 || colors.len() / 4 != texels.len() / 12
+        if colors.len() % 4 != 0 || texels.len() % 12 != 0 || colors.len() * 3 != texels.len()
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Corrupt BC5 chunk"));
         }
