@@ -293,13 +293,14 @@ pub struct RleContext;
 /// Iterator that expands a single RLE token into its individual symbols,
 /// or yields one error and then stops. Used by `RleCompressor::decompress_tokens2`.
 ///
-/// The two cases are mutually exclusive and represented as enum variants.
+/// The two variants are mutually exclusive. `Repeat { remaining: 0 }` is the
+/// unique exhausted state; the `Error` variant always has exactly one item left.
 enum RleExpand<T> {
     Repeat { value: T, remaining: usize },
-    Error(Option<io::Error>),
+    Error(io::Error),
 }
 
-impl<T: Copy> Iterator for RleExpand<T> {
+impl<T: Copy + Default> Iterator for RleExpand<T> {
     type Item = io::Result<T>;
 
     #[inline]
@@ -313,7 +314,13 @@ impl<T: Copy> Iterator for RleExpand<T> {
                     Some(Ok(*value))
                 }
             }
-            RleExpand::Error(e) => e.take().map(Err),
+            RleExpand::Error(_) => {
+                let old = std::mem::replace(self, RleExpand::Repeat { value: T::default(), remaining: 0 });
+                match old {
+                    RleExpand::Error(e) => Some(Err(e)),
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 
@@ -321,7 +328,7 @@ impl<T: Copy> Iterator for RleExpand<T> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         let n = match self {
             RleExpand::Repeat { remaining, .. } => *remaining,
-            RleExpand::Error(e) => e.is_some() as usize,
+            RleExpand::Error(_) => 1,
         };
         (n, Some(n))
     }
@@ -337,11 +344,14 @@ impl<T: Copy> Iterator for RleExpand<T> {
                     Some(Ok(*value))
                 }
             }
-            RleExpand::Error(e) => {
+            RleExpand::Error(_) => {
+                let old = std::mem::replace(self, RleExpand::Repeat { value: T::default(), remaining: 0 });
                 if n == 0 {
-                    e.take().map(Err)
+                    match old {
+                        RleExpand::Error(e) => Some(Err(e)),
+                        _ => unreachable!(),
+                    }
                 } else {
-                    *e = None;
                     None
                 }
             }
@@ -360,8 +370,7 @@ impl<T: Copy> Iterator for RleExpand<T> {
                 }
                 acc
             }
-            RleExpand::Error(Some(e)) => f(init, Err(e)),
-            RleExpand::Error(None) => init,
+            RleExpand::Error(e) => f(init, Err(e)),
         }
     }
 }
@@ -429,7 +438,7 @@ impl Compressor for RleCompressor {
     ) -> impl Iterator<Item = io::Result<T>> {
         input.flat_map(|result| match result {
             Ok(rle::Rle { value, count }) => RleExpand::Repeat { value, remaining: count },
-            Err(e) => RleExpand::Error(Some(e)),
+            Err(e) => RleExpand::Error(e),
         })
     }
 }
