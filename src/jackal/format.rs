@@ -1,4 +1,4 @@
-use std::{cell::Cell, io, marker::PhantomData};
+use std::io;
 
 use crate::{
     bc1,
@@ -44,99 +44,6 @@ pub(super) trait AnyFormat: Sized + 'static {
         C: Compressor;
 }
 
-/// Makes and iterator and an extend adapter for filling an iterator while reading compressed data.
-/// Reading will stop only when the image is fully filled or an error occurs.
-/// The error will be stored in `error` and checked after adapter usage.
-fn iter_fill<'b, R, I, T, F, S, P>(
-    finished: &'b Cell<bool>,
-    result: &'b mut io::Result<()>,
-    read: &'b mut ReadBits<R>,
-    image: I,
-    map: F,
-) -> (impl Iterator<Item = T> + 'b, impl Extend<S> + 'b)
-where
-    R: io::Read,
-    I: Iterator<Item = &'b mut P> + 'b,
-    T: Encode + 'static,
-    F: Fn(S) -> P + 'static,
-    P: 'static,
-{
-    struct IterToken<'a, T, R> {
-        read: &'a mut ReadBits<R>,
-        result: &'a mut io::Result<()>,
-        _marker: std::marker::PhantomData<T>,
-        finished: &'a Cell<bool>,
-    }
-
-    impl<'a, T, R> Iterator for IterToken<'a, T, R>
-    where
-        T: Encode,
-        R: io::Read,
-    {
-        type Item = T;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.finished.get() {
-                return None;
-            }
-
-            match T::read(self.read) {
-                Ok(token) => Some(token),
-                Err(err) => {
-                    *self.result = Err(err);
-                    self.finished.set(true);
-                    None
-                }
-            }
-        }
-    }
-
-    struct ExtendImage<'a, I, F, P> {
-        image: I,
-        map: F,
-        finished: &'a Cell<bool>,
-        marker: PhantomData<fn(&mut I) -> P>,
-    }
-
-    impl<'a, S, I, F, P: 'a> Extend<S> for ExtendImage<'a, I, F, P>
-    where
-        F: Fn(S) -> P + 'static,
-        I: Iterator<Item = &'a mut P>,
-    {
-        fn extend<E: IntoIterator<Item = S>>(&mut self, iter: E) {
-            if self.finished.get() {
-                return;
-            }
-            let mut iter = iter.into_iter();
-            while let Some(s) = iter.next() {
-                match self.image.next() {
-                    Some(p) => *p = (self.map)(s),
-                    None => {
-                        self.finished.set(true);
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
-    let iter = IterToken {
-        read,
-        result,
-        _marker: std::marker::PhantomData,
-        finished: &finished,
-    };
-
-    let extend = ExtendImage {
-        image: image,
-        marker: PhantomData,
-        map,
-        finished: &finished,
-    };
-
-    (iter, extend)
-}
-
 impl AnyFormat for Rgb8U {
     type Context<C: Compressor> = C::Context<Vle<u32>>;
 
@@ -155,11 +62,17 @@ impl AnyFormat for Rgb8U {
             &mut tokens,
         )?;
 
-        for (i, chunk) in tokens.into_iter().enumerate() {
-            offsets[i] = write.stream_position()?;
+        assert_eq!(
+            tokens.len(),
+            offsets.len(),
+            "Offsets count must match chunk count"
+        );
+
+        for idx in 0..offsets.len() {
+            offsets[idx] = write.stream_position()?;
 
             let mut write_bits = WriteBits::new(&mut write);
-            for token in chunk {
+            for token in &tokens[idx] {
                 token.write(&mut write_bits)?;
             }
             write_bits.finish()?;
@@ -178,18 +91,38 @@ impl AnyFormat for Rgb8U {
         C: Compressor,
     {
         let mut read_bits = crate::bits::ReadBits::new(read);
-        let finished = Cell::new(false);
-        let mut result = Ok(());
-        let (input, mut output) = iter_fill(
-            &finished,
-            &mut result,
-            &mut read_bits,
-            image.iter_mut(),
-            |Vle(bits)| Rgb8U::from_bits_interleaved(bits),
-        );
+        // let finished = Cell::new(false);
+        // let mut result = Ok(());
+        // let (input, mut output) = iter_fill(
+        //     &finished,
+        //     &mut result,
+        //     &mut read_bits,
+        //     image.iter_mut(),
+        //     |Vle(bits)| Rgb8U::from_bits_interleaved(bits),
+        // );
 
-        compressor.decompress_tokens(cx, input, &mut { output })?;
-        result
+        // compressor.decompress_tokens(cx, input, &mut { output })?;
+        // result
+
+        let mut symbols = compressor.decompress_tokens2(cx, read_tokens(&mut read_bits));
+
+        let width = image.width();
+        let height = image.height();
+        for y in 0..height {
+            let row = image.row_mut(y);
+            for x in 0..width {
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
+
+                row[x] = Rgb8U::from_bits_interleaved(bits);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -275,32 +208,92 @@ impl AnyFormat for bc1::Block {
 
         let mut read_bits = crate::bits::ReadBits::new(read);
 
-        let finished = Cell::new(false);
-        let mut result = Ok(());
-        let (input, mut output) = iter_fill(
-            &finished,
-            &mut result,
-            &mut read_bits,
-            image
-                .iter_mut()
-                .flat_map(|b| [&mut b.color0, &mut b.color1]),
-            |Vle(bits)| Rgb565::from_bits_interleaved(bits),
-        );
+        // let finished = Cell::new(false);
+        // let mut result = Ok(());
+        // let (input, mut output) = iter_fill(
+        //     &finished,
+        //     &mut result,
+        //     &mut read_bits,
+        //     image
+        //         .iter_mut()
+        //         .flat_map(|b| [&mut b.color0, &mut b.color1]),
+        //     |Vle(bits)| Rgb565::from_bits_interleaved(bits),
+        // );
 
-        compressor.decompress_tokens(color_cx, input, &mut { output })?;
-        result?;
+        // compressor.decompress_tokens2(color_cx, input, &mut { output })?;
+        // result?;
 
-        let finished = Cell::new(false);
-        let mut result = Ok(());
-        let (input, mut output) = iter_fill(
-            &finished,
-            &mut result,
-            &mut read_bits,
-            image.iter_mut().flat_map(|b| b.texels.iter_mut()),
-            |byte: u8| byte,
-        );
+        // let finished = Cell::new(false);
+        // let mut result = Ok(());
+        // let (input, mut output) = iter_fill(
+        //     &finished,
+        //     &mut result,
+        //     &mut read_bits,
+        //     image.iter_mut().flat_map(|b| b.texels.iter_mut()),
+        //     |byte: u8| byte,
+        // );
 
-        compressor.decompress_tokens(texel_cx, input, &mut { output })?;
-        result
+        // compressor.decompress_tokens(texel_cx, input, &mut { output })?;
+        // result
+
+        let mut symbols = compressor.decompress_tokens2(color_cx, read_tokens(&mut read_bits));
+
+        let width = image.width();
+        let height = image.height();
+
+        for y in 0..height {
+            let row = image.row_mut(y);
+            for x in 0..width {
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
+
+                row[x].color0 = Rgb565::from_bits_interleaved(bits);
+
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
+
+                row[x].color1 = Rgb565::from_bits_interleaved(bits);
+            }
+        }
+
+        drop(symbols);
+
+        let mut symbols = compressor.decompress_tokens2(texel_cx, read_tokens(&mut read_bits));
+
+        for y in 0..height {
+            let row = image.row_mut(y);
+            for x in 0..width {
+                for i in 0..4 {
+                    let bits = symbols.next().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "Not enough data to fill the image",
+                        )
+                    })??;
+
+                    row[x].texels[i] = bits;
+                }
+            }
+        }
+
+        Ok(())
     }
+}
+
+fn read_tokens<T>(read: &mut ReadBits<impl io::Read>) -> impl Iterator<Item = io::Result<T>> + '_
+where
+    T: Encode,
+{
+    std::iter::from_fn(move || match T::read(read) {
+        Ok(token) => Some(Ok(token)),
+        Err(err) => Some(Err(err)),
+    })
 }

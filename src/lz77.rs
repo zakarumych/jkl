@@ -454,12 +454,19 @@ pub struct Decoder<T> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DecodeError {
+    /// Signals that decoder did not end emitting tokens,
+    /// which may mean that compressed data is corrupted.
+    Incomplete,
+
+    /// Signals that a reference token has invalid distance, i.e. distance is greater than or equal to the window size.
     InvalidDistance { distance: usize, window: usize },
 }
 
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
+            DecodeError::Incomplete => write!(f, "incomplete decoding"),
+
             DecodeError::InvalidDistance { distance, window } => write!(
                 f,
                 "invalid distance {} for window of size {}",
@@ -595,6 +602,15 @@ where
         }
 
         Ok(())
+    }
+
+    // If decoding finished correctly, state should be clean, i.e. no pending entries.
+    pub fn finish(&self) -> Result<(), DecodeError> {
+        if self.entry.is_some() {
+            Err(DecodeError::Incomplete)
+        } else {
+            Ok(())
+        }
     }
 }
 

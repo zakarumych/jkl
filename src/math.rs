@@ -6,8 +6,6 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, Sub, SubAssign},
 };
 
-use crate::encode::Encode;
-
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     // This lerp is monotonic and produces exactly a for t = 0 and b for t = 1.

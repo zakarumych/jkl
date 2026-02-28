@@ -125,6 +125,12 @@ impl<'a, T> ImageRef<'a, T> {
         &self.pixels[y * self.stride + x]
     }
 
+    /// Returns a reference to the row at vertical coordinate `y`.
+    pub fn row(&self, y: usize) -> &'a [T] {
+        assert!(y < self.height);
+        &self.pixels[y * self.stride..][..self.width]
+    }
+
     /// Returns a sub-region of this image as a new `ImageRef`.
     ///
     /// The returned view starts at (`x`, `y`) and has dimensions `w` × `h`.
@@ -493,6 +499,27 @@ impl<'a, T> ImageMut<'a, T> {
     /// Panics if the computed index `y * stride + x` is out of bounds.
     pub fn get(&self, x: usize, y: usize) -> &T {
         &self.pixels[y * self.stride + x]
+    }
+
+    /// Returns a reference to the row at vertical coordinate `y`.
+    pub fn row(&self, y: usize) -> &'_ [T] {
+        assert!(y < self.height);
+        &self.pixels[y * self.stride..][..self.width]
+    }
+
+    /// Returns a reference to the pixel at coordinates (`x`, `y`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the computed index `y * stride + x` is out of bounds.
+    pub fn get_mut(&mut self, x: usize, y: usize) -> &mut T {
+        &mut self.pixels[y * self.stride + x]
+    }
+
+    /// Returns a reference to the row at vertical coordinate `y`.
+    pub fn row_mut(&mut self, y: usize) -> &'_ mut [T] {
+        assert!(y < self.height);
+        &mut self.pixels[y * self.stride..][..self.width]
     }
 
     /// Sets the pixel at coordinates (`x`, `y`) to `value`.

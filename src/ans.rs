@@ -1,4 +1,4 @@
-use std::{cmp, error::Error, fmt, hash::Hash, io, ops};
+use std::{cmp, error::Error, fmt, hash::Hash, io};
 
 use hashbrown::HashMap;
 
@@ -391,8 +391,8 @@ where
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DecodeError {
-    /// Signals that decoder did not end in finil state,
-    /// which means that compressed data is corrupted or truncated.
+    /// Signals that decoder did not end in final state,
+    /// which may mean that compressed data is corrupted.
     Incomplete,
 }
 

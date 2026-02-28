@@ -119,6 +119,9 @@ pub enum Format {
     /// BC1 (DXT1) block compression format.
     BC1 = 256,
 
+    /// BC2 (DXT3) block compression format.
+    BC2,
+
     /// BC3 (DXT5) block compression format.
     BC3,
 

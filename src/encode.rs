@@ -69,11 +69,13 @@ macro_rules! impl_fixedcode_tuple {
         }
     };
     ($($a:ident)+) => {
+        #[allow(non_snake_case)]
         impl<$($a),*> Encode for ($($a,)*)
         where
             $($a: Encode),*
         {
             fn bit_len(&self) -> usize {
+
                 let ($($a,)*) = self;
                 0 $(+ $a.bit_len())*
             }

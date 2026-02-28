@@ -36,6 +36,12 @@ pub trait Compressor {
         input: impl Iterator<Item = Self::Token<T>>,
         output: &mut impl Extend<T>,
     ) -> io::Result<()>;
+
+    fn decompress_tokens2<T: Symbol>(
+        &self,
+        cx: &Self::Context<T>,
+        input: impl Iterator<Item = io::Result<Self::Token<T>>>,
+    ) -> impl Iterator<Item = io::Result<T>>;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -106,6 +112,27 @@ impl Compressor for LZ77Compressor {
 
         Ok(())
     }
+
+    fn decompress_tokens2<T: Symbol>(
+        &self,
+        _cx: &LZ77Context,
+        input: impl Iterator<Item = io::Result<lz77::Token<T>>>,
+    ) -> impl Iterator<Item = io::Result<T>> {
+        let mut decoder = lz77::Decoder::new(T::default(), self.window_size);
+        let mut extact_error = ExtractError::new(input);
+
+        std::iter::from_fn(move || match decoder.decode(extact_error.by_ref()) {
+            Ok(Some(symbol)) => Some(Ok(symbol)),
+            Ok(None) => match extact_error.result() {
+                Ok(()) => match decoder.finish() {
+                    Ok(()) => None,
+                    Err(err) => Some(Err(io::Error::new(io::ErrorKind::InvalidData, err))),
+                },
+                Err(err) => Some(Err(err)),
+            },
+            Err(err) => Some(Err(io::Error::new(io::ErrorKind::InvalidData, err))),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -163,6 +190,26 @@ impl Compressor for AnsCompressor {
             Err(err) => Err(io::Error::new(io::ErrorKind::InvalidData, err)),
         }
     }
+
+    fn decompress_tokens2<T: Symbol>(
+        &self,
+        cx: &ans::Context<T>,
+        input: impl Iterator<Item = io::Result<u32>>,
+    ) -> impl Iterator<Item = io::Result<T>> {
+        let mut decoder = ans::Decoder::new(&cx);
+        let mut extact_error = ExtractError::new(input);
+
+        std::iter::from_fn(move || match decoder.decode(extact_error.by_ref()) {
+            Some(symbol) => Some(Ok(symbol)),
+            None => match extact_error.result() {
+                Ok(()) => match decoder.finish() {
+                    Ok(()) => None,
+                    Err(err) => Some(Err(io::Error::new(io::ErrorKind::InvalidData, err))),
+                },
+                Err(err) => Some(Err(err)),
+            },
+        })
+    }
 }
 
 impl<A, B> Compressor for (A, B)
@@ -202,6 +249,21 @@ where
         a.decompress_tokens(a_cx, a_tokens.into_iter(), output)?;
         Ok(())
     }
+
+    fn decompress_tokens2<T: Symbol>(
+        &self,
+        cx: &Self::Context<T>,
+        input: impl Iterator<Item = io::Result<Self::Token<T>>>,
+    ) -> impl Iterator<Item = io::Result<T>> {
+        let (a, b) = self;
+
+        let (a_cx, b_cx) = cx;
+
+        let a_tokens = b.decompress_tokens2(b_cx, input);
+        let symbols = a.decompress_tokens2(a_cx, a_tokens);
+
+        symbols
+    }
 }
 
 // fn take_error_or_eof(read_error: &mut Option<io::Error>) -> io::Error {
@@ -223,3 +285,38 @@ where
 //         }
 //     })
 // }
+
+struct ExtractError<I> {
+    iter: I,
+    error: Option<io::Error>,
+}
+
+impl<I> ExtractError<I> {
+    fn new(iter: I) -> Self {
+        ExtractError { iter, error: None }
+    }
+
+    fn result(&mut self) -> io::Result<()> {
+        match self.error.take() {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<T, I> Iterator for ExtractError<I>
+where
+    I: Iterator<Item = io::Result<T>>,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.iter.next()? {
+            Ok(token) => Some(token),
+            Err(err) => {
+                self.error = Some(err);
+                None
+            }
+        }
+    }
+}

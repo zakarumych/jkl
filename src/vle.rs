@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, io, ops, process::Output};
+use std::{error::Error, fmt, io, ops};
 
 use crate::{
     bits::{ReadBits, WriteBits},
