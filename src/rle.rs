@@ -11,6 +11,21 @@ pub struct Rle<T> {
     pub count: u32,
 }
 
+impl<T: Default> Default for Rle<T> {
+    /// Returns an `Rle` token with the default value and a count of `1`.
+    ///
+    /// A count of `1` is chosen because RLE tokens always represent at least one
+    /// occurrence of a value; a count of `0` would be invalid in the encoding.
+    /// This default exists solely to satisfy the `Symbol: Default` bound and is
+    /// not expected to appear in compressed output.
+    fn default() -> Self {
+        Rle {
+            value: T::default(),
+            count: 1,
+        }
+    }
+}
+
 impl<T> Delta for Rle<T>
 where
     T: Delta,

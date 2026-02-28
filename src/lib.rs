@@ -146,4 +146,7 @@ pub mod vle;
 pub mod z_curve;
 pub mod zigzaq;
 
-pub use jackal::{DecodeError, DecompressError, Extent};
+pub use jackal::{
+    AnsCompressor, Compression, Config, DecodeError, DecompressError, Extent, Format,
+    LZ77Compressor, RleCompressor,
+};

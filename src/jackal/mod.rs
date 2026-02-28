@@ -13,7 +13,8 @@ use std::{fmt, io};
 
 use crate::encode::FixedCode;
 
-pub use self::header::{Extent, Format, JackalBlock, JackalHeader, MipLevels, SuperBlockSize};
+pub use self::compress::{AnsCompressor, LZ77Compressor, RleCompressor};
+pub use self::header::{Compression, Extent, Format, JackalBlock, JackalHeader, MipLevels, SuperBlockSize};
 
 mod compress;
 mod format;
@@ -77,6 +78,49 @@ impl From<DecodeError> for DecompressError {
     #[inline(always)]
     fn from(err: DecodeError) -> Self {
         DecompressError::Decode(err)
+    }
+}
+
+/// Configuration for encoding a texture with Jackal compression.
+///
+/// `Config` controls how the encoder partitions the input image into superblocks
+/// and which compression algorithm is applied. The superblock size is chosen
+/// automatically to minimise the estimated GPU decompression cost:
+///
+/// ```text
+/// cost = (flat_cost + size_cost * superblock_area) * ceil(superblock_count / 64) * 64
+/// ```
+///
+/// where `flat_cost` models the fixed per-superblock GPU dispatch overhead and
+/// `size_cost` models the per-texel work. Adjust these two values to match the
+/// characteristics of your target GPU.
+#[derive(Clone, Debug)]
+pub struct Config {
+    /// Fixed cost per superblock, modelling GPU dispatch overhead.
+    ///
+    /// A higher value encourages larger superblocks (fewer dispatches).
+    pub flat_cost: f32,
+
+    /// Cost per texel within a superblock, modelling per-texel GPU work.
+    ///
+    /// A higher value encourages smaller superblocks (less work per dispatch).
+    pub size_cost: f32,
+
+    /// Target pixel / block format stored in the output file.
+    pub format: Format,
+
+    /// Compression algorithm applied to the texel data.
+    pub compression: Compression,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            flat_cost: 64.0,
+            size_cost: 1.0,
+            format: Format::RGB8,
+            compression: Compression::RleAns,
+        }
     }
 }
 

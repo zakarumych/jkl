@@ -1,6 +1,6 @@
 use std::{hash::Hash, io};
 
-use crate::{ans, encode::Encode, lz77, math::Delta};
+use crate::{ans, encode::Encode, lz77, math::Delta, rle};
 
 /// Trait for types viable as symbols for compression.
 pub trait Symbol: Copy + Default + Ord + Hash + Delta + Encode + 'static {}
@@ -285,6 +285,96 @@ where
 //         }
 //     })
 // }
+
+/// Context for RLE compression. RLE is stateless, so this holds no data.
+#[derive(Clone, Copy, Debug)]
+pub struct RleContext;
+
+impl Encode for RleContext {
+    #[inline]
+    fn bit_len(&self) -> usize {
+        0
+    }
+
+    #[inline]
+    fn write(&self, _write: &mut crate::bits::WriteBits<impl io::Write>) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn read(_read: &mut crate::bits::ReadBits<impl io::Read>) -> io::Result<Self> {
+        Ok(RleContext)
+    }
+}
+
+/// Compressor that uses run-length encoding (RLE).
+///
+/// Consecutive equal symbols are compressed into a single `Rle` token
+/// carrying the symbol value and its repetition count.
+#[derive(Clone, Copy, Debug)]
+pub struct RleCompressor;
+
+impl Compressor for RleCompressor {
+    type Token<T: Symbol> = rle::Rle<T>;
+    type Context<T: Symbol> = RleContext;
+
+    fn compress_symbols<T: Symbol>(
+        &self,
+        input: impl Iterator<Item = impl Iterator<Item = T>>,
+        output: &mut Vec<Vec<rle::Rle<T>>>,
+    ) -> io::Result<RleContext> {
+        for (i, chunk) in input.enumerate() {
+            if output.len() == i {
+                output.push(Vec::new());
+            }
+            output[i].extend(rle::rle(chunk));
+        }
+        Ok(RleContext)
+    }
+
+    fn decompress_tokens<T: Symbol>(
+        &self,
+        _cx: &RleContext,
+        input: impl Iterator<Item = rle::Rle<T>>,
+        output: &mut impl Extend<T>,
+    ) -> io::Result<()> {
+        for rle::Rle { value, count } in input {
+            output.extend(std::iter::repeat(value).take(count as usize));
+        }
+        Ok(())
+    }
+
+    fn decompress_tokens2<T: Symbol>(
+        &self,
+        _cx: &RleContext,
+        input: impl Iterator<Item = io::Result<rle::Rle<T>>>,
+    ) -> impl Iterator<Item = io::Result<T>> {
+        let mut pending: Option<(T, u32)> = None;
+        let mut input = input;
+
+        std::iter::from_fn(move || loop {
+            if let Some((value, ref mut remaining)) = pending {
+                if *remaining > 0 {
+                    *remaining -= 1;
+                    return Some(Ok(value));
+                } else {
+                    pending = None;
+                }
+            }
+
+            match input.next() {
+                None => return None,
+                Some(Err(e)) => return Some(Err(e)),
+                Some(Ok(rle::Rle { value, count })) => {
+                    if count > 1 {
+                        pending = Some((value, count - 1));
+                    }
+                    return Some(Ok(value));
+                }
+            }
+        })
+    }
+}
 
 struct ExtractError<I> {
     iter: I,
