@@ -1,4 +1,4 @@
-use std::{hash::Hash, io};
+use std::{hash::Hash, io, num::NonZero};
 
 use crate::{ans, encode::Encode, lz77, math::Delta, rle};
 
@@ -293,84 +293,94 @@ pub struct RleContext;
 /// Iterator that expands a single RLE token into its individual symbols,
 /// or yields one error and then stops. Used by `RleCompressor::decompress_tokens2`.
 ///
-/// The two variants are mutually exclusive. `Repeat { remaining: 0 }` is the
-/// unique exhausted state; the `Error` variant always has exactly one item left.
-enum RleExpand<T> {
-    Repeat { value: T, remaining: usize },
-    Error(io::Error),
+/// The inner enum uses a `NonZero<usize>` niche to distinguish the two variants
+/// without a separate discriminant word, and `Option<io::Error>` exploits
+/// `io::Error`'s pointer niche so it is the same size as `io::Error` itself.
+/// For a `T` the size of `usize` the whole iterator is 16 bytes on 64-bit platforms.
+struct RleExpand<T>(RleExpandRepr<T>);
+
+enum RleExpandRepr<T> {
+    /// At least one `Ok(value)` item remains.
+    Repeat { remaining: NonZero<usize>, value: T },
+    /// Either one `Err` remains (Some) or the iterator is exhausted (None).
+    NoRepeat { maybe_error: Option<io::Error> },
 }
 
-impl<T: Copy + Default> Iterator for RleExpand<T> {
+impl<T: Copy> Iterator for RleExpand<T> {
     type Item = io::Result<T>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            RleExpand::Repeat { value, remaining } => {
-                if *remaining == 0 {
-                    None
-                } else {
-                    *remaining -= 1;
-                    Some(Ok(*value))
-                }
-            }
-            RleExpand::Error(_) => {
-                let old = std::mem::replace(self, RleExpand::Repeat { value: T::default(), remaining: 0 });
-                match old {
-                    RleExpand::Error(e) => Some(Err(e)),
-                    _ => unreachable!(),
-                }
-            }
+        // Extract Copy fields before mutating self.0.
+        let repeat_info = if let RleExpandRepr::Repeat { remaining, value } = &self.0 {
+            Some((remaining.get(), *value))
+        } else {
+            None
+        };
+        if let Some((rem, val)) = repeat_info {
+            self.0 = match NonZero::new(rem - 1) {
+                Some(nr) => RleExpandRepr::Repeat { remaining: nr, value: val },
+                None => RleExpandRepr::NoRepeat { maybe_error: None },
+            };
+            return Some(Ok(val));
         }
+        if let RleExpandRepr::NoRepeat { maybe_error } = &mut self.0 {
+            return maybe_error.take().map(Err);
+        }
+        unreachable!()
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = match self {
-            RleExpand::Repeat { remaining, .. } => *remaining,
-            RleExpand::Error(_) => 1,
+        let n = match &self.0 {
+            RleExpandRepr::Repeat { remaining, .. } => remaining.get(),
+            RleExpandRepr::NoRepeat { maybe_error } => maybe_error.is_some() as usize,
         };
         (n, Some(n))
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        match self {
-            RleExpand::Repeat { value, remaining } => {
-                if n >= *remaining {
-                    *remaining = 0;
-                    None
-                } else {
-                    *remaining -= n + 1;
-                    Some(Ok(*value))
-                }
+        let repeat_info = if let RleExpandRepr::Repeat { remaining, value } = &self.0 {
+            Some((remaining.get(), *value))
+        } else {
+            None
+        };
+        if let Some((rem, val)) = repeat_info {
+            if n >= rem {
+                self.0 = RleExpandRepr::NoRepeat { maybe_error: None };
+                return None;
             }
-            RleExpand::Error(_) => {
-                let old = std::mem::replace(self, RleExpand::Repeat { value: T::default(), remaining: 0 });
-                if n == 0 {
-                    match old {
-                        RleExpand::Error(e) => Some(Err(e)),
-                        _ => unreachable!(),
-                    }
-                } else {
-                    None
-                }
-            }
+            self.0 = match NonZero::new(rem - n - 1) {
+                Some(nr) => RleExpandRepr::Repeat { remaining: nr, value: val },
+                None => RleExpandRepr::NoRepeat { maybe_error: None },
+            };
+            return Some(Ok(val));
         }
+        if let RleExpandRepr::NoRepeat { maybe_error } = &mut self.0 {
+            return if n == 0 {
+                maybe_error.take().map(Err)
+            } else {
+                *maybe_error = None;
+                None
+            };
+        }
+        unreachable!()
     }
 
     fn fold<B, F>(self, init: B, mut f: F) -> B
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        match self {
-            RleExpand::Repeat { value, remaining } => {
+        match self.0 {
+            RleExpandRepr::Repeat { remaining, value } => {
                 let mut acc = init;
-                for _ in 0..remaining {
+                for _ in 0..remaining.get() {
                     acc = f(acc, Ok(value));
                 }
                 acc
             }
-            RleExpand::Error(e) => f(init, Err(e)),
+            RleExpandRepr::NoRepeat { maybe_error: Some(e) } => f(init, Err(e)),
+            RleExpandRepr::NoRepeat { maybe_error: None } => init,
         }
     }
 }
@@ -437,8 +447,11 @@ impl Compressor for RleCompressor {
         input: impl Iterator<Item = io::Result<rle::Rle<T>>>,
     ) -> impl Iterator<Item = io::Result<T>> {
         input.flat_map(|result| match result {
-            Ok(rle::Rle { value, count }) => RleExpand::Repeat { value, remaining: count },
-            Err(e) => RleExpand::Error(e),
+            Ok(rle::Rle { value, count }) => RleExpand(match NonZero::new(count) {
+                Some(remaining) => RleExpandRepr::Repeat { remaining, value },
+                None => RleExpandRepr::NoRepeat { maybe_error: None },
+            }),
+            Err(e) => RleExpand(RleExpandRepr::NoRepeat { maybe_error: Some(e) }),
         })
     }
 }
