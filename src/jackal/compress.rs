@@ -292,10 +292,11 @@ pub struct RleContext;
 
 /// Iterator that expands a single RLE token into its individual symbols,
 /// or yields one error and then stops. Used by `RleCompressor::decompress_tokens2`.
-struct RleExpand<T: Copy> {
-    value: T,
-    remaining: usize,
-    error: Option<io::Error>,
+///
+/// The two cases are mutually exclusive and represented as enum variants.
+enum RleExpand<T> {
+    Repeat { value: T, remaining: usize },
+    Error(Option<io::Error>),
 }
 
 impl<T: Copy> Iterator for RleExpand<T> {
@@ -303,58 +304,65 @@ impl<T: Copy> Iterator for RleExpand<T> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(e) = self.error.take() {
-            return Some(Err(e));
-        }
-        if self.remaining == 0 {
-            None
-        } else {
-            self.remaining -= 1;
-            Some(Ok(self.value))
+        match self {
+            RleExpand::Repeat { value, remaining } => {
+                if *remaining == 0 {
+                    None
+                } else {
+                    *remaining -= 1;
+                    Some(Ok(*value))
+                }
+            }
+            RleExpand::Error(e) => e.take().map(Err),
         }
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.remaining + self.error.is_some() as usize;
+        let n = match self {
+            RleExpand::Repeat { remaining, .. } => *remaining,
+            RleExpand::Error(e) => e.is_some() as usize,
+        };
         (n, Some(n))
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if let Some(e) = self.error.take() {
-            if n == 0 {
-                return Some(Err(e));
+        match self {
+            RleExpand::Repeat { value, remaining } => {
+                if n >= *remaining {
+                    *remaining = 0;
+                    None
+                } else {
+                    *remaining -= n + 1;
+                    Some(Ok(*value))
+                }
             }
-            // The error item is skipped; consume n-1 more from remaining.
-            let n = n - 1;
-            if n >= self.remaining {
-                self.remaining = 0;
-                return None;
+            RleExpand::Error(e) => {
+                if n == 0 {
+                    e.take().map(Err)
+                } else {
+                    *e = None;
+                    None
+                }
             }
-            self.remaining -= n + 1;
-            return Some(Ok(self.value));
-        }
-        if n >= self.remaining {
-            self.remaining = 0;
-            None
-        } else {
-            self.remaining -= n + 1;
-            Some(Ok(self.value))
         }
     }
 
-    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    fn fold<B, F>(self, init: B, mut f: F) -> B
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        let mut acc = init;
-        if let Some(e) = self.error.take() {
-            return f(acc, Err(e));
+        match self {
+            RleExpand::Repeat { value, remaining } => {
+                let mut acc = init;
+                for _ in 0..remaining {
+                    acc = f(acc, Ok(value));
+                }
+                acc
+            }
+            RleExpand::Error(Some(e)) => f(init, Err(e)),
+            RleExpand::Error(None) => init,
         }
-        for _ in 0..self.remaining {
-            acc = f(acc, Ok(self.value));
-        }
-        acc
     }
 }
 
@@ -420,8 +428,8 @@ impl Compressor for RleCompressor {
         input: impl Iterator<Item = io::Result<rle::Rle<T>>>,
     ) -> impl Iterator<Item = io::Result<T>> {
         input.flat_map(|result| match result {
-            Ok(rle::Rle { value, count }) => RleExpand { value, remaining: count, error: None },
-            Err(e) => RleExpand { value: T::default(), remaining: 0, error: Some(e) },
+            Ok(rle::Rle { value, count }) => RleExpand::Repeat { value, remaining: count },
+            Err(e) => RleExpand::Error(Some(e)),
         })
     }
 }
