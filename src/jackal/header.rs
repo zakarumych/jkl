@@ -158,11 +158,12 @@ impl FixedCode for Format {
             2 => Format::RGB8,
             3 => Format::RGBA8,
             256 => Format::BC1,
-            257 => Format::BC3,
-            258 => Format::BC4,
-            259 => Format::BC5,
-            260 => Format::BC6,
-            261 => Format::BC7,
+            257 => Format::BC2,
+            258 => Format::BC3,
+            259 => Format::BC4,
+            260 => Format::BC5,
+            261 => Format::BC6,
+            262 => Format::BC7,
             _ => return Err(DecodeError::InvalidFormat),
         };
 
