@@ -475,6 +475,24 @@ impl_fixedcode_struct! {
 }
 
 impl JackalHeader {
+    /// Constructs a new `JackalHeader` with the given fields.
+    pub fn new(
+        compression: Compression,
+        format: Format,
+        extent: Extent,
+        levels: MipLevels,
+        superblock_size: SuperBlockSize,
+    ) -> Self {
+        JackalHeader {
+            magic: Magic,
+            compression,
+            format,
+            extent,
+            levels,
+            superblock_size,
+        }
+    }
+
     #[inline]
     pub fn format(&self) -> Format {
         self.format
