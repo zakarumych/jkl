@@ -19,6 +19,7 @@ impl<T: Default> Default for Rle<T> {
     /// subsequent tokens are expressed as deltas. A count of `1` is chosen
     /// because RLE tokens always represent at least one occurrence of a value;
     /// a count of `0` would be invalid in the encoding.
+    #[inline]
     fn default() -> Self {
         Rle {
             value: T::default(),
@@ -128,6 +129,7 @@ pub struct RleIter<T, I> {
     cfg: RleCfg,
 }
 
+#[inline]
 fn prev_power_of_two(x: usize) -> usize {
     (x / 2 + 1).next_power_of_two()
 }

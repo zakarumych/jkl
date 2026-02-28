@@ -301,6 +301,7 @@ struct RleExpand<T: Copy> {
 impl<T: Copy> Iterator for RleExpand<T> {
     type Item = io::Result<T>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(e) = self.error.take() {
             return Some(Err(e));
@@ -313,8 +314,36 @@ impl<T: Copy> Iterator for RleExpand<T> {
         }
     }
 
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if let Some(e) = self.error.take() {
+            return Some(Err(e));
+        }
+        if n >= self.remaining {
+            self.remaining = 0;
+            None
+        } else {
+            self.remaining -= n + 1;
+            Some(Ok(self.value))
+        }
+    }
+
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+        if let Some(e) = self.error.take() {
+            return f(acc, Err(e));
+        }
+        for _ in 0..self.remaining {
+            acc = f(acc, Ok(self.value));
+        }
+        acc
     }
 }
 
@@ -360,6 +389,7 @@ impl Compressor for RleCompressor {
         Ok(RleContext)
     }
 
+    #[inline]
     fn decompress_tokens<T: Symbol>(
         &self,
         _cx: &RleContext,
@@ -372,6 +402,7 @@ impl Compressor for RleCompressor {
         Ok(())
     }
 
+    #[inline]
     fn decompress_tokens2<T: Symbol>(
         &self,
         _cx: &RleContext,
