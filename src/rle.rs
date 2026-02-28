@@ -8,7 +8,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rle<T> {
     pub value: T,
-    pub count: u32,
+    pub count: usize,
 }
 
 impl<T: Default> Default for Rle<T> {
@@ -62,7 +62,7 @@ where
     fn read(reader: &mut ReadBits<impl std::io::Read>) -> std::io::Result<Self> {
         let value = T::read(reader)?;
 
-        let count = vle::decode_non_zero::<u32, _>(reader)?;
+        let count = vle::decode_non_zero::<usize, _>(reader)?;
 
         Ok(Rle { value, count })
     }
@@ -70,14 +70,14 @@ where
 
 #[derive(Clone, Copy, Debug)]
 pub struct RleCfg {
-    pub max: u32,
+    pub max: usize,
     pub only_power_of_two: bool,
 }
 
 impl Default for RleCfg {
     fn default() -> Self {
         RleCfg {
-            max: u32::MAX,
+            max: usize::MAX,
             only_power_of_two: false,
         }
     }
@@ -99,7 +99,7 @@ where
     rle_with_cfg(
         iter,
         RleCfg {
-            max: u32::MAX,
+            max: usize::MAX,
             only_power_of_two: true,
         },
     )
@@ -128,7 +128,7 @@ pub struct RleIter<T, I> {
     cfg: RleCfg,
 }
 
-fn prev_power_of_two(x: u32) -> u32 {
+fn prev_power_of_two(x: usize) -> usize {
     (x / 2 + 1).next_power_of_two()
 }
 

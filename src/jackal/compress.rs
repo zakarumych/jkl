@@ -290,6 +290,34 @@ where
 #[derive(Clone, Copy, Debug)]
 pub struct RleContext;
 
+/// Iterator that expands a single RLE token into its individual symbols,
+/// or yields one error and then stops. Used by `RleCompressor::decompress_tokens2`.
+struct RleExpand<T: Copy> {
+    value: T,
+    remaining: usize,
+    error: Option<io::Error>,
+}
+
+impl<T: Copy> Iterator for RleExpand<T> {
+    type Item = io::Result<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(e) = self.error.take() {
+            return Some(Err(e));
+        }
+        if self.remaining == 0 {
+            None
+        } else {
+            self.remaining -= 1;
+            Some(Ok(self.value))
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
 impl Encode for RleContext {
     #[inline]
     fn bit_len(&self) -> usize {
@@ -339,7 +367,7 @@ impl Compressor for RleCompressor {
         output: &mut impl Extend<T>,
     ) -> io::Result<()> {
         for rle::Rle { value, count } in input {
-            output.extend(std::iter::repeat(value).take(count as usize));
+            output.extend(std::iter::repeat(value).take(count));
         }
         Ok(())
     }
@@ -349,14 +377,9 @@ impl Compressor for RleCompressor {
         _cx: &RleContext,
         input: impl Iterator<Item = io::Result<rle::Rle<T>>>,
     ) -> impl Iterator<Item = io::Result<T>> {
-        input.flat_map(|result| {
-            let (value, count, err) = match result {
-                Ok(rle::Rle { value, count }) => (value, count, None),
-                Err(e) => (T::default(), 0, Some(e)),
-            };
-            err.map(Err)
-                .into_iter()
-                .chain(std::iter::repeat(value).take(count as usize).map(Ok as fn(T) -> io::Result<T>))
+        input.flat_map(|result| match result {
+            Ok(rle::Rle { value, count }) => RleExpand { value, remaining: count, error: None },
+            Err(e) => RleExpand { value: T::default(), remaining: 0, error: Some(e) },
         })
     }
 }
