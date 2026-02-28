@@ -1,13 +1,33 @@
 use crate::{
     bits::{ReadBits, WriteBits},
     encode::Encode,
+    math::Delta,
     vle,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rle<T> {
     pub value: T,
     pub count: u32,
+}
+
+impl<T> Delta for Rle<T>
+where
+    T: Delta,
+{
+    fn delta(self, base: Self) -> Self {
+        Rle {
+            value: self.value.delta(base.value),
+            count: self.count,
+        }
+    }
+
+    fn from_delta(base: Self, delta: Self) -> Self {
+        Rle {
+            value: T::from_delta(base.value, delta.value),
+            count: delta.count,
+        }
+    }
 }
 
 impl<T> Encode for Rle<T>
@@ -15,18 +35,18 @@ where
     T: Encode,
 {
     fn bit_len(&self) -> usize {
-        self.value.bit_len() + vle::encode_bit_len(self.count)
+        self.value.bit_len() + vle::encode_non_zero_bit_len(self.count)
     }
 
     fn write(&self, writer: &mut WriteBits<impl std::io::Write>) -> std::io::Result<()> {
         self.value.write(writer)?;
-        vle::encode(self.count, writer)
+        vle::encode_non_zero(self.count, writer)
     }
 
     fn read(reader: &mut ReadBits<impl std::io::Read>) -> std::io::Result<Self> {
         let value = T::read(reader)?;
 
-        let count = vle::decode::<u32, _>(reader)?;
+        let count = vle::decode_non_zero::<u32, _>(reader)?;
 
         Ok(Rle { value, count })
     }

@@ -143,10 +143,12 @@ impl FixedCode for Format {
     type Array = [u8; 2];
     type Error = DecodeError;
 
+    #[inline]
     fn encode(&self) -> [u8; 2] {
         (*self as u16).to_le_bytes()
     }
 
+    #[inline]
     fn decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
         let value = u16::from_le_bytes(*bytes);
 
@@ -177,10 +179,12 @@ impl FixedCode for MipLevels {
     type Array = [u8; 2];
     type Error = DecodeError;
 
+    #[inline]
     fn encode(&self) -> [u8; 2] {
         self.0.to_le_bytes()
     }
 
+    #[inline]
     fn decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
         let levels = u16::from_le_bytes(*bytes);
         if levels == 0 {
@@ -200,10 +204,12 @@ impl FixedCode for Magic {
     type Array = [u8; 4];
     type Error = DecodeError;
 
+    #[inline]
     fn encode(&self) -> [u8; 4] {
         MAGIC_NUMBER.to_le_bytes()
     }
 
+    #[inline]
     fn decode(bytes: &[u8; 4]) -> Result<Self, DecodeError> {
         let value = u32::from_le_bytes(*bytes);
         if value != MAGIC_NUMBER {
@@ -416,10 +422,12 @@ impl FixedCode for Compression {
     type Array = [u8; 1];
     type Error = DecodeError;
 
+    #[inline]
     fn encode(&self) -> [u8; 1] {
         [*self as u8]
     }
 
+    #[inline]
     fn decode(input: &[u8; 1]) -> Result<Self, DecodeError> {
         let value = input[0];
         let compression = match value {
@@ -466,19 +474,23 @@ impl_fixedcode_struct! {
 }
 
 impl JackalHeader {
+    #[inline]
     pub fn format(&self) -> Format {
         self.format
     }
 
+    #[inline]
     pub fn extent(&self) -> Extent {
         self.extent
     }
 
+    #[inline]
     pub fn superblocks_count(&self) -> usize {
         let [width, height, depth] = self.superblocks_extent();
         (width * height * depth) as usize
     }
 
+    #[inline]
     pub fn superblocks_extent(&self) -> [u32; 3] {
         let raw_size = self.extent.raw_size();
         let superblocks_width = (raw_size[0] + self.superblock_size.width as u32 - 1)
@@ -490,6 +502,7 @@ impl JackalHeader {
         [superblocks_width, superblocks_height, superblocks_depth]
     }
 
+    #[inline]
     pub fn blocks_count(&self) -> usize {
         let raw_size = self.extent.raw_size();
         raw_size[0] as usize * raw_size[1] as usize * raw_size[2] as usize
