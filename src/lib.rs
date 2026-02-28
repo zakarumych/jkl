@@ -147,6 +147,6 @@ pub mod z_curve;
 pub mod zigzaq;
 
 pub use jackal::{
-    AnsCompressor, Compression, Compressor, Config, DecodeError, DecompressError, Extent, Format,
-    JackalDecoder, LZ77Compressor, RleCompressor,
+    AnsCompressor, Compression, Compressor, DecodeError, DecompressError, Extent, Format,
+    LZ77Compressor, RleCompressor,
 };

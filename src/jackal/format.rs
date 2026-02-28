@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// This trait is an interface for compression images.
-pub(crate) trait AnyFormat: Sized + 'static {
+pub(super) trait AnyFormat: Sized + 'static {
     type Context<C: Compressor>: Encode;
 
     /// Compress the input images of data.
