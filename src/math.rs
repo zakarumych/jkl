@@ -47,7 +47,7 @@ impl Zero for usize {
     }
 }
 
-/// Trait to create additive identity element.
+/// Trait to create multiplicative identity element.
 pub trait One {
     fn one() -> Self;
 }
@@ -75,6 +75,42 @@ impl One for usize {
         1
     }
 }
+
+/// Delta allows calculating "difference" between base and current value,
+/// and reconstructing current value from base and delta.
+///
+/// Computed deltas should reduce the entropy of the data, so that they can be efficiently compressed.
+pub trait Delta: Ord + Sized {
+    /// Calculate the delta between self and base.
+    /// Base must be less than or equal to self.
+    ///
+    /// Using base that is greater than self may produce inadequate deltas
+    /// or even panic in debug mode.
+    fn delta(self, base: Self) -> Self;
+
+    /// Reconstruct the original value from base and delta.
+    fn from_delta(base: Self, delta: Self) -> Self;
+}
+
+macro_rules! impl_delta_for_numeric {
+    ($($num:ty)*) => {
+        $(
+            impl Delta for $num {
+                #[inline(always)]
+                fn delta(self, base: Self) -> Self {
+                    self - base
+                }
+
+                #[inline(always)]
+                fn from_delta(base: Self, delta: Self) -> Self {
+                    base + delta
+                }
+            }
+        )*
+    };
+}
+
+impl_delta_for_numeric!(u8 u16 u32 u64 i8 i16 i32 i64);
 
 /// A 2D vector.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3065,9 +3101,16 @@ impl R8U {
         R8U(r)
     }
 
+    /// Return color from raw bytes.
     #[inline(always)]
-    pub const fn r(&self) -> u8 {
-        self.0
+    pub const fn bytes(&self) -> [u8; 1] {
+        [self.0]
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn from_bytes(bytes: [u8; 1]) -> Self {
+        R8U(bytes[0])
     }
 
     #[inline(always)]
@@ -3078,6 +3121,11 @@ impl R8U {
     #[inline(always)]
     pub const fn from_bits(bits: u8) -> Self {
         Self(bits)
+    }
+
+    #[inline(always)]
+    pub const fn r(&self) -> u8 {
+        self.0
     }
 
     #[inline(always)]
@@ -3171,6 +3219,110 @@ impl R32F {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Rg8U([u8; 2]);
+
+impl_fixedcode_array!(Rg8U([u8; 2]) | Infallible);
+
+impl Rg8U {
+    pub const WHITE: Rg8U = Rg8U([255, 255]);
+    pub const BLACK: Rg8U = Rg8U([0, 0]);
+
+    #[inline(always)]
+    pub const fn new(r: u8, g: u8) -> Self {
+        Rg8U([r, g])
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn bytes(&self) -> [u8; 2] {
+        self.0
+    }
+
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn from_bytes(bytes: [u8; 2]) -> Self {
+        Rg8U(bytes)
+    }
+
+    #[inline(always)]
+    pub const fn bits(&self) -> u16 {
+        u16::from_le_bytes(self.0)
+    }
+
+    #[inline(always)]
+    pub const fn from_bits(bits: u16) -> Self {
+        Rg8U(bits.to_le_bytes())
+    }
+
+    #[inline(always)]
+    pub const fn bits_interleaved(&self) -> u16 {
+        let [r, g] = self.0;
+        interleave8_2(r, g)
+    }
+
+    #[inline(always)]
+    pub const fn from_bits_interleaved(bits: u16) -> Self {
+        let (r, g) = deinterleave8_2(bits);
+        Rg8U::new(r, g)
+    }
+
+    #[inline(always)]
+    pub const fn r(&self) -> u8 {
+        self.0[0]
+    }
+
+    #[inline(always)]
+    pub const fn g(&self) -> u8 {
+        self.0[1]
+    }
+
+    #[inline(always)]
+    pub const fn into_f32(self) -> Rg32F {
+        Rg32F([self.r() as f32 / 255.0, self.g() as f32 / 255.0])
+    }
+
+    #[inline(always)]
+    pub const fn from_f32(rg: Rg32F) -> Rg8U {
+        let r = (rg.r() * 255.0).clamp(0.0, 255.0);
+        let g = (rg.g() * 255.0).clamp(0.0, 255.0);
+        Rg8U([r as u8, g as u8])
+    }
+
+    #[inline(always)]
+    pub fn wrapping_add(self, other: Self) -> Self {
+        Rg8U([
+            self.r().wrapping_add(other.r()),
+            self.g().wrapping_add(other.g()),
+        ])
+    }
+
+    #[inline(always)]
+    pub fn wrapping_sub(self, other: Self) -> Self {
+        Rg8U([
+            self.r().wrapping_sub(other.r()),
+            self.g().wrapping_sub(other.g()),
+        ])
+    }
+
+    #[inline(always)]
+    pub const fn diff(a: Self, b: Self) -> Vec2 {
+        Vec2([a.r() as f32 - b.r() as f32, a.g() as f32 - b.g() as f32])
+    }
+
+    #[inline(always)]
+    pub const fn distance_squared(a: Self, b: Self) -> f32 {
+        let diff = Self::diff(a, b);
+        diff.dot(diff)
+    }
+
+    #[inline(always)]
+    pub fn distance(a: Self, b: Self) -> f32 {
+        Self::distance_squared(a, b).sqrt()
+    }
+}
+
 /// An RGB color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
@@ -3240,14 +3392,9 @@ impl Rgb8U {
     pub const WHITE: Rgb8U = Rgb8U([255, 255, 255]);
     pub const BLACK: Rgb8U = Rgb8U([0, 0, 0]);
 
+    #[inline(always)]
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Rgb8U([r, g, b])
-    }
-
-    /// Return color from raw bytes.
-    #[inline(always)]
-    pub const fn from_bytes(bytes: [u8; 3]) -> Self {
-        Rgb8U(bytes)
     }
 
     /// Return color from raw bytes.
@@ -3256,11 +3403,31 @@ impl Rgb8U {
         self.0
     }
 
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn from_bytes(bytes: [u8; 3]) -> Self {
+        Rgb8U(bytes)
+    }
+
+    #[inline(always)]
+    pub const fn bits(&self) -> u32 {
+        let [r, g, b] = self.0;
+        u32::from_le_bytes([r, g, b, 0])
+    }
+
+    #[inline(always)]
+    pub const fn from_bits(bits: u32) -> Self {
+        let [r, g, b, _] = bits.to_le_bytes();
+        Rgb8U([r, g, b])
+    }
+
+    #[inline(always)]
     pub const fn bits_interleaved(&self) -> u32 {
         let [r, g, b] = self.0;
         interleave8_3(r, b, g)
     }
 
+    #[inline(always)]
     pub const fn from_bits_interleaved(bits: u32) -> Self {
         let (r, b, g) = deinterleave8_3(bits);
         Rgb8U::new(r, g, b)
@@ -3445,14 +3612,9 @@ impl Rgba8U {
     pub const BLACK: Rgba8U = Rgba8U([0, 0, 0, 255]);
     pub const TRANSPARENT: Rgba8U = Rgba8U([0, 0, 0, 0]);
 
+    #[inline(always)]
     pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
         Rgba8U([r, g, b, a])
-    }
-
-    /// Return color from raw bytes.
-    #[inline(always)]
-    pub const fn from_bytes(bytes: [u8; 4]) -> Self {
-        Rgba8U(bytes)
     }
 
     /// Return color from raw bytes.
@@ -3461,11 +3623,30 @@ impl Rgba8U {
         self.0
     }
 
+    /// Return color from raw bytes.
+    #[inline(always)]
+    pub const fn from_bytes(bytes: [u8; 4]) -> Self {
+        Rgba8U(bytes)
+    }
+
+    #[inline(always)]
+    pub const fn bits(&self) -> u32 {
+        u32::from_le_bytes(self.0)
+    }
+
+    #[inline(always)]
+    pub const fn from_bits(bits: u32) -> Self {
+        let [r, g, b, a] = bits.to_le_bytes();
+        Rgba8U([r, g, b, a])
+    }
+
+    #[inline(always)]
     pub const fn bits_interleaved(&self) -> u32 {
         let [r, g, b, a] = self.0;
         interleave8_4(r, b, g, a)
     }
 
+    #[inline(always)]
     pub const fn from_bits_interleaved(bits: u32) -> Self {
         let (r, b, g, a) = deinterleave8_4(bits);
         Rgba8U::new(r, g, b, a)
@@ -3620,14 +3801,15 @@ impl Rgb565 {
     pub const WHITE: Rgb565 = Rgb565(0b11111_111111_11111);
     pub const BLACK: Rgb565 = Rgb565(0);
 
+    #[inline(always)]
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        assert!(r <= 31, "Red channel must be in range 0..=31");
-        assert!(g <= 63, "Green channel must be in range 0..=63");
-        assert!(b <= 31, "Blue channel must be in range 0..=31");
+        debug_assert!(r <= 31, "Red channel must be in range 0..=31");
+        debug_assert!(g <= 63, "Green channel must be in range 0..=63");
+        debug_assert!(b <= 31, "Blue channel must be in range 0..=31");
 
-        let r = r as u16;
-        let g = g as u16;
-        let b = b as u16;
+        let r = (r & 0x1F) as u16;
+        let g = (g & 0x3F) as u16;
+        let b = (b & 0x1F) as u16;
         Rgb565((r << 11) | (g << 5) | b)
     }
 
@@ -3643,6 +3825,7 @@ impl Rgb565 {
         Rgb565(bits)
     }
 
+    #[inline(always)]
     pub const fn bits_interleaved(&self) -> u16 {
         let r = self.r();
         let g = self.g();
@@ -3651,6 +3834,7 @@ impl Rgb565 {
         interleave655_3(g, r, b)
     }
 
+    #[inline(always)]
     pub const fn from_bits_interleaved(bits: u16) -> Self {
         let (g, r, b) = deinterleave655_3(bits);
         Rgb565::new(r, g, b)
@@ -3685,19 +3869,19 @@ impl Rgb565 {
 
     #[inline(always)]
     pub fn set_r(&mut self, r: u8) {
-        assert!(r <= 31, "Red channel must be in range 0..=31");
+        debug_assert!(r <= 31, "Red channel must be in range 0..=31");
         self.0 = (self.0 & 0b00000_111111_11111) | ((r as u16) << 11);
     }
 
     #[inline(always)]
     pub fn set_g(&mut self, g: u8) {
-        assert!(g <= 63, "Green channel must be in range 0..=63");
+        debug_assert!(g <= 63, "Green channel must be in range 0..=63");
         self.0 = (self.0 & 0b11111_000000_11111) | ((g as u16) << 5);
     }
 
     #[inline(always)]
     pub fn set_b(&mut self, b: u8) {
-        assert!(b <= 31, "Blue channel must be in range 0..=31");
+        debug_assert!(b <= 31, "Blue channel must be in range 0..=31");
         self.0 = (self.0 & 0b11111_111111_00000) | (b as u16);
     }
 
@@ -4036,6 +4220,7 @@ impl<T> Rect<T> {
     }
 }
 
+#[inline(always)]
 pub fn round_down<T>(value: T, round: T) -> T
 where
     T: Sub<Output = T> + Rem<Output = T> + Copy,
@@ -4043,6 +4228,7 @@ where
     value - (value % round)
 }
 
+#[inline(always)]
 pub fn round_up<T>(value: T, round: T) -> T
 where
     T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + One + Copy,
@@ -4088,7 +4274,7 @@ pub const fn compact32_2(x: u64) -> u32 {
     x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F;
     x = (x | (x >> 4)) & 0x00FF00FF00FF00FF;
     x = (x | (x >> 8)) & 0x0000FFFF0000FFFF;
-    x = (x | (x >> 16)) & 0x00000000FFFFFFFF;
+    x = x | (x >> 16);
     x as u32
 }
 
@@ -4119,13 +4305,42 @@ pub const fn compact16_2(x: u32) -> u16 {
     x = (x | (x >> 1)) & 0x33333333;
     x = (x | (x >> 2)) & 0x0F0F0F0F;
     x = (x | (x >> 4)) & 0x00FF00FF;
-    x = (x | (x >> 8)) & 0x0000FFFF;
+    x = x | (x >> 8);
     x as u16
 }
 
 #[inline(always)]
 pub const fn deinterleave16_2(x: u32) -> (u16, u16) {
     (compact16_2(x), compact16_2(x >> 1))
+}
+
+#[inline(always)]
+pub const fn spread8_2(x: u8) -> u16 {
+    let mut x = x as u16;
+    x = (x | (x << 4)) & 0x0F0F;
+    x = (x | (x << 2)) & 0x3333;
+    x = (x | (x << 1)) & 0x5555;
+    x
+}
+
+#[inline(always)]
+pub const fn interleave8_2(x: u8, y: u8) -> u16 {
+    spread8_2(x) | (spread8_2(y) << 1)
+}
+
+#[inline(always)]
+pub const fn compact8_2(x: u16) -> u8 {
+    let mut x = x;
+    x = x & 0x5555;
+    x = (x | (x >> 1)) & 0x3333;
+    x = (x | (x >> 2)) & 0x0F0F;
+    x = x | (x >> 4);
+    x as u8
+}
+
+#[inline(always)]
+pub const fn deinterleave8_2(x: u16) -> (u8, u8) {
+    (compact8_2(x), compact8_2(x >> 1))
 }
 
 #[inline(always)]
@@ -4206,7 +4421,7 @@ pub const fn compact8_4(x: u32) -> u8 {
     x = x & 0x1111_1111;
     x = (x | (x >> 3)) & 0x0303_0303;
     x = (x | (x >> 6)) & 0x000F_000F;
-    x = (x | (x >> 12)) & 0x000000FF;
+    x = x | (x >> 12);
     x as u8
 }
 
@@ -4219,39 +4434,3 @@ pub const fn deinterleave8_4(x: u32) -> (u8, u8, u8, u8) {
         compact8_4(x >> 3),
     )
 }
-
-/// Delta allows calculating "difference" between base and current value,
-/// and reconstructing current value from base and delta.
-///
-/// Computed deltas should reduce the entropy of the data, so that they can be efficiently compressed.
-pub trait Delta: Ord + Sized {
-    /// Calculate the delta between self and base.
-    /// Base must be less than or equal to self.
-    ///
-    /// Using base that is greater than self may produce inadequate deltas
-    /// or even panic in debug mode.
-    fn delta(self, base: Self) -> Self;
-
-    /// Reconstruct the original value from base and delta.
-    fn from_delta(base: Self, delta: Self) -> Self;
-}
-
-macro_rules! impl_delta_for_numeric {
-    ($($num:ty)*) => {
-        $(
-            impl Delta for $num {
-                #[inline(always)]
-                fn delta(self, base: Self) -> Self {
-                    self - base
-                }
-
-                #[inline(always)]
-                fn from_delta(base: Self, delta: Self) -> Self {
-                    base + delta
-                }
-            }
-        )*
-    };
-}
-
-impl_delta_for_numeric!(u8 u16 u32 u64 i8 i16 i32 i64);
