@@ -88,23 +88,25 @@ impl From<DecodeError> for DecompressError {
 /// automatically to minimise the estimated GPU decompression cost:
 ///
 /// ```text
-/// cost = (flat_cost + size_cost * superblock_area) * ceil(superblock_count / 64) * 64
+/// cost = (superblock_flat_cost + superblock_size_cost * superblock_area) * ceil(superblock_count / 64) * 64
 /// ```
 ///
-/// where `flat_cost` models the fixed per-superblock GPU dispatch overhead and
-/// `size_cost` models the per-texel work. Adjust these two values to match the
-/// characteristics of your target GPU.
+/// where `superblock_flat_cost` models the fixed per-superblock GPU dispatch
+/// overhead and `superblock_size_cost` models the per-texel decompression work.
+/// Adjust these two values to match the characteristics of your target GPU.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Fixed cost per superblock, modelling GPU dispatch overhead.
+    /// Fixed cost per superblock for GPU superblock decompression dispatch.
     ///
+    /// Models the overhead of launching each superblock on the GPU.
     /// A higher value encourages larger superblocks (fewer dispatches).
-    pub flat_cost: f32,
+    pub superblock_flat_cost: f32,
 
-    /// Cost per texel within a superblock, modelling per-texel GPU work.
+    /// Per-texel cost within a superblock for GPU superblock decompression.
     ///
+    /// Models the work per texel during GPU decompression.
     /// A higher value encourages smaller superblocks (less work per dispatch).
-    pub size_cost: f32,
+    pub superblock_size_cost: f32,
 
     /// Target pixel / block format stored in the output file.
     pub format: Format,
@@ -116,8 +118,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            flat_cost: 64.0,
-            size_cost: 1.0,
+            superblock_flat_cost: 64.0,
+            superblock_size_cost: 1.0,
             format: Format::RGB8,
             compression: Compression::RleAns,
         }

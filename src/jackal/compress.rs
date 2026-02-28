@@ -349,29 +349,14 @@ impl Compressor for RleCompressor {
         _cx: &RleContext,
         input: impl Iterator<Item = io::Result<rle::Rle<T>>>,
     ) -> impl Iterator<Item = io::Result<T>> {
-        let mut pending: Option<(T, u32)> = None;
-        let mut input = input;
-
-        std::iter::from_fn(move || loop {
-            if let Some((value, ref mut remaining)) = pending {
-                if *remaining > 0 {
-                    *remaining -= 1;
-                    return Some(Ok(value));
-                } else {
-                    pending = None;
-                }
-            }
-
-            match input.next() {
-                None => return None,
-                Some(Err(e)) => return Some(Err(e)),
-                Some(Ok(rle::Rle { value, count })) => {
-                    if count > 1 {
-                        pending = Some((value, count - 1));
-                    }
-                    return Some(Ok(value));
-                }
-            }
+        input.flat_map(|result| {
+            let (value, count, err) = match result {
+                Ok(rle::Rle { value, count }) => (value, count, None),
+                Err(e) => (T::default(), 0, Some(e)),
+            };
+            err.map(Err)
+                .into_iter()
+                .chain(std::iter::repeat(value).take(count as usize).map(Ok as fn(T) -> io::Result<T>))
         })
     }
 }

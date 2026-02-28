@@ -14,10 +14,11 @@ pub struct Rle<T> {
 impl<T: Default> Default for Rle<T> {
     /// Returns an `Rle` token with the default value and a count of `1`.
     ///
-    /// A count of `1` is chosen because RLE tokens always represent at least one
-    /// occurrence of a value; a count of `0` would be invalid in the encoding.
-    /// This default exists solely to satisfy the `Symbol: Default` bound and is
-    /// not expected to appear in compressed output.
+    /// Used as the initial base value for delta encoding: `Rle<T>` implements
+    /// [`Delta`], and the default token serves as the starting base from which
+    /// subsequent tokens are expressed as deltas. A count of `1` is chosen
+    /// because RLE tokens always represent at least one occurrence of a value;
+    /// a count of `0` would be invalid in the encoding.
     fn default() -> Self {
         Rle {
             value: T::default(),
