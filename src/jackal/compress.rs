@@ -316,12 +316,23 @@ impl<T: Copy> Iterator for RleExpand<T> {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+        let n = self.remaining + self.error.is_some() as usize;
+        (n, Some(n))
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         if let Some(e) = self.error.take() {
-            return Some(Err(e));
+            if n == 0 {
+                return Some(Err(e));
+            }
+            // The error item is skipped; consume n-1 more from remaining.
+            let n = n - 1;
+            if n >= self.remaining {
+                self.remaining = 0;
+                return None;
+            }
+            self.remaining -= n + 1;
+            return Some(Ok(self.value));
         }
         if n >= self.remaining {
             self.remaining = 0;
