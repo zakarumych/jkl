@@ -1,33 +1,58 @@
 use std::io;
 
+use smallvec::{smallvec, SmallVec};
+
 use crate::{
     bc1,
     bits::{ReadBits, WriteBits},
-    encode::Encode,
-    image::{ImageMut, ImageRef},
-    jackal::compress::Compressor,
+    encode::{FixedCode, VarCode},
+    image::{Image2DMut, Image2DRef},
     math::{Rgb565, Rgb8U},
-    vle::Vle,
+    vle::{self, Vle},
 };
+
+use super::{compress::Compressor, Format};
 
 /// This trait is an interface for compression images.
 pub(super) trait AnyFormat: Sized + 'static {
-    type Context<C: Compressor>: Encode;
+    type Context<C: Compressor>: VarCode;
+
+    const FORMAT: Format;
 
     /// Compress the input images of data.
     ///
     /// `input` is an iterator over images, where each image is made of pixels of type `Self`.
     /// `compressor` is the compression algorithm to use.
     /// `write` is the output stream to write compressed data to.
-    /// `offsets` is a output slice where the function will write the file offsets of each compressed image.
+    ///
+    /// Function writes a context of type `Self::Context<C>` to the output stream,
+    /// followed by offsets for each image tile in `input` and finally the compressed data for each tile
+    /// at the corresponding offsets.
     fn compress_images<'a, C>(
-        input: impl Iterator<Item = ImageRef<'a, Self>> + Clone,
+        input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
         compressor: C,
         write: impl io::Write + io::Seek,
-        offsets: &mut [u64],
-    ) -> io::Result<Self::Context<C>>
+    ) -> io::Result<()>
     where
         C: Compressor;
+
+    #[inline]
+    fn read_context<C>(read: impl io::Read) -> io::Result<Self::Context<C>>
+    where
+        C: Compressor,
+    {
+        let mut read_bits = ReadBits::new(read);
+        Self::Context::<C>::var_read(&mut read_bits)
+    }
+
+    #[inline]
+    fn read_offsets(read: impl io::Read, offsets: &mut [u64]) -> io::Result<()> {
+        let mut read_bits = ReadBits::new(read);
+        for offset in offsets {
+            *offset = vle::decode(&mut read_bits)?;
+        }
+        Ok(())
+    }
 
     /// Decompress the input compressed data into output images.
     /// `compressor` is the compression algorithm to use.
@@ -38,7 +63,7 @@ pub(super) trait AnyFormat: Sized + 'static {
         compressor: C,
         cx: &Self::Context<C>,
         read: impl io::Read,
-        image: ImageMut<'a, Self>,
+        image: Image2DMut<'a, Self>,
     ) -> io::Result<()>
     where
         C: Compressor;
@@ -47,62 +72,66 @@ pub(super) trait AnyFormat: Sized + 'static {
 impl AnyFormat for Rgb8U {
     type Context<C: Compressor> = C::Context<Vle<u32>>;
 
+    const FORMAT: Format = Format::RGB8;
+
     fn compress_images<'a, C>(
-        input: impl Iterator<Item = ImageRef<'a, Self>> + Clone,
+        input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
         compressor: C,
         mut write: impl io::Write + io::Seek,
-        offsets: &mut [u64],
-    ) -> io::Result<C::Context<Vle<u32>>>
+    ) -> io::Result<()>
     where
         C: Compressor,
     {
         let mut tokens = Vec::new();
+
+        let len = u64::try_from(tokens.len()).expect("Too many tiles to compress");
+
         let cx = compressor.compress_symbols(
-            input.map(|image| image.iter().map(|rgb| Vle(rgb.bits_interleaved()))),
+            input.map(|image| image.iter_pixels().map(|rgb| Vle(rgb.bits_interleaved()))),
             &mut tokens,
         )?;
 
-        assert_eq!(
-            tokens.len(),
-            offsets.len(),
-            "Offsets count must match chunk count"
-        );
+        let mut write_bits = WriteBits::new(&mut write);
+        cx.var_write(&mut write_bits)?;
+        write_bits.finish()?;
 
-        for idx in 0..offsets.len() {
+        let offsets_start = write.stream_position()?;
+        let offsets_len = 8 * len; // 8 is the size of u64 in bytes
+        let offsets_end = offsets_start + offsets_len;
+
+        write.seek(io::SeekFrom::Start(offsets_end))?;
+
+        let mut offsets: SmallVec<[u64; 64]> = smallvec![0; tokens.len()];
+
+        for idx in 0..tokens.len() {
             offsets[idx] = write.stream_position()?;
 
             let mut write_bits = WriteBits::new(&mut write);
             for token in &tokens[idx] {
-                token.write(&mut write_bits)?;
+                token.var_write(&mut write_bits)?;
             }
             write_bits.finish()?;
         }
 
-        Ok(cx)
+        write.seek(io::SeekFrom::Start(offsets_start))?;
+
+        for offset in offsets {
+            offset.fix_write(&mut write)?;
+        }
+
+        Ok(())
     }
 
     fn decompress_image<'a, C>(
         compressor: C,
         cx: &Self::Context<C>,
         read: impl io::Read,
-        mut image: ImageMut<'a, Self>,
+        mut image: Image2DMut<'a, Self>,
     ) -> io::Result<()>
     where
         C: Compressor,
     {
         let mut read_bits = crate::bits::ReadBits::new(read);
-        // let finished = Cell::new(false);
-        // let mut result = Ok(());
-        // let (input, mut output) = iter_fill(
-        //     &finished,
-        //     &mut result,
-        //     &mut read_bits,
-        //     image.iter_mut(),
-        //     |Vle(bits)| Rgb8U::from_bits_interleaved(bits),
-        // );
-
-        // compressor.decompress_tokens(cx, input, &mut { output })?;
-        // result
 
         let mut symbols = compressor.decompress_tokens2(cx, read_tokens(&mut read_bits));
 
@@ -132,12 +161,13 @@ impl AnyFormat for bc1::Block {
         C::Context<u8>,       // texels
     );
 
+    const FORMAT: Format = Format::BC1;
+
     fn compress_images<'a, C>(
-        input: impl Iterator<Item = ImageRef<'a, Self>> + Clone,
+        input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
         compressor: C,
         mut write: impl io::Write + io::Seek,
-        offsets: &mut [u64],
-    ) -> io::Result<(C::Context<Vle<u16>>, C::Context<u8>)>
+    ) -> io::Result<()>
     where
         C: Compressor,
     {
@@ -145,7 +175,7 @@ impl AnyFormat for bc1::Block {
 
         let color_cx = compressor.compress_symbols(
             input.clone().map(|image| {
-                image.iter().flat_map(|b| {
+                image.iter_pixels().flat_map(|b| {
                     [
                         Vle(b.color0.bits_interleaved()),
                         Vle(b.color1.bits_interleaved()),
@@ -157,49 +187,58 @@ impl AnyFormat for bc1::Block {
 
         let mut texel_tokens = Vec::new();
         let texel_cx = compressor.compress_symbols(
-            input.map(|image| image.iter().flat_map(|b| b.texels)),
+            input.map(|image| image.iter_pixels().flat_map(|b| b.texels)),
             &mut texel_tokens,
         )?;
 
         assert_eq!(
             color_tokens.len(),
             texel_tokens.len(),
-            "Chunk count mismatch"
+            "Tile count mismatch"
         );
 
-        assert_eq!(
-            color_tokens.len(),
-            offsets.len(),
-            "Offsets count must match chunk count"
-        );
+        let len = u64::try_from(color_tokens.len()).expect("Too many tiles to compress");
 
-        for idx in 0..offsets.len() {
+        let mut write_bits = WriteBits::new(&mut write);
+        color_cx.var_write(&mut write_bits)?;
+        texel_cx.var_write(&mut write_bits)?;
+        write_bits.finish()?;
+
+        let offsets_start = write.stream_position()?;
+        let offsets_len = 8 * len; // 8 is the size of u64 in bytes
+        let offsets_end = offsets_start + offsets_len;
+
+        write.seek(io::SeekFrom::Start(offsets_end))?;
+
+        let mut offsets: SmallVec<[u64; 64]> = smallvec![0; color_tokens.len()];
+
+        for idx in 0..color_tokens.len() {
             offsets[idx] = write.stream_position()?;
 
-            let color_chunk = &color_tokens[idx];
-            let texel_chunk = &texel_tokens[idx];
+            let color_tile = &color_tokens[idx];
+            let texel_tile = &texel_tokens[idx];
 
             let mut write_bits = WriteBits::new(&mut write);
 
-            for token in color_chunk {
-                token.write(&mut write_bits)?;
+            for token in color_tile {
+                token.var_write(&mut write_bits)?;
             }
 
-            for token in texel_chunk {
-                token.write(&mut write_bits)?;
+            for token in texel_tile {
+                token.var_write(&mut write_bits)?;
             }
 
             write_bits.finish()?;
         }
 
-        Ok((color_cx, texel_cx))
+        Ok(())
     }
 
     fn decompress_image<'a, C>(
         compressor: C,
         cx: &Self::Context<C>,
         read: impl io::Read,
-        mut image: ImageMut<'a, Self>,
+        mut image: Image2DMut<'a, Self>,
     ) -> io::Result<()>
     where
         C: Compressor,
@@ -290,9 +329,9 @@ impl AnyFormat for bc1::Block {
 
 fn read_tokens<T>(read: &mut ReadBits<impl io::Read>) -> impl Iterator<Item = io::Result<T>> + '_
 where
-    T: Encode,
+    T: VarCode,
 {
-    std::iter::from_fn(move || match T::read(read) {
+    std::iter::from_fn(move || match T::var_read(read) {
         Ok(token) => Some(Ok(token)),
         Err(err) => Some(Err(err)),
     })

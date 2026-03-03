@@ -7,8 +7,20 @@ pub trait FixedCode: Sized {
     const SIZE: usize;
     type Array: Default + AsRef<[u8]> + AsMut<[u8]> + Send + Sync + 'static;
     type Error: Error + Send + Sync + 'static;
-    fn encode(&self) -> Self::Array;
-    fn decode(input: &Self::Array) -> Result<Self, Self::Error>;
+    fn fix_encode(&self) -> Self::Array;
+    fn fix_decode(input: &Self::Array) -> Result<Self, Self::Error>;
+
+    #[inline]
+    fn fix_write(&self, write: &mut impl io::Write) -> io::Result<()> {
+        io::Write::write_all(write, self.fix_encode().as_ref())
+    }
+
+    #[inline]
+    fn fix_read(read: &mut impl io::Read) -> io::Result<Self> {
+        let mut buffer = Self::Array::default();
+        io::Read::read_exact(read, buffer.as_mut())?;
+        Self::fix_decode(&buffer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
 }
 
 impl<const N: usize> FixedCode for [u8; N]
@@ -20,12 +32,12 @@ where
     type Error = std::convert::Infallible;
 
     #[inline]
-    fn encode(&self) -> Self {
+    fn fix_encode(&self) -> Self {
         *self
     }
 
     #[inline]
-    fn decode(input: &Self) -> Result<Self, Self::Error> {
+    fn fix_decode(input: &Self) -> Result<Self, Self::Error> {
         Ok(*input)
     }
 }
@@ -38,11 +50,11 @@ macro_rules! impl_fixedcode_le_bytes {
                 type Array = [u8; Self::SIZE];
                 type Error = std::convert::Infallible;
 
-                fn encode(&self) -> Self::Array {
+                fn fix_encode(&self) -> Self::Array {
                     self.to_le_bytes()
                 }
 
-                fn decode(input: &Self::Array) -> Result<Self, Self::Error> {
+                fn fix_decode(input: &Self::Array) -> Result<Self, Self::Error> {
                     Ok(Self::from_le_bytes(*input))
                 }
             }
@@ -54,44 +66,44 @@ impl_fixedcode_le_bytes!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, 
 
 macro_rules! impl_fixedcode_tuple {
     () => {
-        impl Encode for () {
-            fn bit_len(&self) -> usize {
+        impl VarCode for () {
+            fn var_bit_len(&self) -> usize {
                 0
             }
 
-            fn write(&self, _write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+            fn var_write(&self, _write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
                 Ok(())
             }
 
-            fn read(_read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+            fn var_read(_read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
                 Ok(())
             }
         }
     };
     ($($a:ident)+) => {
         #[allow(non_snake_case)]
-        impl<$($a),*> Encode for ($($a,)*)
+        impl<$($a),*> VarCode for ($($a,)*)
         where
-            $($a: Encode),*
+            $($a: VarCode),*
         {
-            fn bit_len(&self) -> usize {
+            fn var_bit_len(&self) -> usize {
 
                 let ($($a,)*) = self;
-                0 $(+ $a.bit_len())*
+                0 $(+ $a.var_bit_len())*
             }
 
-            fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+            fn var_write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
                 let ($($a,)*) = self;
                 $(
-                    $a.write(write)?;
+                    $a.var_write(write)?;
                 )*
                 Ok(())
             }
 
-            fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+            fn var_read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
                 Ok((
                     $(
-                        $a::read(read)?,
+                        $a::var_read(read)?,
                     )*
                 ))
             }
@@ -101,34 +113,32 @@ macro_rules! impl_fixedcode_tuple {
 
 for_tuple!(impl_fixedcode_tuple);
 
-pub trait Encode {
-    fn bit_len(&self) -> usize;
-    fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()>;
-    fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self>
+pub trait VarCode {
+    fn var_bit_len(&self) -> usize;
+    fn var_write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()>;
+    fn var_read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self>
     where
         Self: Sized;
 }
 
-impl<T> Encode for T
+impl<T> VarCode for T
 where
     T: FixedCode,
 {
-    fn bit_len(&self) -> usize {
+    fn var_bit_len(&self) -> usize {
         Self::SIZE * 8
     }
 
     #[inline]
-    fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
-        io::Write::write_all(write, self.encode().as_ref())
+    fn var_write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        FixedCode::fix_write(self, write)
     }
 
     #[inline]
-    fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<T>
+    fn var_read(read: &mut ReadBits<impl io::Read>) -> io::Result<T>
     where
         Self: Sized,
     {
-        let mut buffer = T::Array::default();
-        io::Read::read_exact(read, buffer.as_mut())?;
-        Self::decode(&buffer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        FixedCode::fix_read(read)
     }
 }

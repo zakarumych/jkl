@@ -14,32 +14,32 @@ use std::{
 
 use crate::{
     bits::{ReadBits, WriteBits},
-    encode::Encode,
+    encode::VarCode,
     vle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token<T> {
-    pub prefix: u32,
+    pub prefix: usize,
     pub literal: T,
 }
 
-impl<T> Encode for Token<T>
+impl<T> VarCode for Token<T>
 where
-    T: Encode,
+    T: VarCode,
 {
-    fn bit_len(&self) -> usize {
-        vle::encode_bit_len(self.prefix) + self.literal.bit_len()
+    fn var_bit_len(&self) -> usize {
+        vle::encode_bit_len(self.prefix) + self.literal.var_bit_len()
     }
 
-    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+    fn var_write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         vle::encode(self.prefix, writer)?;
-        self.literal.write(writer)
+        self.literal.var_write(writer)
     }
 
-    fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
-        let prefix = vle::decode::<u32, _>(reader)?;
-        let literal = T::read(reader)?;
+    fn var_read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+        let prefix = vle::decode::<usize, _>(reader)?;
+        let literal = T::var_read(reader)?;
 
         Ok(Token { prefix, literal })
     }
@@ -70,8 +70,8 @@ where
     T: Copy + Eq,
 {
     fn lookup(&self, entry: Entry<T>) -> Option<usize> {
-        for i in entry.prefix..self.entires.len() as usize {
-            if self.entires[i as usize] == entry {
+        for i in entry.prefix..self.entires.len() {
+            if self.entires[i] == entry {
                 return Some(i + 1);
             }
         }
@@ -91,7 +91,7 @@ where
                 debug_assert!(u32::try_from(self.prefix).is_ok());
 
                 let token = Token {
-                    prefix: self.prefix as u32,
+                    prefix: self.prefix,
                     literal: symbol,
                 };
                 self.entires.push(entry);
@@ -114,11 +114,11 @@ where
             return None;
         }
 
-        let last = &self.entires[self.prefix as usize - 1];
+        let last = &self.entires[self.prefix - 1];
         self.prefix = 0;
 
         Some(Token {
-            prefix: last.prefix as u32,
+            prefix: last.prefix,
             literal: last.literal,
         })
     }
@@ -210,10 +210,10 @@ where
     fn decode_next_range<'a>(&'a mut self, token: Token<T>) -> Result<(usize, usize), DecodeError> {
         // Add the new substring to the cache.
         let (prefix_start, prefix_end) = if token.prefix > 0 {
-            if token.prefix as usize > self.entires.len() {
+            if token.prefix > self.entires.len() {
                 return Err(DecodeError::InvalidIndex);
             }
-            self.entires[(token.prefix - 1) as usize]
+            self.entires[token.prefix - 1]
         } else {
             (0, 0)
         };
@@ -230,10 +230,9 @@ where
             end
         };
 
-        debug_assert_eq!(end as usize, self.scratch.len());
+        debug_assert_eq!(end, self.scratch.len());
 
-        self.scratch
-            .extend_from_within(prefix_start as usize..prefix_end as usize);
+        self.scratch.extend_from_within(prefix_start..prefix_end);
         self.scratch.push(element);
 
         let new_start = end;
@@ -247,7 +246,7 @@ where
     pub fn decode_next_slice<'a>(&'a mut self, token: Token<T>) -> Result<&'a [T], DecodeError> {
         let output = self.decode_next_range(token)?;
 
-        let slice = &self.scratch[output.0 as usize..output.1 as usize];
+        let slice = &self.scratch[output.0..output.1];
         Ok(slice)
     }
 }

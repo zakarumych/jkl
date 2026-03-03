@@ -4,7 +4,7 @@ use hashbrown::HashMap;
 
 use crate::{
     bits::{ReadBits, WriteBits},
-    encode::Encode,
+    encode::VarCode,
     math::Delta,
     vle,
 };
@@ -137,7 +137,7 @@ impl<T> Context<T> {
 
     fn bit_len(&self) -> usize
     where
-        T: Copy + Default + Ord + Delta + Encode,
+        T: Copy + Default + Ord + Delta + VarCode,
     {
         let mut bit_len = 0;
 
@@ -155,7 +155,7 @@ impl<T> Context<T> {
 
                 let d = symbol.delta(last);
                 last = *symbol;
-                bit_len += d.bit_len();
+                bit_len += d.var_bit_len();
             }
         }
 
@@ -165,7 +165,7 @@ impl<T> Context<T> {
     /// Write minimal header for Ans encoding.
     pub fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()>
     where
-        T: Copy + Default + Ord + Delta + Encode,
+        T: Copy + Default + Ord + Delta + VarCode,
     {
         let mut freqs = self.freqs().collect::<Vec<_>>();
         freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
@@ -181,7 +181,7 @@ impl<T> Context<T> {
 
                 let d = symbol.delta(last);
                 last = *symbol;
-                d.write(writer)?;
+                d.var_write(writer)?;
             }
         }
 
@@ -200,7 +200,7 @@ impl<T> Context<T> {
     ) -> io::Result<()>
     where
         T: Copy,
-        U: Encode,
+        U: VarCode,
     {
         let mut freqs = self.freqs().collect::<Vec<_>>();
         freqs.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
@@ -216,7 +216,7 @@ impl<T> Context<T> {
 
                 let d = delta(last, *symbol);
                 last = *symbol;
-                d.write(writer)?;
+                d.var_write(writer)?;
             }
         }
 
@@ -228,7 +228,7 @@ impl<T> Context<T> {
     /// Should be used if context was writtent without delta encoding.
     pub fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self>
     where
-        T: Copy + Default + Eq + Hash + Delta + Encode,
+        T: Copy + Default + Eq + Hash + Delta + VarCode,
     {
         // Read number of symbols.
         let len = { vle::decode::<usize, _>(reader)? };
@@ -241,7 +241,7 @@ impl<T> Context<T> {
         for _ in 0..len {
             let count = vle::decode::<u64, _>(reader)?;
 
-            let d = T::read(reader)?;
+            let d = T::var_read(reader)?;
             let symbol = T::from_delta(last, d);
             last = symbol;
             freqs_sorted.push((symbol, count));
@@ -264,7 +264,7 @@ impl<T> Context<T> {
     ) -> io::Result<Self>
     where
         T: Copy + Eq + Hash,
-        U: Encode,
+        U: VarCode,
     {
         // Read number of symbols.
         let len = { vle::decode::<usize, _>(reader)? };
@@ -277,7 +277,7 @@ impl<T> Context<T> {
         for _ in 0..len {
             let count = vle::decode::<u64, _>(reader)?;
 
-            let d = U::read(reader)?;
+            let d = U::var_read(reader)?;
             let symbol = from_delta(last, d);
             last = symbol;
             freqs_sorted.push((symbol, count));
@@ -287,19 +287,19 @@ impl<T> Context<T> {
     }
 }
 
-impl<T> Encode for Context<T>
+impl<T> VarCode for Context<T>
 where
-    T: Copy + Default + Ord + Hash + Delta + Encode,
+    T: Copy + Default + Ord + Hash + Delta + VarCode,
 {
-    fn bit_len(&self) -> usize {
+    fn var_bit_len(&self) -> usize {
         Context::bit_len(self)
     }
 
-    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+    fn var_write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         Context::write(self, writer)
     }
 
-    fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+    fn var_read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
         Context::read(read)
     }
 }

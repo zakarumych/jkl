@@ -12,7 +12,7 @@ use crate::bits::{ReadBits, WriteBits};
 
 pub(crate) trait Element: Copy + Eq {
     // This parameter is related to the maximum size of the input data.
-    // With maximum superblock size of 256x256 there's 65536 entries per block field.
+    // With maximum tile size of 256x256 there's 65536 entries per block field.
     //
     // Now consider worst case scenario where dictionary grows as fast as possible.
     // This requires all symbols from the alphabet appear once,

@@ -2,7 +2,7 @@ use std::{error::Error, fmt, io, ops};
 
 use crate::{
     bits::{ReadBits, WriteBits},
-    encode::Encode,
+    encode::VarCode,
     math::Delta,
 };
 
@@ -332,19 +332,19 @@ where
     }
 }
 
-impl<T> Encode for Vle<T>
+impl<T> VarCode for Vle<T>
 where
     T: Unsigned,
 {
-    fn bit_len(&self) -> usize {
+    fn var_bit_len(&self) -> usize {
         encode_bit_len(self.0)
     }
 
-    fn write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+    fn var_write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         encode(self.0, write)
     }
 
-    fn read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+    fn var_read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
         let value = decode(read)?;
         Ok(Self(value))
     }

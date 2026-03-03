@@ -3,7 +3,7 @@ use std::ops;
 use hashbrown::HashSet;
 
 use crate::{
-    image::{ImageMut, ImageRef},
+    image::{Image2DMut, Image2DRef},
     math::Zero,
 };
 
@@ -27,12 +27,12 @@ where
         }
     }
 
-    pub fn as_mut(&mut self) -> ImageMut<'_, T> {
-        ImageMut::new(self.width, self.height, &mut self.pixels)
+    pub fn as_mut(&mut self) -> Image2DMut<'_, T> {
+        Image2DMut::new(self.width, self.height, &mut self.pixels)
     }
 
-    pub fn as_ref(&self) -> ImageRef<'_, T> {
-        ImageRef::new(self.width, self.height, &self.pixels)
+    pub fn as_ref(&self) -> Image2DRef<'_, T> {
+        Image2DRef::new(self.width, self.height, &self.pixels)
     }
 
     pub fn set(&mut self, x: usize, y: usize, value: T) {
@@ -63,7 +63,7 @@ where
     ///
     /// * `input` — The source image to sample patches from.
     /// * `block_size` — The side length of each square patch.
-    pub fn initialize_patches(&mut self, input: ImageRef<'_, T>, block_size: usize) {
+    pub fn initialize_patches(&mut self, input: Image2DRef<'_, T>, block_size: usize) {
         if self.width == 0
             || self.height == 0
             || input.width() == 0
@@ -107,7 +107,7 @@ where
         l: usize,
         t: usize,
         error: U,
-        block: ImageRef<'_, T>,
+        block: Image2DRef<'_, T>,
         mut learn: impl FnMut(T, T, U) -> T,
     ) where
         U: Copy,
@@ -131,7 +131,7 @@ where
 
     pub fn train<U>(
         &mut self,
-        input: ImageRef<'_, T>,
+        input: Image2DRef<'_, T>,
         block_size: usize,
         batch_size: usize,
         mut error: impl FnMut(T, T) -> U,
@@ -190,7 +190,7 @@ where
 
     pub fn train2<U>(
         &mut self,
-        input: ImageRef<'_, T>,
+        input: Image2DRef<'_, T>,
         block_size: usize,
         batch_size: usize,
         mut error: impl FnMut(T, T) -> U,
@@ -268,7 +268,7 @@ where
 
     pub fn train3<U>(
         &mut self,
-        input: ImageRef<'_, T>,
+        input: Image2DRef<'_, T>,
         block_size: usize,
         batch_size: usize,
         mut error: impl FnMut(T, T) -> U,

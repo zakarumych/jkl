@@ -2,7 +2,7 @@ use std::{error::Error, fmt, io};
 
 use crate::{
     bits::{ReadBits, WriteBits},
-    encode::Encode,
+    encode::VarCode,
     math::Delta,
     vle,
 };
@@ -83,12 +83,12 @@ where
     }
 }
 
-impl<T> Encode for Token<T>
+impl<T> VarCode for Token<T>
 where
-    T: Encode,
+    T: VarCode,
 {
     #[inline]
-    fn bit_len(&self) -> usize {
+    fn var_bit_len(&self) -> usize {
         match *self {
             Token::Reference { length, distance } => {
                 debug_assert!(length >= 2);
@@ -96,12 +96,12 @@ where
                 let distance_bits = vle::encode_bit_len(distance);
                 length_bits + distance_bits
             }
-            Token::Literal { ref symbol } => 1 + symbol.bit_len(),
+            Token::Literal { ref symbol } => 1 + symbol.var_bit_len(),
         }
     }
 
     #[inline]
-    fn write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+    fn var_write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         match *self {
             Token::Reference { length, distance } => {
                 debug_assert!(length >= 2);
@@ -110,20 +110,20 @@ where
             }
             Token::Literal { ref symbol } => {
                 vle::encode_non_zero(1u8, writer)?;
-                symbol.write(&mut *writer)?;
+                symbol.var_write(&mut *writer)?;
             }
         }
         Ok(())
     }
 
     #[inline]
-    fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+    fn var_read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
         let length = vle::decode_non_zero::<u32, _>(reader)?;
 
         match length {
             0 => unreachable!("decode_non_zero must never return 0"),
             1 => {
-                let symbol = T::read(&mut *reader)?;
+                let symbol = T::var_read(&mut *reader)?;
                 Ok(Token::Literal { symbol })
             }
             _ => {

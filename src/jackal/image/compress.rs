@@ -1,12 +1,18 @@
-use std::{hash::Hash, io};
+use std::{hash::Hash, io, num::NonZero};
 
-use crate::{ans, encode::Encode, lz77, math::Delta};
+use crate::{
+    ans,
+    encode::VarCode,
+    lz77,
+    math::Delta,
+    rle::{rle, Rle},
+};
 
 /// Trait for types viable as symbols for compression.
-pub trait Symbol: Copy + Default + Ord + Hash + Delta + Encode + 'static {}
+pub trait Symbol: Copy + Default + Ord + Hash + Delta + VarCode + 'static {}
 
 /// Blanket implementation for all types that satisfy the trait bounds.
-impl<T> Symbol for T where T: Default + Copy + Ord + Hash + Encode + Delta + Sized + 'static {}
+impl<T> Symbol for T where T: Default + Copy + Ord + Hash + VarCode + Delta + Sized + 'static {}
 
 /// Compression algorithm interface.
 pub trait Compressor {
@@ -14,7 +20,7 @@ pub trait Compressor {
     type Token<T: Symbol>: Symbol;
 
     /// Context is produced during compression and is used during decompression.
-    type Context<T: Symbol>: Encode;
+    type Context<T: Symbol>: VarCode;
 
     /// Compress the input symbols of type `T`.
     ///
@@ -51,22 +57,7 @@ pub struct LZ77Compressor {
 
 pub struct LZ77Context;
 
-impl Encode for LZ77Context {
-    #[inline]
-    fn bit_len(&self) -> usize {
-        0
-    }
-
-    #[inline]
-    fn write(&self, _write: &mut crate::bits::WriteBits<impl io::Write>) -> io::Result<()> {
-        Ok(())
-    }
-
-    #[inline]
-    fn read(_read: &mut crate::bits::ReadBits<impl io::Read>) -> io::Result<Self> {
-        Ok(LZ77Context)
-    }
-}
+impl_fixedcode_zero!(LZ77Context);
 
 impl Compressor for LZ77Compressor {
     type Token<T: Symbol> = lz77::Token<T>;
@@ -84,6 +75,7 @@ impl Compressor for LZ77Compressor {
             }
 
             let stream = &mut output[i];
+            stream.clear();
 
             for symbol in chunk {
                 encoder.encode(symbol, stream);
@@ -94,6 +86,7 @@ impl Compressor for LZ77Compressor {
         Ok(LZ77Context)
     }
 
+    #[inline]
     fn decompress_tokens<T: Symbol>(
         &self,
         _cx: &LZ77Context,
@@ -113,6 +106,7 @@ impl Compressor for LZ77Compressor {
         Ok(())
     }
 
+    #[inline]
     fn decompress_tokens2<T: Symbol>(
         &self,
         _cx: &LZ77Context,
@@ -159,6 +153,7 @@ impl Compressor for AnsCompressor {
                 output.push(Vec::new());
             }
             let stream = &mut output[i];
+            stream.clear();
 
             for symbol in chunk.rev() {
                 stream.extend(encoder.encode(symbol));
@@ -170,6 +165,7 @@ impl Compressor for AnsCompressor {
         Ok(cx)
     }
 
+    #[inline]
     fn decompress_tokens<T: Symbol>(
         &self,
         cx: &ans::Context<T>,
@@ -191,6 +187,7 @@ impl Compressor for AnsCompressor {
         }
     }
 
+    #[inline]
     fn decompress_tokens2<T: Symbol>(
         &self,
         cx: &ans::Context<T>,
@@ -209,6 +206,50 @@ impl Compressor for AnsCompressor {
                 Err(err) => Some(Err(err)),
             },
         })
+    }
+}
+
+impl Compressor for () {
+    type Token<T: Symbol> = T;
+    type Context<T: Symbol> = ();
+
+    fn compress_symbols<T: Symbol>(
+        &self,
+        input: impl Iterator<Item = impl DoubleEndedIterator<Item = T>> + Clone,
+        output: &mut Vec<Vec<T>>,
+    ) -> io::Result<()> {
+        for (i, chunk) in input.enumerate() {
+            if output.len() == i {
+                output.push(Vec::new());
+            }
+            let stream = &mut output[i];
+            stream.clear();
+
+            for symbol in chunk {
+                stream.push(symbol);
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn decompress_tokens<T: Symbol>(
+        &self,
+        _cx: &(),
+        input: impl Iterator<Item = T>,
+        output: &mut impl Extend<T>,
+    ) -> io::Result<()> {
+        output.extend(input);
+        Ok(())
+    }
+
+    #[inline]
+    fn decompress_tokens2<T: Symbol>(
+        &self,
+        _cx: &(),
+        input: impl Iterator<Item = io::Result<T>>,
+    ) -> impl Iterator<Item = io::Result<T>> {
+        input
     }
 }
 
@@ -234,6 +275,7 @@ where
         Ok((a_cx, b_cx))
     }
 
+    #[inline]
     fn decompress_tokens<T: Symbol>(
         &self,
         cx: &Self::Context<T>,
@@ -250,6 +292,7 @@ where
         Ok(())
     }
 
+    #[inline]
     fn decompress_tokens2<T: Symbol>(
         &self,
         cx: &Self::Context<T>,
@@ -292,10 +335,12 @@ struct ExtractError<I> {
 }
 
 impl<I> ExtractError<I> {
+    #[inline]
     fn new(iter: I) -> Self {
         ExtractError { iter, error: None }
     }
 
+    #[inline]
     fn result(&mut self) -> io::Result<()> {
         match self.error.take() {
             Some(err) => Err(err),
@@ -310,6 +355,7 @@ where
 {
     type Item = T;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         match self.iter.next()? {
             Ok(token) => Some(token),
@@ -318,5 +364,207 @@ where
                 None
             }
         }
+    }
+}
+
+pub struct RleIoExpand<T>(RleIoExpandVariant<T>);
+
+impl<T> RleIoExpand<T> {
+    pub fn new(rle: Rle<T>) -> Self {
+        RleIoExpand(RleIoExpandVariant::Repeat {
+            value: rle.value,
+            count: rle.count,
+        })
+    }
+
+    pub fn empty() -> Self {
+        RleIoExpand(RleIoExpandVariant::NoRepeat { error: None })
+    }
+
+    pub fn error(err: io::Error) -> Self {
+        RleIoExpand(RleIoExpandVariant::NoRepeat { error: Some(err) })
+    }
+}
+
+enum RleIoExpandVariant<T> {
+    Repeat { value: T, count: NonZero<usize> },
+    NoRepeat { error: Option<io::Error> },
+}
+
+impl<T> Iterator for RleIoExpand<T>
+where
+    T: Copy,
+{
+    type Item = io::Result<T>;
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            RleIoExpandVariant::Repeat { value, count } => {
+                let result = *value;
+                match NonZero::new(count.get() - 1) {
+                    Some(new_count) => *count = new_count,
+                    None => self.0 = RleIoExpandVariant::NoRepeat { error: None },
+                }
+                Some(Ok(result))
+            }
+            RleIoExpandVariant::NoRepeat { error } => match error.take() {
+                Some(err) => Some(Err(err)),
+                None => None,
+            },
+        }
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        match &mut self.0 {
+            RleIoExpandVariant::Repeat { value, count } => {
+                let result = *value;
+
+                match count.get() {
+                    c if c >= n => {
+                        match NonZero::new(c - n) {
+                            Some(new_count) => *count = new_count,
+                            None => self.0 = RleIoExpandVariant::NoRepeat { error: None },
+                        }
+                        Some(Ok(result))
+                    }
+                    _ => {
+                        self.0 = RleIoExpandVariant::NoRepeat { error: None };
+                        None
+                    }
+                }
+            }
+            RleIoExpandVariant::NoRepeat { error } => match error.take() {
+                Some(err) => Some(Err(err)),
+                None => None,
+            },
+        }
+    }
+
+    #[inline]
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, io::Result<T>) -> B,
+    {
+        match self.0 {
+            RleIoExpandVariant::Repeat { value, count } => {
+                let mut acc = init;
+                for _ in 0..count.get() {
+                    acc = f(acc, Ok(value));
+                }
+                acc
+            }
+            RleIoExpandVariant::NoRepeat { error } => match error {
+                Some(err) => f(init, Err(err)),
+                None => init,
+            },
+        }
+    }
+}
+
+impl<T> ExactSizeIterator for RleIoExpand<T>
+where
+    T: Copy,
+{
+    #[inline]
+    fn len(&self) -> usize {
+        match &self.0 {
+            RleIoExpandVariant::Repeat { count, .. } => count.get(),
+            RleIoExpandVariant::NoRepeat { error } => error.is_some() as usize,
+        }
+    }
+}
+
+impl<T> DoubleEndedIterator for RleIoExpand<T>
+where
+    T: Copy,
+{
+    #[inline]
+    fn next_back(&mut self) -> Option<io::Result<T>> {
+        // In case of repeat, it yields same `Ok(T)` values.
+        // In case of error it yields just one `Err(io::Error)`.
+        // Thus iteration direction doesn't matter, and we can just call `next()`.
+        self.next()
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // Similar to `next_back()`, we can just call `nth(n)`.
+        self.nth(n)
+    }
+
+    fn rfold<B, F>(self, init: B, f: F) -> B
+    where
+        F: FnMut(B, io::Result<T>) -> B,
+    {
+        // Similar to `next_back()`, we can just call `fold(init, f)`.
+        self.fold(init, f)
+    }
+
+    fn rfind<P>(&mut self, predicate: P) -> Option<Self::Item>
+    where
+        Self: Sized,
+        P: FnMut(&Self::Item) -> bool,
+    {
+        // Similar to `next_back()`, we can just call `find(predicate)`.
+        self.find(predicate)
+    }
+}
+
+pub struct RleCompressor;
+
+pub struct RleContext;
+
+impl_fixedcode_zero!(RleContext);
+
+impl Compressor for RleCompressor {
+    type Token<T: Symbol> = Rle<T>;
+    type Context<T: Symbol> = RleContext;
+
+    fn compress_symbols<T: Symbol>(
+        &self,
+        input: impl Iterator<Item = impl DoubleEndedIterator<Item = T>> + Clone,
+        output: &mut Vec<Vec<Rle<T>>>,
+    ) -> io::Result<Self::Context<T>> {
+        for (i, chunk) in input.enumerate() {
+            if output.len() == i {
+                output.push(Vec::new());
+            }
+
+            let stream = &mut output[i];
+            stream.clear();
+            stream.extend(rle(chunk));
+        }
+        Ok(RleContext)
+    }
+
+    fn decompress_tokens<T: Symbol>(
+        &self,
+        _cx: &RleContext,
+        input: impl Iterator<Item = Rle<T>>,
+        output: &mut impl Extend<T>,
+    ) -> io::Result<()> {
+        for rle in input {
+            output.extend(rle);
+        }
+        Ok(())
+    }
+
+    fn decompress_tokens2<T: Symbol>(
+        &self,
+        _cx: &RleContext,
+        input: impl Iterator<Item = io::Result<Rle<T>>>,
+    ) -> impl Iterator<Item = io::Result<T>> {
+        input.flat_map(|rle| match rle {
+            Ok(rle) => RleIoExpand::new(rle),
+            Err(err) => RleIoExpand::error(err),
+        })
     }
 }

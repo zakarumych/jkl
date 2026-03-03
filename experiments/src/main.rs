@@ -11,7 +11,7 @@ use egui_snarl::{
 use jkl::{
     bc1,
     bits::WriteBits,
-    encode::{Encode, FixedCode},
+    encode::{FixedCode, VarCode},
     image::{ImageMut, ImageRef},
     lz77,
     math::{interleave16_2, Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3},
@@ -3132,7 +3132,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3230,7 +3230,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3355,7 +3355,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         color_buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3476,7 +3476,7 @@ impl LZ77RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3754,7 +3754,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3843,7 +3843,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -3958,7 +3958,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         color_buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -4070,7 +4070,7 @@ impl LZ78RansCalculatorNode {
                         let mut write_bits = WriteBits::new(&mut write_size);
                         buffer
                             .iter()
-                            .for_each(|t| t.write(&mut write_bits).unwrap());
+                            .for_each(|t| t.var_write(&mut write_bits).unwrap());
                         write_bits.finish().unwrap();
 
                         println!(
@@ -4216,7 +4216,7 @@ where
                 lz77::Token::Literal { .. } => self.literal_count += 1,
             }
 
-            token.write(self.write_bits).unwrap();
+            token.var_write(self.write_bits).unwrap();
         }
     }
 }
@@ -4231,7 +4231,7 @@ where
 {
     fn extend<I: IntoIterator<Item = jkl::lz78::Token<T>>>(&mut self, iter: I) {
         for token in iter {
-            token.write(self.write_bits).unwrap();
+            token.var_write(self.write_bits).unwrap();
         }
     }
 }
