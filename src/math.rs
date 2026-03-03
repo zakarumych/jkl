@@ -1,4 +1,10 @@
-//! All the math functions are implemented here.
+//! Linear algebra primitives, color types, and bit-manipulation utilities.
+//!
+//! Provides [`Vec2`], [`Vec3`], and [`Vec4`] floating-point vectors with
+//! swizzle accessors, scalar-valued color types ([`R8U`], [`R32F`], [`Rg8U`],
+//! [`Rg32F`], [`Rgb8U`], [`Rgb32F`], [`Rgba8U`], [`Rgba32F`], [`Rgb565`],
+//! [`Yiq32F`]), axis-aligned bounding regions ([`Region3`], [`Rect`]),
+//! bit-interleaving helpers, and PCA-based axis estimation.
 
 use std::{
     convert::Infallible,
@@ -6,6 +12,10 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, Sub, SubAssign},
 };
 
+/// Linearly interpolates between `a` and `b` by factor `t`.
+///
+/// Returns exactly `a` when `t == 0.0` and exactly `b` when `t == 1.0`.
+/// The implementation is monotonic and avoids catastrophic cancellation.
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     // This lerp is monotonic and produces exactly a for t = 0 and b for t = 1.
@@ -21,11 +31,17 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
 /// Trait to create additive identity element.
 pub trait Zero {
     fn zero() -> Self;
+
+    fn is_zero(&self) -> bool;
 }
 
 impl Zero for f32 {
     fn zero() -> Self {
         0.0
+    }
+
+    fn is_zero(&self) -> bool {
+        *self == 0.0
     }
 }
 
@@ -33,11 +49,19 @@ impl Zero for u32 {
     fn zero() -> Self {
         0
     }
+
+    fn is_zero(&self) -> bool {
+        *self == 0
+    }
 }
 
 impl Zero for i32 {
     fn zero() -> Self {
         0
+    }
+
+    fn is_zero(&self) -> bool {
+        *self == 0
     }
 }
 
@@ -45,16 +69,26 @@ impl Zero for usize {
     fn zero() -> Self {
         0
     }
+
+    fn is_zero(&self) -> bool {
+        *self == 0
+    }
 }
 
 /// Trait to create multiplicative identity element.
 pub trait One {
     fn one() -> Self;
+
+    fn is_one(&self) -> bool;
 }
 
 impl One for f32 {
     fn one() -> Self {
         1.0
+    }
+
+    fn is_one(&self) -> bool {
+        *self == 1.0
     }
 }
 
@@ -62,17 +96,29 @@ impl One for u32 {
     fn one() -> Self {
         1
     }
+
+    fn is_one(&self) -> bool {
+        *self == 1
+    }
 }
 
 impl One for i32 {
     fn one() -> Self {
         1
     }
+
+    fn is_one(&self) -> bool {
+        *self == 1
+    }
 }
 
 impl One for usize {
     fn one() -> Self {
         1
+    }
+
+    fn is_one(&self) -> bool {
+        *self == 1
     }
 }
 
@@ -120,6 +166,10 @@ pub struct Vec2([f32; 2]);
 impl Zero for Vec2 {
     fn zero() -> Self {
         Vec2::ZERO
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0 == [0.0; 2]
     }
 }
 
@@ -192,33 +242,40 @@ impl DivAssign<f32> for Vec2 {
 }
 
 impl Vec2 {
+    /// The zero vector.
     pub const ZERO: Vec2 = Vec2([0.0, 0.0]);
 
+    /// Creates a new `Vec2` from individual components.
     #[inline(always)]
     pub const fn new(x: f32, y: f32) -> Self {
         Vec2([x, y])
     }
 
+    /// Creates a `Vec2` with all components set to `value`.
     #[inline(always)]
     pub const fn splat(value: f32) -> Self {
         Vec2([value, value])
     }
 
+    /// Returns the dot product of `self` and `rhs`.
     #[inline(always)]
     pub const fn dot(self, rhs: Vec2) -> f32 {
         self.x() * rhs.x() + self.y() * rhs.y()
     }
 
+    /// Returns the Euclidean length of this vector.
     #[inline(always)]
     pub fn length(&self) -> f32 {
         self.length_squared().sqrt()
     }
 
+    /// Returns the squared length of this vector.
     #[inline(always)]
     pub fn length_squared(&self) -> f32 {
         self.dot(*self)
     }
 
+    /// Returns the unit-length direction of this vector, or `(1, 0)` if zero.
     #[inline(always)]
     pub fn norm(self) -> Self {
         let length = self.length();
@@ -229,11 +286,13 @@ impl Vec2 {
         }
     }
 
+    /// Returns the x component.
     #[inline(always)]
     pub const fn x(&self) -> f32 {
         self.0[0]
     }
 
+    /// Returns the y component.
     #[inline(always)]
     pub const fn y(&self) -> f32 {
         self.0[1]
@@ -379,16 +438,19 @@ impl Vec2 {
         Vec4([self.y(), self.y(), self.y(), self.y()])
     }
 
+    /// Extends this `Vec2` with a z component, producing a `Vec3`.
     #[inline(always)]
     pub const fn with_z(&self, z: f32) -> Vec3 {
         Vec3([self.x(), self.y(), z])
     }
 
+    /// Extends this `Vec2` with z and w components, producing a `Vec4`.
     #[inline(always)]
     pub const fn with_zw(&self, z: f32, w: f32) -> Vec4 {
         Vec4([self.x(), self.y(), z, w])
     }
 
+    /// Linearly interpolates between two `Vec2` values component-wise.
     #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Vec2([lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t)])
@@ -403,6 +465,10 @@ pub struct Vec3([f32; 3]);
 impl Zero for Vec3 {
     fn zero() -> Self {
         Vec3::ZERO
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0 == [0.0; 3]
     }
 }
 
@@ -479,32 +545,39 @@ impl DivAssign<f32> for Vec3 {
 }
 
 impl Vec3 {
+    /// The zero vector.
     pub const ZERO: Vec3 = Vec3([0.0, 0.0, 0.0]);
 
+    /// Creates a new `Vec3` from individual components.
     #[inline(always)]
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Vec3([x, y, z])
     }
 
+    /// Creates a `Vec3` with all components set to `value`.
     pub const fn splat(value: f32) -> Self {
         Vec3([value, value, value])
     }
 
+    /// Returns the dot product of `self` and `rhs`.
     #[inline(always)]
     pub const fn dot(self, rhs: Vec3) -> f32 {
         self.x() * rhs.x() + self.y() * rhs.y() + self.z() * rhs.z()
     }
 
+    /// Returns the Euclidean length of this vector.
     #[inline(always)]
     pub fn length(&self) -> f32 {
         self.length_squared().sqrt()
     }
 
+    /// Returns the squared length of this vector.
     #[inline(always)]
     pub fn length_squared(&self) -> f32 {
         self.dot(*self)
     }
 
+    /// Returns the unit-length direction of this vector, or `(1, 0, 0)` if zero.
     #[inline(always)]
     pub fn norm(self) -> Self {
         let length = self.length();
@@ -515,16 +588,19 @@ impl Vec3 {
         }
     }
 
+    /// Returns the x component.
     #[inline(always)]
     pub const fn x(&self) -> f32 {
         self.0[0]
     }
 
+    /// Returns the y component.
     #[inline(always)]
     pub const fn y(&self) -> f32 {
         self.0[1]
     }
 
+    /// Returns the z component.
     #[inline(always)]
     pub const fn z(&self) -> f32 {
         self.0[2]
@@ -1115,11 +1191,13 @@ impl Vec3 {
         Vec4([self.z(), self.z(), self.z(), self.z()])
     }
 
+    /// Extends this `Vec3` with a w component, producing a `Vec4`.
     #[inline(always)]
     pub const fn with_w(&self, w: f32) -> Vec4 {
         Vec4([self.x(), self.y(), self.z(), w])
     }
 
+    /// Linearly interpolates between two `Vec3` values component-wise.
     #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Vec3([
@@ -1138,6 +1216,10 @@ pub struct Vec4([f32; 4]);
 impl Zero for Vec4 {
     fn zero() -> Self {
         Vec4::ZERO
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0 == [0.0; 4]
     }
 }
 
@@ -1238,33 +1320,40 @@ impl DivAssign<f32> for Vec4 {
 }
 
 impl Vec4 {
+    /// The zero vector.
     pub const ZERO: Vec4 = Vec4([0.0, 0.0, 0.0, 0.0]);
 
+    /// Creates a new `Vec4` from individual components.
     #[inline(always)]
     pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
         Vec4([x, y, z, w])
     }
 
+    /// Creates a `Vec4` with all components set to `value`.
     #[inline(always)]
     pub const fn splat(value: f32) -> Self {
         Vec4([value, value, value, value])
     }
 
+    /// Returns the dot product of `self` and `rhs`.
     #[inline(always)]
     pub const fn dot(self, rhs: Vec4) -> f32 {
         self.x() * rhs.x() + self.y() * rhs.y() + self.z() * rhs.z() + self.w() * rhs.w()
     }
 
+    /// Returns the Euclidean length of this vector.
     #[inline(always)]
     pub fn length(&self) -> f32 {
         self.length_squared().sqrt()
     }
 
+    /// Returns the squared length of this vector.
     #[inline(always)]
     pub fn length_squared(&self) -> f32 {
         self.dot(*self)
     }
 
+    /// Returns the unit-length direction of this vector, or `(1, 0, 0, 0)` if zero.
     #[inline(always)]
     pub fn norm(self) -> Self {
         let length = self.length();
@@ -1275,21 +1364,25 @@ impl Vec4 {
         }
     }
 
+    /// Returns the x component.
     #[inline(always)]
     pub const fn x(&self) -> f32 {
         self.0[0]
     }
 
+    /// Returns the y component.
     #[inline(always)]
     pub const fn y(&self) -> f32 {
         self.0[1]
     }
 
+    /// Returns the z component.
     #[inline(always)]
     pub const fn z(&self) -> f32 {
         self.0[2]
     }
 
+    /// Returns the w component.
     #[inline(always)]
     pub const fn w(&self) -> f32 {
         self.0[3]
@@ -2970,6 +3063,7 @@ impl Vec4 {
         Vec4([self.w(), self.w(), self.w(), self.w()])
     }
 
+    /// Linearly interpolates between two `Vec4` values component-wise.
     #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Vec4([
@@ -2984,11 +3078,14 @@ impl Vec4 {
 /// A region in 3D space defined by a points on a diagonal.
 #[derive(Clone, Copy)]
 pub struct Region3 {
+    /// The corner with the smallest component values.
     pub min: Vec3,
+    /// The corner with the largest component values.
     pub max: Vec3,
 }
 
 impl Region3 {
+    /// Builds the axis-aligned bounding box enclosing all `points`.
     pub fn new(points: impl Iterator<Item = Vec3>) -> Self {
         let mut min = Vec3([f32::INFINITY; 3]);
         let mut max = Vec3([f32::NEG_INFINITY; 3]);
@@ -3003,22 +3100,27 @@ impl Region3 {
         Region3 { min, max }
     }
 
+    /// Returns the minimum corner.
     pub fn min(&self) -> Vec3 {
         self.min
     }
 
+    /// Returns the maximum corner.
     pub fn max(&self) -> Vec3 {
         self.max
     }
 
+    /// Returns `true` if any axis has min > max (degenerate region).
     pub fn is_empty(&self) -> bool {
         self.min.x() > self.max.x() || self.min.y() > self.max.y() || self.min.z() > self.max.z()
     }
 
+    /// Returns `true` if min equals max (a single point).
     pub fn is_singular(&self) -> bool {
         self.min == self.max
     }
 
+    /// Returns the center point of the region.
     pub fn center(&self) -> Vec3 {
         (self.min + self.max) * 0.5
     }
@@ -3076,16 +3178,19 @@ impl Region3 {
         axes
     }
 
+    /// Returns `true` if the region is non-degenerate (min ≤ max on every axis).
     pub fn is_real(&self) -> bool {
         self.min.x() <= self.max.x() && self.min.y() <= self.max.y() && self.min.z() <= self.max.z()
     }
 
+    /// Returns the volume of the region, or `0.0` if degenerate.
     pub fn volume(&self) -> f32 {
         let diff = self.max - self.min;
         diff.x().min(0.0) * diff.y().min(0.0) * diff.z().min(0.0)
     }
 }
 
+/// A single-channel 8-bit unsigned color (red).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct R8U(u8);
@@ -3166,7 +3271,7 @@ impl R8U {
     }
 }
 
-/// An RGB color represented as 3 floats.
+/// A single-channel color represented as one `f32`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct R32F(f32);
@@ -3219,6 +3324,7 @@ impl R32F {
     }
 }
 
+/// A two-channel 8-bit unsigned color (red, green).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Rg8U([u8; 2]);
@@ -3323,7 +3429,7 @@ impl Rg8U {
     }
 }
 
-/// An RGB color represented as 3 floats.
+/// A two-channel (red, green) color represented as 2 `f32`s.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Rg32F([f32; 2]);
@@ -3737,7 +3843,7 @@ impl Rgba8U {
     }
 }
 
-/// An RGB color represented as 3 floats.
+/// An RGBA color represented as 4 `f32`s.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct Rgba32F([f32; 4]);
@@ -4080,6 +4186,8 @@ impl From<Vec4> for Rgba32F {
     }
 }
 
+/// Returns the bounding-box diagonal axis along which the given samples
+/// have the greatest variance.
 pub fn max_variance_diagonal_axis(samples: &[Vec3]) -> Vec3 {
     let region = Region3::new(samples.iter().copied());
     let center = region.center();
@@ -4103,6 +4211,8 @@ pub fn max_variance_diagonal_axis(samples: &[Vec3]) -> Vec3 {
     best_diagonal
 }
 
+/// Estimates the principal component axis of a set of 3D points via
+/// power iteration on the covariance matrix.
 pub fn pca_axis(v: &[Vec3]) -> Vec3 {
     let n = v.len() as f32;
     let mut mean = Vec3::ZERO;
@@ -4150,15 +4260,21 @@ pub fn pca_axis(v: &[Vec3]) -> Vec3 {
     axis
 }
 
+/// An axis-aligned rectangle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rect<T> {
+    /// Horizontal origin.
     pub x: T,
+    /// Vertical origin.
     pub y: T,
+    /// Width.
     pub w: T,
+    /// Height.
     pub h: T,
 }
 
 impl<T> Rect<T> {
+    /// Returns the area of the rectangle.
     pub fn area(&self) -> T
     where
         for<'a> &'a T: Mul<&'a T, Output = T>,
@@ -4166,6 +4282,7 @@ impl<T> Rect<T> {
         &self.w * &self.h
     }
 
+    /// Returns `true` if the point (`x`, `y`) lies inside this rectangle.
     pub fn contains_point(&self, x: T, y: T) -> bool
     where
         for<'a> &'a T: Add<&'a T, Output = T>,
@@ -4174,6 +4291,7 @@ impl<T> Rect<T> {
         self.x <= x && (&self.x + &self.w) > x && self.y <= y && (&self.y + &self.h) > y
     }
 
+    /// Returns `true` if `other` is fully contained within this rectangle.
     pub fn contains(&self, other: &Rect<T>) -> bool
     where
         for<'a> &'a T: Add<&'a T, Output = T>,
@@ -4185,9 +4303,10 @@ impl<T> Rect<T> {
             && (&self.y + &self.h) >= (&other.y + &other.h)
     }
 
+    /// Shrinks the rectangle inward so that position and size are multiples of (`x`, `y`).
     pub fn round_in(&self, x: T, y: T) -> Self
     where
-        T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + One + Copy,
+        T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + Zero + Copy,
     {
         let ux = round_up(self.x, x);
         let uy = round_up(self.y, y);
@@ -4202,9 +4321,10 @@ impl<T> Rect<T> {
         }
     }
 
+    /// Grows the rectangle outward so that position and size are multiples of (`x`, `y`).
     pub fn round_out(&self, x: T, y: T) -> Self
     where
-        T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + One + Copy,
+        T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + Zero + Copy,
     {
         let ux = round_down(self.x, x);
         let uy = round_down(self.y, y);
@@ -4220,20 +4340,28 @@ impl<T> Rect<T> {
     }
 }
 
+/// Rounds `value` down to the nearest multiple of `round`.
 #[inline(always)]
 pub fn round_down<T>(value: T, round: T) -> T
 where
     T: Sub<Output = T> + Rem<Output = T> + Copy,
 {
-    value - (value % round)
+    let rem = value % round;
+    value - rem
 }
 
+/// Rounds `value` up to the nearest multiple of `round`.
 #[inline(always)]
 pub fn round_up<T>(value: T, round: T) -> T
 where
-    T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + One + Copy,
+    T: Add<Output = T> + Sub<Output = T> + Rem<Output = T> + Zero + Copy,
 {
-    round_down(value + round - One::one(), round)
+    let rem = value % round;
+    if rem.is_zero() {
+        value
+    } else {
+        value + (round - rem)
+    }
 }
 
 #[test]
@@ -4250,6 +4378,7 @@ fn test_round_up() {
     assert_eq!(21, round_up(15, 7));
 }
 
+/// Spreads 32 bits into even bit positions of a 64-bit value (2-way interleave building block).
 #[inline(always)]
 pub const fn spread32_2(x: u32) -> u64 {
     let mut x = x as u64;
@@ -4261,11 +4390,13 @@ pub const fn spread32_2(x: u32) -> u64 {
     x
 }
 
+/// Interleaves the bits of two 32-bit values into a 64-bit Morton code.
 #[inline(always)]
 pub const fn interleave32_2(x: u32, y: u32) -> u64 {
     spread32_2(x) | (spread32_2(y) << 1)
 }
 
+/// Extracts even bit positions from a 64-bit value back into 32 bits.
 #[inline(always)]
 pub const fn compact32_2(x: u64) -> u32 {
     let mut x = x;
@@ -4278,11 +4409,13 @@ pub const fn compact32_2(x: u64) -> u32 {
     x as u32
 }
 
+/// Deinterleaves a 64-bit Morton code into two 32-bit values.
 #[inline(always)]
 pub const fn deinterleave32_2(x: u64) -> (u32, u32) {
     (compact32_2(x), compact32_2(x >> 1))
 }
 
+/// Spreads 16 bits into even bit positions of a 32-bit value.
 #[inline(always)]
 pub const fn spread16_2(x: u16) -> u32 {
     let mut x = x as u32;
@@ -4293,11 +4426,13 @@ pub const fn spread16_2(x: u16) -> u32 {
     x
 }
 
+/// Interleaves the bits of two 16-bit values into a 32-bit Morton code.
 #[inline(always)]
 pub const fn interleave16_2(x: u16, y: u16) -> u32 {
     spread16_2(x) | (spread16_2(y) << 1)
 }
 
+/// Extracts even bit positions from a 32-bit value back into 16 bits.
 #[inline(always)]
 pub const fn compact16_2(x: u32) -> u16 {
     let mut x = x;
@@ -4309,11 +4444,13 @@ pub const fn compact16_2(x: u32) -> u16 {
     x as u16
 }
 
+/// Deinterleaves a 32-bit Morton code into two 16-bit values.
 #[inline(always)]
 pub const fn deinterleave16_2(x: u32) -> (u16, u16) {
     (compact16_2(x), compact16_2(x >> 1))
 }
 
+/// Spreads 8 bits into even bit positions of a 16-bit value.
 #[inline(always)]
 pub const fn spread8_2(x: u8) -> u16 {
     let mut x = x as u16;
@@ -4323,11 +4460,13 @@ pub const fn spread8_2(x: u8) -> u16 {
     x
 }
 
+/// Interleaves the bits of two 8-bit values into a 16-bit Morton code.
 #[inline(always)]
 pub const fn interleave8_2(x: u8, y: u8) -> u16 {
     spread8_2(x) | (spread8_2(y) << 1)
 }
 
+/// Extracts even bit positions from a 16-bit value back into 8 bits.
 #[inline(always)]
 pub const fn compact8_2(x: u16) -> u8 {
     let mut x = x;
@@ -4338,11 +4477,13 @@ pub const fn compact8_2(x: u16) -> u8 {
     x as u8
 }
 
+/// Deinterleaves a 16-bit Morton code into two 8-bit values.
 #[inline(always)]
 pub const fn deinterleave8_2(x: u16) -> (u8, u8) {
     (compact8_2(x), compact8_2(x >> 1))
 }
 
+/// Spreads 8 bits into every-third bit position of a 24-bit value.
 #[inline(always)]
 pub const fn spread8_3(x: u8) -> u32 {
     let mut x = x as u32;
@@ -4352,11 +4493,13 @@ pub const fn spread8_3(x: u8) -> u32 {
     x
 }
 
+/// Interleaves the bits of three 8-bit values into a 24-bit Morton code.
 #[inline(always)]
 pub const fn interleave8_3(x: u8, y: u8, z: u8) -> u32 {
     spread8_3(x) | (spread8_3(y) << 1) | (spread8_3(z) << 2)
 }
 
+/// Extracts every-third bit from a value back into 8 bits.
 #[inline(always)]
 pub const fn compact8_3(x: u32) -> u8 {
     let mut x = x;
@@ -4367,11 +4510,13 @@ pub const fn compact8_3(x: u32) -> u8 {
     x as u8
 }
 
+/// Deinterleaves a 24-bit Morton code into three 8-bit values.
 #[inline(always)]
 pub const fn deinterleave8_3(x: u32) -> (u8, u8, u8) {
     (compact8_3(x), compact8_3(x >> 1), compact8_3(x >> 2))
 }
 
+/// Spreads 6 bits into every-third bit position of a 16-bit value.
 #[inline(always)]
 pub const fn spread6_3(x: u8) -> u16 {
     let mut x = x as u16;
@@ -4381,11 +4526,13 @@ pub const fn spread6_3(x: u8) -> u16 {
     x
 }
 
+/// Interleaves three values (6, 5, 5 bits) into a 16-bit Morton code.
 #[inline(always)]
 pub const fn interleave655_3(x: u8, y: u8, z: u8) -> u16 {
     spread6_3(x) | (spread6_3(y) << 1) | (spread6_3(z) << 2)
 }
 
+/// Extracts every-third bit from a 16-bit value back into 6 bits.
 #[inline(always)]
 pub const fn compact6_3(x: u16) -> u8 {
     let mut x = x;
@@ -4396,11 +4543,13 @@ pub const fn compact6_3(x: u16) -> u8 {
     x as u8
 }
 
+/// Deinterleaves a 16-bit Morton code into three values (6, 5, 5 bits).
 #[inline(always)]
 pub const fn deinterleave655_3(x: u16) -> (u8, u8, u8) {
     (compact6_3(x), compact6_3(x >> 1), compact6_3(x >> 2))
 }
 
+/// Spreads 8 bits into every-fourth bit position of a 32-bit value.
 #[inline(always)]
 pub const fn spread8_4(x: u8) -> u32 {
     let mut x = x as u32;
@@ -4410,11 +4559,13 @@ pub const fn spread8_4(x: u8) -> u32 {
     x
 }
 
+/// Interleaves the bits of four 8-bit values into a 32-bit Morton code.
 #[inline(always)]
 pub const fn interleave8_4(x: u8, y: u8, z: u8, w: u8) -> u32 {
     spread8_4(x) | (spread8_4(y) << 1) | (spread8_4(z) << 2) | (spread8_4(w) << 3)
 }
 
+/// Extracts every-fourth bit from a 32-bit value back into 8 bits.
 #[inline(always)]
 pub const fn compact8_4(x: u32) -> u8 {
     let mut x = x;
@@ -4425,6 +4576,7 @@ pub const fn compact8_4(x: u32) -> u8 {
     x as u8
 }
 
+/// Deinterleaves a 32-bit Morton code into four 8-bit values.
 #[inline(always)]
 pub const fn deinterleave8_4(x: u32) -> (u8, u8, u8, u8) {
     (

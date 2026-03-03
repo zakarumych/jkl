@@ -1,5 +1,7 @@
-//! BC4 implementation.
+//! BC3 implementation.
 //!
+//! BC3 compresses RGBA texels into 16-byte blocks. Each block stores alpha via a
+//! [`bc4::Block`] and RGB via a [`bc1::Block`].
 
 use std::convert::Infallible;
 
@@ -8,7 +10,7 @@ use crate::{
     math::{Rgb32F, Rgba32F, R32F},
 };
 
-/// A block of 4x4 texels compressed with BC4.
+/// A block of 4×4 texels compressed with BC3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
@@ -39,6 +41,7 @@ impl Block {
         rgb: bc1::Block::BLACK,
     };
 
+    /// Returns the raw 16-byte representation of this block.
     pub fn bytes(&self) -> [u8; 16] {
         let alpha = self.alpha.bytes();
         let rgb = self.rgb.bytes();
@@ -49,6 +52,7 @@ impl Block {
         ]
     }
 
+    /// Constructs a `Block` from its raw 16-byte representation.
     pub fn from_bytes(bytes: [u8; 16]) -> Block {
         let alpha = [
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -63,12 +67,12 @@ impl Block {
         }
     }
 
-    /// Decodes single BC4 block.
+    /// Decodes the RGB channels of this BC3 block, discarding alpha.
     pub fn decode(self) -> [[Rgb32F; 4]; 4] {
         self.rgb.decode()
     }
 
-    /// Decodes single BC1 block.
+    /// Decodes the full RGBA block, combining BC4 alpha and BC1 RGB.
     pub fn decode_with_alpha(self) -> [[Rgba32F; 4]; 4] {
         let alpha = self.alpha.decode();
         let rgb = self.rgb.decode();
@@ -84,6 +88,7 @@ impl Block {
         colors
     }
 
+    /// Encodes a 4×4 grid of RGB colors into a BC3 block with full alpha.
     pub fn encode(colors: [[Rgb32F; 4]; 4]) -> Self {
         let rgb = bc1::Block::encode(colors);
 
@@ -93,6 +98,7 @@ impl Block {
         }
     }
 
+    /// Encodes a 4×4 grid of RGBA colors into a BC3 block with per-texel alpha.
     pub fn encode_with_alpha(colors: [[Rgba32F; 4]; 4]) -> Self {
         let alpha_texels = colors.map(|row| row.map(|c| R32F::new(c.a())));
         let alpha = bc4::Block::encode(alpha_texels);

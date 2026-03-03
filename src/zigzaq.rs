@@ -1,7 +1,15 @@
+/// Bidirectional zigzag encoding between signed and unsigned integers.
+///
+/// Zigzag encoding maps signed values to unsigned ones so that values with small
+/// absolute magnitude produce small unsigned values, which compress better with
+/// variable-length encodings. For unsigned types the mapping is the identity.
 pub trait ZigZag: Copy + 'static {
+    /// The unsigned output type produced by the encoding.
     type Output: Copy + 'static;
 
+    /// Encodes this signed value into its unsigned zigzag representation.
     fn zigzag(self) -> Self::Output;
+    /// Decodes an unsigned zigzag-encoded value back into the original signed value.
     fn zagzig(u: Self::Output) -> Self;
 }
 

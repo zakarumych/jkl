@@ -18,9 +18,12 @@ use crate::{
     vle,
 };
 
+/// An LZ78 token: a dictionary prefix index paired with a trailing literal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token<T> {
+    /// Zero-based index into the dictionary. `0` means no prefix (standalone literal).
     pub prefix: usize,
+    /// The literal symbol that follows the prefix string.
     pub literal: T,
 }
 
@@ -51,12 +54,14 @@ struct Entry<T> {
     literal: T,
 }
 
+/// LZ78 encoder that builds a dictionary on the fly and emits [`Token`]s.
 pub struct Encoder<T> {
     entires: Vec<Entry<T>>,
     prefix: usize,
 }
 
 impl<T> Encoder<T> {
+    /// Creates a new, empty LZ78 encoder.
     pub fn new() -> Self {
         Encoder {
             entires: Vec::new(),
@@ -79,6 +84,8 @@ where
         None
     }
 
+    /// Feeds one symbol to the encoder; returns a token when a dictionary
+    /// entry is completed.
     pub fn encode(&mut self, symbol: T) -> Option<Token<T>> {
         let entry = Entry {
             prefix: self.prefix,
@@ -105,6 +112,7 @@ where
         }
     }
 
+    /// Flushes the encoder, returning any final pending token.
     pub fn finish(self) -> Option<Token<T>> {
         { self }.finish_mut()
     }
@@ -123,6 +131,8 @@ where
         })
     }
 
+    /// Wraps this encoder with an input iterator, producing a lazy token
+    /// stream.
     pub fn stream<I>(self, input: I) -> EncodeStream<T, I::IntoIter>
     where
         I: IntoIterator,
@@ -134,6 +144,8 @@ where
     }
 }
 
+/// A lazy iterator adapter that feeds an input iterator through an
+/// [`Encoder`] and yields [`Token`]s.
 pub struct EncodeStream<T, I> {
     encoder: Encoder<T>,
     input: Fuse<I>,
@@ -176,12 +188,14 @@ where
 {
 }
 
+/// LZ78 decoder that rebuilds the dictionary and expands tokens back into symbols.
 pub struct Decoder<T> {
     scratch: Vec<T>,
     entires: Vec<(usize, usize)>,
 }
 
 impl<T> Decoder<T> {
+    /// Creates a new, empty LZ78 decoder.
     pub fn new() -> Self {
         Decoder {
             scratch: Vec::new(),
@@ -190,6 +204,7 @@ impl<T> Decoder<T> {
     }
 }
 
+/// Errors that can occur while decoding an LZ78 stream.
 #[derive(Debug)]
 pub enum DecodeError {
     Io(std::io::Error),

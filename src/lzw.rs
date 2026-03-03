@@ -10,6 +10,10 @@ use std::io::{Read, Write};
 
 use crate::bits::{ReadBits, WriteBits};
 
+/// An alphabet element that can be used with the LZW encoder and decoder.
+///
+/// Implementors declare their alphabet size, maximum input size, and how to
+/// convert to/from `u32` indices.
 pub(crate) trait Element: Copy + Eq {
     // This parameter is related to the maximum size of the input data.
     // With maximum tile size of 256x256 there's 65536 entries per block field.
@@ -82,6 +86,8 @@ struct Entry<T> {
     element: T,
 }
 
+/// LZW encoder that builds a dictionary on the fly and writes compressed indices
+/// to a bit stream.
 pub struct Encoder<T> {
     entries: Vec<Entry<T>>,
     prefix: Option<u32>,
@@ -90,6 +96,7 @@ pub struct Encoder<T> {
 }
 
 impl<T> Encoder<T> {
+    /// Creates a new, empty LZW encoder.
     pub fn new() -> Self {
         Encoder {
             entries: Vec::new(),
@@ -175,6 +182,8 @@ where
         Ok(())
     }
 
+    /// Feeds one input element to the encoder, writing compressed data to `writer`
+    /// when a dictionary entry is completed.
     pub fn encode(&mut self, input: T, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
         let Some(prefix) = self.prefix else {
             self.prefix = Some(input.into_u32());
@@ -201,6 +210,7 @@ where
         Ok(())
     }
 
+    /// Flushes remaining state to `writer` and finalizes the compressed stream.
     pub fn finish(mut self, writer: &mut WriteBits<impl Write>) -> std::io::Result<()> {
         let Some(prefix) = self.prefix else {
             return Ok(());
@@ -211,6 +221,7 @@ where
     }
 }
 
+/// Errors that can occur while decoding an LZW stream.
 #[derive(Debug)]
 pub enum DecodeError {
     Io(std::io::Error),
@@ -229,6 +240,8 @@ enum Output<T> {
     Range(u32, u32),
 }
 
+/// LZW decoder that rebuilds the dictionary from a bit stream and yields
+/// decompressed elements one at a time.
 pub struct Decoder<T> {
     scratch: Vec<T>,
     entries: Vec<(u32, u32)>,
@@ -237,6 +250,7 @@ pub struct Decoder<T> {
 }
 
 impl<T> Decoder<T> {
+    /// Creates a new, empty LZW decoder.
     pub fn new() -> Self {
         Decoder {
             scratch: Vec::new(),
@@ -246,8 +260,12 @@ impl<T> Decoder<T> {
         }
     }
 
+    /// Asserts that no pending output remains.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the decoder still holds un-consumed output.
     pub fn finish(&self) {
-        match self.output {
             Output::Range(start, end) if start == end => {}
             _ => {
                 panic!("Decoder output was not consumed.");
@@ -375,6 +393,7 @@ where
         Ok(())
     }
 
+    /// Decodes the next element from the compressed bit stream.
     pub fn decode_next(&mut self, reader: &mut ReadBits<impl Read>) -> Result<T, DecodeError> {
         match self.output {
             Output::Element(element) => {

@@ -327,6 +327,7 @@ fn distance_index(distance: usize, index: usize) -> usize {
     distance - (index % (distance + 1))
 }
 
+/// LZ77 encoder that compresses a symbol stream into [`Token`]s using a sliding window.
 pub struct Encoder<T> {
     window: Window<T>,
     distance: usize,

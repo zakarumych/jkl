@@ -2,7 +2,11 @@ use std::{error::Error, io};
 
 use crate::bits::{ReadBits, WriteBits};
 
+/// A fixed-size byte buffer that can be used as the serialized representation of a [`FixedCode`] value.
+///
+/// Implementors provide a `zeroed` constructor for use as a read buffer during decoding.
 pub trait ByteArray: AsRef<[u8]> + AsMut<[u8]> + Send + Sync + 'static {
+    /// Returns a zeroed byte array.
     fn zeroed() -> Self;
 }
 
@@ -13,7 +17,7 @@ impl<const N: usize> ByteArray for [u8; N] {
     }
 }
 
-// A trait for generic encoding of values that can be represented as a fixed-size array of bytes.
+/// A trait for generic encoding of values that can be represented as a fixed-size array of bytes.
 pub trait FixedCode: Sized {
     const SIZE: usize;
     type Array: ByteArray;
@@ -21,11 +25,13 @@ pub trait FixedCode: Sized {
     fn fix_encode(&self) -> Self::Array;
     fn fix_decode(input: &Self::Array) -> Result<Self, Self::Error>;
 
+    /// Encodes `self` and writes the resulting bytes to `write`.
     #[inline]
     fn fix_write(&self, write: &mut impl io::Write) -> io::Result<()> {
         io::Write::write_all(write, self.fix_encode().as_ref())
     }
 
+    /// Reads exactly [`SIZE`](Self::SIZE) bytes from `read` and decodes them.
     #[inline]
     fn fix_read(read: &mut impl io::Read) -> io::Result<Self> {
         let mut buffer = Self::Array::zeroed();
@@ -124,6 +130,11 @@ macro_rules! impl_fixedcode_tuple {
 
 for_tuple!(impl_fixedcode_tuple);
 
+/// A trait for variable-length, bit-level encoding and decoding.
+///
+/// Types implementing `VarCode` can serialize themselves into a variable number of bits
+/// via [`WriteBits`] and deserialize from [`ReadBits`]. A blanket implementation is provided
+/// for all [`FixedCode`] types, writing their fixed-size representation as whole bytes.
 pub trait VarCode {
     fn var_bit_len(&self) -> usize;
     fn var_write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()>;

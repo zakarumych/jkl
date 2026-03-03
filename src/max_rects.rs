@@ -3,12 +3,18 @@ use std::f32;
 
 use crate::math::Rect;
 
+/// Scoring strategy used by [`MaximalRectangles`] to choose where to place a
+/// rectangle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Heuristic {
+    /// Prefer the free region whose remaining area after placement is smallest.
     #[default]
     BestAreaFit,
+    /// Prefer the free region whose shorter leftover side is smallest.
     BestShortSideFit,
+    /// Prefer the free region whose longer leftover side is smallest.
     BestLongSideFit,
+    /// Prefer the lowest, then leftmost, position.
     BottomLeft,
 }
 

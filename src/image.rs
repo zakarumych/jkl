@@ -98,14 +98,17 @@ impl<'a, T> Image2DRef<'a, T> {
         }
     }
 
+    /// Returns the width of this image in pixels.
     pub fn width(&self) -> usize {
         self.width
     }
 
+    /// Returns the height of this image in pixels.
     pub fn height(&self) -> usize {
         self.height
     }
 
+    /// Returns a copy of this image view (equivalent to `Copy` since views are non-owning).
     pub fn as_ref(&self) -> Image2DRef<'_, T> {
         *self
     }
@@ -181,6 +184,11 @@ impl<'a, T> Image2DRef<'a, T> {
             .flat_map(move |row| &row[..width])
     }
 
+    /// Copies this image view into a fixed-size `W`×`H` array.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the image dimensions do not match `W` and `H`.
     pub fn into_matrix<const W: usize, const H: usize>(self) -> [[T; W]; H]
     where
         T: Copy,
@@ -290,14 +298,17 @@ impl<'a, T> Image2DMut<'a, T> {
         }
     }
 
+    /// Returns the width of this image in pixels.
     pub fn width(&self) -> usize {
         self.width
     }
 
+    /// Returns the height of this image in pixels.
     pub fn height(&self) -> usize {
         self.height
     }
 
+    /// Returns an immutable view of this image.
     pub fn as_ref(&self) -> Image2DRef<'_, T> {
         Image2DRef {
             width: self.width,
@@ -307,6 +318,7 @@ impl<'a, T> Image2DMut<'a, T> {
         }
     }
 
+    /// Returns a mutable view of this image with a reborrowed lifetime.
     pub fn as_mut(&mut self) -> Image2DMut<'_, T> {
         Image2DMut {
             width: self.width,
@@ -506,6 +518,11 @@ impl<'a, T> Image2DMut<'a, T> {
         }
     }
 
+    /// Copies pixel data from a fixed-size `W`×`H` array into this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the image dimensions do not match `W` and `H`.
     pub fn copy_from_matrix<const W: usize, const H: usize>(&mut self, matrix: &[[T; W]; H])
     where
         T: Copy,
@@ -636,17 +653,17 @@ impl<'a, T> Image3DRef<'a, T> {
         }
     }
 
-    /// Creates a new `Image3DRef` by reborrowing its pixel data.
+    /// Returns the width of this image in pixels.
     pub fn width(&self) -> usize {
         self.width
     }
 
-    /// Creates a new `Image3DRef` by reborrowing its pixel data.
+    /// Returns the height of this image in pixels.
     pub fn height(&self) -> usize {
         self.height
     }
 
-    /// Creates a new `Image3DRef` by reborrowing its pixel data.
+    /// Returns the depth of this image in pixels.
     pub fn depth(&self) -> usize {
         self.depth
     }
@@ -979,17 +996,17 @@ impl<'a, T> Image3DMut<'a, T> {
         }
     }
 
-    /// Creates a new `Image3DMut` by reborrowing its pixel data mutably.
+    /// Returns the width of this image in pixels.
     pub fn width(&self) -> usize {
         self.width
     }
 
-    /// Creates a new `Image3DMut` by reborrowing its pixel data mutably.
+    /// Returns the height of this image in pixels.
     pub fn height(&self) -> usize {
         self.height
     }
 
-    /// Creates a new `Image3DMut` by reborrowing its pixel data mutably.
+    /// Returns the depth of this image in pixels.
     pub fn depth(&self) -> usize {
         self.depth
     }
@@ -1508,24 +1525,26 @@ impl<'a, T> Image3DMut<'a, T> {
     }
 }
 
+/// The spatial extent of an image, encoding both size and dimensionality.
+///
+/// Each variant carries only the dimensions relevant to that image type,
+/// so a `D2` stores width and height while a `D1Array` stores width and
+/// layer count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Extent {
-    D1 {
-        width: usize,
-    },
-    D2 {
-        width: usize,
-        height: usize,
-    },
+    /// A single-row, 1D image.
+    D1 { width: usize },
+    /// A 2D image.
+    D2 { width: usize, height: usize },
+    /// A 3D (volumetric) image.
     D3 {
         width: usize,
         height: usize,
         depth: usize,
     },
-    D1Array {
-        width: usize,
-        layers: usize,
-    },
+    /// An array of 1D images.
+    D1Array { width: usize, layers: usize },
+    /// An array of 2D images.
     D2Array {
         width: usize,
         height: usize,
@@ -1534,6 +1553,7 @@ pub enum Extent {
 }
 
 impl Extent {
+    /// Returns the width (first dimension).
     pub fn width(&self) -> usize {
         match *self {
             Extent::D1 { width } => width,
@@ -1544,6 +1564,7 @@ impl Extent {
         }
     }
 
+    /// Returns the height, or `1` for dimensionalities without a height axis.
     pub fn height(&self) -> usize {
         match *self {
             Extent::D1 { .. } => 1,
@@ -1554,6 +1575,7 @@ impl Extent {
         }
     }
 
+    /// Returns the depth, or `1` for non-volumetric extents.
     pub fn depth(&self) -> usize {
         match *self {
             Extent::D1 { .. } => 1,
@@ -1564,6 +1586,7 @@ impl Extent {
         }
     }
 
+    /// Returns the layer count, or `1` for non-array extents.
     pub fn layers(&self) -> usize {
         match *self {
             Extent::D1 { .. } => 1,
@@ -1574,6 +1597,7 @@ impl Extent {
         }
     }
 
+    /// Returns the [`Dimensions`] discriminant for this extent.
     pub fn dimensions(self) -> Dimensions {
         match self {
             Extent::D1 { .. } => Dimensions::D1,
@@ -1584,6 +1608,7 @@ impl Extent {
         }
     }
 
+    /// Converts this extent into a `[width, height, depth_or_layers]` triple.
     pub fn raw_size(self) -> [usize; 3] {
         match self {
             Extent::D1 { width } => [width, 1, 1],
@@ -1602,6 +1627,11 @@ impl Extent {
         }
     }
 
+    /// Reconstructs an `Extent` from a raw `[width, height, depth_or_layers]`
+    /// triple and a [`Dimensions`] tag.
+    ///
+    /// Returns `None` if the values are inconsistent with the
+    /// chosen dimensionality (e.g. height ≠ 1 for `D1`).
     pub fn from_raw_size(value: [usize; 3], dimensions: Dimensions) -> Option<Self> {
         match dimensions {
             Dimensions::D1 => {
@@ -1642,16 +1672,28 @@ impl Extent {
     }
 }
 
+/// Discriminant for the dimensionality of an image, without carrying
+/// size information.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dimensions {
+    /// One-dimensional.
     D1,
+    /// Two-dimensional.
     D2,
+    /// Three-dimensional (volumetric).
     D3,
+    /// Array of one-dimensional images.
     D1Array,
+    /// Array of two-dimensional images.
     D2Array,
 }
 
-/// A non-owning view into a pixel buffer interpreted as an image of certain dimensions and extent.
+/// A non-owning, immutable view into a pixel buffer interpreted as an image
+/// with a specific [`Dimensions`] and extent.
+///
+/// Combines the flexibility of arbitrary dimensionality
+/// (`D1`, `D2`, `D3`, `D1Array`, `D2Array`) with a uniform interface for
+/// iteration, slicing, and layer extraction.
 pub struct ImageRef<'a, T> {
     dimensions: Dimensions,
     extent: [usize; 3],
@@ -1667,6 +1709,15 @@ impl<'a, T> Clone for ImageRef<'a, T> {
 }
 
 impl<'a, T> ImageRef<'a, T> {
+    /// Creates a new `ImageRef` with contiguous storage.
+    ///
+    /// `extent` is `[width, height_or_layers, depth_or_layers]` interpreted
+    /// according to `dimensions`. Unused axes must be `1`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pixels.len()` does not equal the total element count, or if
+    /// unused axes are not `1`.
     pub fn new(dimensions: Dimensions, extent: [usize; 3], pixels: &'a [T]) -> Self {
         let len = match dimensions {
             Dimensions::D1 => {
@@ -1696,6 +1747,13 @@ impl<'a, T> ImageRef<'a, T> {
         }
     }
 
+    /// Creates a new `ImageRef` with custom row and plane strides.
+    ///
+    /// `stride[0]` is the row stride, `stride[1]` is the plane / layer stride.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pixels.len()` does not match the computed length.
     pub fn with_stride(
         dimensions: Dimensions,
         extent: [usize; 3],
@@ -1731,30 +1789,37 @@ impl<'a, T> ImageRef<'a, T> {
         }
     }
 
+    /// Shorthand for creating a 1D image.
     pub fn new_1d(width: usize, pixels: &'a [T]) -> Self {
         ImageRef::new(Dimensions::D1, [width, 1, 1], pixels)
     }
 
+    /// Shorthand for creating a 2D image.
     pub fn new_2d(width: usize, height: usize, pixels: &'a [T]) -> Self {
         ImageRef::new(Dimensions::D2, [width, height, 1], pixels)
     }
 
+    /// Shorthand for creating a 3D image.
     pub fn new_3d(width: usize, height: usize, depth: usize, pixels: &'a [T]) -> Self {
         ImageRef::new(Dimensions::D3, [width, height, depth], pixels)
     }
 
+    /// Shorthand for creating a 1D array image.
     pub fn new_1d_array(width: usize, layers: usize, pixels: &'a [T]) -> Self {
         ImageRef::new(Dimensions::D1Array, [width, layers, 1], pixels)
     }
 
+    /// Shorthand for creating a 2D array image.
     pub fn new_2d_array(width: usize, height: usize, layers: usize, pixels: &'a [T]) -> Self {
         ImageRef::new(Dimensions::D2Array, [width, height, layers], pixels)
     }
 
+    /// Shorthand for creating a 2D image with a custom row stride.
     pub fn with_stride_2d(width: usize, height: usize, stride: usize, pixels: &'a [T]) -> Self {
         ImageRef::with_stride(Dimensions::D2, [width, height, 1], [stride, 0], pixels)
     }
 
+    /// Shorthand for creating a 3D image with custom strides.
     pub fn with_stride_3d(
         width: usize,
         height: usize,
@@ -1771,6 +1836,7 @@ impl<'a, T> ImageRef<'a, T> {
         )
     }
 
+    /// Shorthand for creating a 1D array image with a custom stride.
     pub fn with_stride_1d_array(
         width: usize,
         layers: usize,
@@ -1780,6 +1846,7 @@ impl<'a, T> ImageRef<'a, T> {
         ImageRef::with_stride(Dimensions::D1Array, [width, layers, 1], [stride, 0], pixels)
     }
 
+    /// Shorthand for creating a 2D array image with custom strides.
     pub fn with_stride_2d_array(
         width: usize,
         height: usize,
@@ -1796,10 +1863,12 @@ impl<'a, T> ImageRef<'a, T> {
         )
     }
 
+    /// Returns the dimensionality of this image.
     pub fn dimensions(&self) -> Dimensions {
         self.dimensions
     }
 
+    /// Returns the [`Extent`] of this image.
     pub fn extent(&self) -> Extent {
         match self.dimensions {
             Dimensions::D1 => Extent::D1 {
@@ -1826,14 +1895,17 @@ impl<'a, T> ImageRef<'a, T> {
         }
     }
 
+    /// Returns the raw `[width, height_or_layers, depth_or_layers]` triple.
     pub fn raw_extent(&self) -> [usize; 3] {
         self.extent
     }
 
+    /// Returns the image width.
     pub fn width(&self) -> usize {
         self.extent[0]
     }
 
+    /// Returns the image height, or `1` for 1D / 1D-array types.
     pub fn height(&self) -> usize {
         match self.dimensions {
             Dimensions::D1 | Dimensions::D1Array => 1,
@@ -1841,6 +1913,7 @@ impl<'a, T> ImageRef<'a, T> {
         }
     }
 
+    /// Returns the image depth, or `1` for non-volumetric types.
     pub fn depth(&self) -> usize {
         match self.dimensions {
             Dimensions::D1 | Dimensions::D1Array | Dimensions::D2 | Dimensions::D2Array => 1,
@@ -2022,7 +2095,8 @@ impl<'a, T> ImageRef<'a, T> {
     }
 }
 
-/// A non-owning view into a pixel buffer interpreted as an image of certain dimensions and extent.
+/// A non-owning, mutable view into a pixel buffer interpreted as an image
+/// with a specific [`Dimensions`] and extent.
 pub struct ImageMut<'a, T> {
     dimensions: Dimensions,
     extent: [usize; 3],
@@ -2031,6 +2105,13 @@ pub struct ImageMut<'a, T> {
 }
 
 impl<'a, T> ImageMut<'a, T> {
+    /// Creates a new `ImageMut` with contiguous storage.
+    ///
+    /// See [`ImageRef::new`] for the meaning of `dimensions` and `extent`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pixels.len()` does not equal the total element count.
     pub fn new(dimensions: Dimensions, extent: [usize; 3], pixels: &'a mut [T]) -> Self {
         let len = match dimensions {
             Dimensions::D1 => {
@@ -2060,6 +2141,9 @@ impl<'a, T> ImageMut<'a, T> {
         }
     }
 
+    /// Creates a new `ImageMut` with custom row and plane strides.
+    ///
+    /// See [`ImageRef::with_stride`] for details on stride semantics.
     pub fn with_stride(
         dimensions: Dimensions,
         extent: [usize; 3],
@@ -2095,30 +2179,37 @@ impl<'a, T> ImageMut<'a, T> {
         }
     }
 
+    /// Shorthand for creating a mutable 1D image.
     pub fn new_1d(width: usize, pixels: &'a mut [T]) -> Self {
         ImageMut::new(Dimensions::D1, [width, 1, 1], pixels)
     }
 
+    /// Shorthand for creating a mutable 2D image.
     pub fn new_2d(width: usize, height: usize, pixels: &'a mut [T]) -> Self {
         ImageMut::new(Dimensions::D2, [width, height, 1], pixels)
     }
 
+    /// Shorthand for creating a mutable 3D image.
     pub fn new_3d(width: usize, height: usize, depth: usize, pixels: &'a mut [T]) -> Self {
         ImageMut::new(Dimensions::D3, [width, height, depth], pixels)
     }
 
+    /// Shorthand for creating a mutable 1D array image.
     pub fn new_1d_array(width: usize, layers: usize, pixels: &'a mut [T]) -> Self {
         ImageMut::new(Dimensions::D1Array, [width, layers, 1], pixels)
     }
 
+    /// Shorthand for creating a mutable 2D array image.
     pub fn new_2d_array(width: usize, height: usize, layers: usize, pixels: &'a mut [T]) -> Self {
         ImageMut::new(Dimensions::D2Array, [width, height, layers], pixels)
     }
 
+    /// Shorthand for creating a mutable 2D image with a custom row stride.
     pub fn with_stride_2d(width: usize, height: usize, stride: usize, pixels: &'a mut [T]) -> Self {
         ImageMut::with_stride(Dimensions::D2, [width, height, 1], [stride, 0], pixels)
     }
 
+    /// Shorthand for creating a mutable 3D image with custom strides.
     pub fn with_stride_3d(
         width: usize,
         height: usize,
@@ -2135,6 +2226,7 @@ impl<'a, T> ImageMut<'a, T> {
         )
     }
 
+    /// Shorthand for creating a mutable 1D array image with a custom stride.
     pub fn with_stride_1d_array(
         width: usize,
         layers: usize,
@@ -2144,6 +2236,7 @@ impl<'a, T> ImageMut<'a, T> {
         ImageMut::with_stride(Dimensions::D1Array, [width, layers, 1], [stride, 0], pixels)
     }
 
+    /// Shorthand for creating a mutable 2D array image with custom strides.
     pub fn with_stride_2d_array(
         width: usize,
         height: usize,
@@ -2160,10 +2253,12 @@ impl<'a, T> ImageMut<'a, T> {
         )
     }
 
+    /// Returns the dimensionality of this image.
     pub fn dimensions(&self) -> Dimensions {
         self.dimensions
     }
 
+    /// Returns the raw `[width, height_or_layers, depth_or_layers]` triple.
     pub fn extent(&self) -> [usize; 3] {
         self.extent
     }
@@ -2305,6 +2400,90 @@ impl<'a, T> ImageMut<'a, T> {
             row_stride: self.stride[0],
             plane_stride: self.stride[1],
             pixels: &mut *self.pixels,
+        }
+    }
+
+    /// Reinterpret this image as layered 2D image, regardless of its original dimensions
+    /// and returns a reference to the specified layer.
+    ///
+    /// 1D, both array and non-array images will be treated as having height equal to 1.
+    /// 3D images will be treated as having layers equal to the depth dimension.
+    /// Which is different than reinterpretation as 3D and taking a plane.
+    ///
+    /// The main difference from `as_ref_3d` is that layers of D1 are interpreted as layers, not height.
+    ///
+    /// `self.depth() * self.layers()` must be greater than `layer`, otherwise this method will panic.
+    pub fn plane_ref(&self, layer: usize) -> Image2DRef<'_, T> {
+        match self.dimensions {
+            Dimensions::D1 | Dimensions::D1Array => {
+                assert!(layer < self.extent[1]);
+                Image2DRef {
+                    width: self.extent[0],
+                    height: 1,
+                    stride: self.stride[0],
+                    pixels: &self.pixels[layer * self.stride[0]..],
+                }
+            }
+            Dimensions::D2 | Dimensions::D2Array => {
+                assert!(layer < self.extent[2]);
+                Image2DRef {
+                    width: self.extent[0],
+                    height: self.extent[1],
+                    stride: self.stride[0],
+                    pixels: &self.pixels[layer * self.stride[1]..],
+                }
+            }
+            Dimensions::D3 => {
+                assert!(layer < self.extent[2]);
+                Image2DRef {
+                    width: self.extent[0],
+                    height: self.extent[1],
+                    stride: self.stride[0],
+                    pixels: &self.pixels[layer * self.stride[1]..],
+                }
+            }
+        }
+    }
+
+    /// Reinterpret this image as layered 2D image, regardless of its original dimensions
+    /// and returns a reference to the specified layer.
+    ///
+    /// 1D, both array and non-array images will be treated as having height equal to 1.
+    /// 3D images will be treated as having layers equal to the depth dimension.
+    /// Which is different than reinterpretation as 3D and taking a plane.
+    ///
+    /// The main difference from `as_ref_3d` is that layers of D1 are interpreted as layers, not height.
+    ///
+    /// `self.depth() * self.layers()` must be greater than `layer`, otherwise this method will panic.
+    pub fn plane_mut(&mut self, layer: usize) -> Image2DMut<'_, T> {
+        match self.dimensions {
+            Dimensions::D1 | Dimensions::D1Array => {
+                assert!(layer < self.extent[1]);
+                Image2DMut {
+                    width: self.extent[0],
+                    height: 1,
+                    stride: self.stride[0],
+                    pixels: &mut self.pixels[layer * self.stride[0]..],
+                }
+            }
+            Dimensions::D2 | Dimensions::D2Array => {
+                assert!(layer < self.extent[2]);
+                Image2DMut {
+                    width: self.extent[0],
+                    height: self.extent[1],
+                    stride: self.stride[0],
+                    pixels: &mut self.pixels[layer * self.stride[1]..],
+                }
+            }
+            Dimensions::D3 => {
+                assert!(layer < self.extent[2]);
+                Image2DMut {
+                    width: self.extent[0],
+                    height: self.extent[1],
+                    stride: self.stride[0],
+                    pixels: &mut self.pixels[layer * self.stride[1]..],
+                }
+            }
         }
     }
 

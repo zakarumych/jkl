@@ -3,7 +3,6 @@ use std::convert::Infallible;
 use crate::{
     encode::FixedCode,
     image::{Extent, Image2DRef, ImageRef},
-    jackal::image::header,
 };
 
 /// Size of the tile in number of blocks.
@@ -14,31 +13,21 @@ pub struct TileSize {
 }
 
 impl FixedCode for TileSize {
-    const SIZE: usize = 1;
-    type Array = [u8; 1];
+    const SIZE: usize = 4;
+    type Array = [u8; 4];
     type Error = Infallible;
 
-    fn fix_encode(&self) -> [u8; 1] {
-        debug_assert!(self.width.is_power_of_two());
-        debug_assert!(self.height.is_power_of_two());
+    fn fix_encode(&self) -> [u8; 4] {
+        let [w0, w1] = self.width.to_le_bytes();
+        let [h0, h1] = self.height.to_le_bytes();
 
-        let w = self.width.trailing_zeros();
-        let h = self.height.trailing_zeros();
-
-        debug_assert!(w < 16);
-        debug_assert!(h < 16);
-
-        [((w << 4) | h) as u8]
+        [w0, w1, h0, h1]
     }
 
-    fn fix_decode(input: &[u8; 1]) -> Result<Self, Infallible> {
-        let byte = input[0];
-        let w = byte >> 4;
-        let h = byte & 0x0F;
-
-        let width = 1 << w;
-        let height = 1 << h;
-
+    fn fix_decode(input: &[u8; 4]) -> Result<Self, Infallible> {
+        let [w0, w1, h0, h1] = *input;
+        let width = u16::from_le_bytes([w0, w1]);
+        let height = u16::from_le_bytes([h0, h1]);
         Ok(TileSize { width, height })
     }
 }
@@ -58,13 +47,14 @@ impl TileSize {
         flat_cost: f32,
         size_cost: f32,
     ) -> Self {
-        assert!(block_width.is_power_of_two());
-        assert!(block_height.is_power_of_two());
-
         // The max tile size to consider is either enough to cover the entire extent,
         // or 32768 blocks, which is the maximum tile size.
-        let max_tile_width = u16::try_from(extent.width().next_power_of_two()).unwrap_or(1 << 15);
-        let max_tile_height = u16::try_from(extent.height().next_power_of_two()).unwrap_or(1 << 15);
+        let max_tile_width =
+            u16::try_from(extent.width().next_multiple_of(usize::from(block_width)))
+                .unwrap_or(1 << 15);
+        let max_tile_height =
+            u16::try_from(extent.height().next_multiple_of(usize::from(block_height)))
+                .unwrap_or(1 << 15);
 
         let mut min_cost = f32::INFINITY;
         let mut best_candidate = TileSize {
@@ -77,11 +67,11 @@ impl TileSize {
         let mut tile_height = usize::from(block_height);
 
         loop {
-            let row_size = (extent.width() + tile_width - 1) / tile_width;
-            let column_size = (extent.height() + tile_height - 1) / tile_height;
+            let tiles_x = extent.width().div_ceil(tile_width);
+            let tiles_y = extent.height().div_ceil(tile_height);
             let planes = extent.depth() * extent.layers();
 
-            let tiles_count = row_size * column_size * planes;
+            let tiles_count = tiles_x * tiles_y * planes;
             let warps_count = (tiles_count + 63) / 64;
 
             let cost = (flat_cost + size_cost * (tile_width as f32 * tile_height as f32))
@@ -95,18 +85,25 @@ impl TileSize {
                 };
             }
 
-            if tile_width == usize::from(max_tile_width) {
-                if tile_height == usize::from(max_tile_height) {
-                    break;
-                } else {
-                    tile_height *= 2;
-                    tile_width = usize::from(block_width);
-                }
+            if tile_width < usize::from(max_tile_width) {
+                // Try doubling the tile width, saturating at the max tile width.
+                tile_width = usize::min(tile_width.saturating_mul(2), usize::from(max_tile_width));
             } else {
-                tile_width *= 2;
+                if tile_height < usize::from(max_tile_height) {
+                    // Try doubling the tile height, saturating at the max tile height.
+                    tile_height =
+                        usize::min(tile_height.saturating_mul(2), usize::from(max_tile_height));
+
+                    // Start with smallest tile width again.
+                    tile_width = usize::from(block_width);
+                } else {
+                    // We have reached the maximum tile size, break the loop.
+                    break;
+                }
             }
         }
 
+        // Return the best candidate found.
         best_candidate
     }
 
@@ -132,8 +129,8 @@ impl TileSize {
         let height = extent.height();
         let planes = extent.layers() * extent.layers();
 
-        let tiles_x = (width + usize::from(self.width) - 1) / usize::from(self.width);
-        let tiles_y = (height + usize::from(self.height) - 1) / usize::from(self.height);
+        let tiles_x = width.div_ceil(usize::from(self.width));
+        let tiles_y = height.div_ceil(usize::from(self.height));
 
         [tiles_x, tiles_y, planes]
     }

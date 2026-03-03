@@ -103,6 +103,10 @@ where
         }
     }
 
+    /// Writes exactly `bit_len` bits from `buffer` starting at `bit_offset`.
+    ///
+    /// Unlike [`write_bits`](Self::write_bits), this retries on partial writes
+    /// and returns an error if the writer cannot accept all bits.
     pub fn write_all_bits(
         &mut self,
         mut buffer: &[u8],
@@ -161,6 +165,8 @@ where
         }
     }
 
+    /// Flushes any remaining buffered bits to the underlying writer, padding
+    /// the last byte with zeros if necessary.
     pub fn finish(&mut self) -> io::Result<()> {
         if self.buffer_len > 0 {
             let write_bytes = (self.buffer_len + 7) / 8;
@@ -368,6 +374,10 @@ where
         }
     }
 
+    /// Reads exactly `bit_len` bits into `buffer` starting at `bit_offset`.
+    ///
+    /// Unlike [`read_bits`](Self::read_bits), this retries on partial reads
+    /// and returns an error if the reader is exhausted before all bits are read.
     pub fn read_all_bits(
         &mut self,
         mut buffer: &mut [u8],
@@ -514,6 +524,8 @@ where
     }
 }
 
+/// Creates a [`WriteBits`] wrapper, passes it to `f`, then flushes and
+/// returns the result.
 pub fn write_bits_scope<W, O>(
     write: W,
     f: impl FnOnce(&mut WriteBits<W>) -> io::Result<O>,
@@ -527,6 +539,7 @@ where
     result
 }
 
+/// Creates a [`ReadBits`] wrapper and passes it to `f`.
 pub fn read_bits_scope<R, O>(
     read: R,
     f: impl FnOnce(&mut ReadBits<R>) -> io::Result<O>,

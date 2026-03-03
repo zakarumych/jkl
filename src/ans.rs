@@ -9,6 +9,12 @@ use crate::{
     vle,
 };
 
+/// Shared frequency table used by [`Encoder`] and [`Decoder`].
+///
+/// A `Context` stores per-symbol frequencies, cumulative frequencies, and a
+/// lookup table for fast symbol resolution during decoding. It is built once
+/// from input data or a frequency map and then shared by reference with
+/// encoders and decoders.
 #[derive(Clone, Debug)]
 pub struct Context<T> {
     freqs: HashMap<T, u64>,
@@ -18,10 +24,8 @@ pub struct Context<T> {
 }
 
 impl<T> Context<T> {
-    // Build context from sorted frequencies and frequency map.
-    ///
-    /// Frequency sequence is sorted by symbols.
-    /// Frequency map is provided if it was already built.
+    /// Builds a context from sorted (symbol, frequency) pairs and an optional
+    /// pre-built frequency map.
     fn build(
         freqs_sorted: impl IntoIterator<Item = (T, u64)>,
         freqs: Option<HashMap<T, u64>>,
@@ -128,6 +132,7 @@ impl<T> Context<T> {
         Self::from_frequency_map_ord_by(freqs, ord)
     }
 
+    /// Returns an iterator over all `(symbol, frequency)` pairs in this context.
     pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, u64)> + '_
     where
         T: Copy,
@@ -304,6 +309,13 @@ where
     }
 }
 
+/// ANS encoder that compresses symbols into a stream of `u32` tokens.
+///
+/// Symbols are fed one at a time via [`encode`](Self::encode). Each call may
+/// return a `u32` token that must be stored. After all symbols have been
+/// encoded, call [`finish`](Self::finish) to retrieve the final state pair.
+///
+/// The token stream must be provided to the [`Decoder`] in **reverse** order.
 pub struct Encoder<'a, T> {
     state: u64,
     ctx: &'a Context<T>,
@@ -327,6 +339,7 @@ where
         }
     }
 
+    /// Encodes a single symbol, returning a `u32` token if state bits need to be emitted.
     pub fn encode(&mut self, symbol: T) -> Option<u32> {
         let freq = self.ctx.freqs[&symbol];
         let cumul = self.ctx.cumul[&symbol];
@@ -374,10 +387,13 @@ where
         emit
     }
 
+    /// Returns the current internal encoder state.
     pub fn state(&self) -> u64 {
         self.state
     }
 
+    /// Consumes the encoder and returns the two-word final state that the
+    /// decoder needs to begin decoding.
     pub fn finish(self) -> [u32; 2] {
         debug_assert!(self.state >= 0x0000_0000_8000_0000);
         debug_assert!(self.state < 0x8000_0000_0000_0000);
@@ -406,6 +422,11 @@ impl fmt::Display for DecodeError {
 
 impl Error for DecodeError {}
 
+/// ANS decoder that reconstructs symbols from a token stream.
+///
+/// Tokens must be provided in the reverse of the order they were emitted by
+/// the [`Encoder`]. After all symbols have been decoded, call
+/// [`finish`](Self::finish) to verify the decoder returned to its initial state.
 pub struct Decoder<'a, T> {
     state: u64,
     ctx: &'a Context<T>,
@@ -415,10 +436,14 @@ impl<'a, T> Decoder<'a, T>
 where
     T: Eq + Hash + Copy,
 {
+    /// Creates a new decoder bound to the given context.
     pub fn new(ctx: &'a Context<T>) -> Self {
         Self { state: 0, ctx }
     }
 
+    /// Decodes one symbol, pulling additional tokens from `tokens` as needed.
+    ///
+    /// Returns `None` when the token stream is exhausted.
     pub fn decode(&mut self, mut tokens: impl Iterator<Item = u32>) -> Option<T> {
         if self.state < 0x8000_0000 {
             let token = tokens.next()?;
@@ -449,6 +474,7 @@ where
         Some(symbol)
     }
 
+    /// Decodes all remaining symbols from `tokens` and appends them to `extend`.
     pub fn decode_all(
         &mut self,
         mut tokens: impl Iterator<Item = u32>,
@@ -488,7 +514,10 @@ where
         }
     }
 
-    // If decoding finished correctly, state should be exactly 0x7FFF_FFFF, which is the initial state of encoder.
+    /// Verifies that the decoder ended in the expected final state.
+    ///
+    /// Returns `Err(DecodeError::Incomplete)` if the internal state does not
+    /// match the encoder's initial state, which typically indicates corrupted data.
     pub fn finish(&self) -> Result<(), DecodeError> {
         if self.state == 0x7FFF_FFFF {
             Ok(())

@@ -1,3 +1,8 @@
+/// Separates the even-indexed and odd-indexed bits of `index` into two compacted `u16` values.
+///
+/// Even bits (positions 0, 2, 4, …) are packed into the first element and odd bits
+/// (positions 1, 3, 5, …) into the second. This is the inverse of 2D Morton/Z-order
+/// interleaving and is used by [`BoundZCurve`] to recover `(x, y)` from a linear Z-index.
 pub fn even_odd_split_squash(index: u32) -> (u16, u16) {
     // Mask even and odd bits
     let mut even_bits: u32 = index & 0x55555555; // Mask for even bits (0x5 = 0101)
@@ -35,7 +40,12 @@ fn test_even_odd_split_squash() {
     );
 }
 
-/// Iterator that outputs 2D coordinates in z-order.
+/// Iterator that outputs 2D coordinates in Z-order (Morton order), clamped to a
+/// `width × height` rectangle.
+///
+/// Coordinates that fall outside the rectangle are skipped efficiently without
+/// decoding every Z-index. The iteration terminates once all valid `(x, y)` pairs
+/// within the bounds have been yielded.
 pub struct BoundZCurve {
     width: u16,
     height: u16,
@@ -43,6 +53,8 @@ pub struct BoundZCurve {
 }
 
 impl BoundZCurve {
+    /// Creates a new iterator that yields all `(x, y)` coordinates in Z-order
+    /// within a `width × height` rectangle.
     pub fn new(width: u16, height: u16) -> Self {
         BoundZCurve {
             width,

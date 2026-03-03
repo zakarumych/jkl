@@ -6,6 +6,11 @@ use crate::{
     math::Delta,
 };
 
+/// Trait abstracting over Rust unsigned integer primitives for use in
+/// variable-length Elias delta encoding.
+///
+/// Implementing this trait allows a type to be encoded and decoded with the
+/// [`encode`] / [`decode`] family of functions.
 pub trait Unsigned:
     fmt::Debug + Ord + ops::Add<Output = Self> + ops::Sub<Output = Self> + Eq + Copy + 'static
 {
@@ -118,6 +123,7 @@ where
     Ok(())
 }
 
+/// Returns the number of bits required to Elias-delta-encode `v` (which may be zero).
 pub fn encode_bit_len<T>(v: T) -> usize
 where
     T: Unsigned,
@@ -143,6 +149,7 @@ where
     (gamma_bits + tail_bits) as usize
 }
 
+/// Returns the number of bits required to Elias-delta-encode `v` (which must be non-zero).
 pub fn encode_non_zero_bit_len<T>(v: T) -> usize
 where
     T: Unsigned,
@@ -218,7 +225,7 @@ where
     Ok(())
 }
 
-/// Error specifies that the decoded value is too large to fit in the target type.
+/// Error indicating that a decoded value exceeds the range of the target integer type.
 #[derive(Clone, Copy, Debug)]
 pub struct TooLarge;
 
@@ -313,7 +320,11 @@ where
     Ok(T::pow2(msb) + tail)
 }
 
-/// Wrapper type to encode values using variable-length encoding.
+/// Newtype wrapper that implements [`VarCode`] via Elias delta encoding.
+///
+/// Wrapping an unsigned integer in `Vle` allows it to be serialized
+/// with [`VarCode::var_write`] / [`VarCode::var_read`] using variable-length
+/// bit encoding, where small values use fewer bits.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Vle<T>(pub T);
 

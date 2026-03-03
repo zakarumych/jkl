@@ -1,5 +1,7 @@
-//! BC4 implementation.
+//! BC5 implementation.
 //!
+//! BC5 compresses two-channel (red, green) texels into 16-byte blocks.
+//! Each block stores a pair of independent [`bc4::Block`]s, one per channel.
 
 use std::convert::Infallible;
 
@@ -8,7 +10,7 @@ use crate::{
     math::{Rg32F, R32F},
 };
 
-/// A block of 4x4 texels compressed with BC4.
+/// A block of 4×4 texels compressed with BC5.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
@@ -34,6 +36,7 @@ impl Block {
         green: bc4::Block::WHITE,
     };
 
+    /// Returns the raw 16-byte representation of this block.
     pub fn bytes(&self) -> [u8; 16] {
         let red = self.red.bytes();
         let green = self.green.bytes();
@@ -44,6 +47,7 @@ impl Block {
         ]
     }
 
+    /// Constructs a `Block` from its raw 16-byte representation.
     pub fn from_bytes(bytes: [u8; 16]) -> Block {
         let red = [
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -58,7 +62,7 @@ impl Block {
         }
     }
 
-    /// Decodes single BC4 block.
+    /// Decodes this BC5 block into a 4×4 grid of two-channel colors.
     pub fn decode(self) -> [[Rg32F; 4]; 4] {
         let red = self.red.decode();
         let green = self.green.decode();
@@ -74,6 +78,7 @@ impl Block {
         colors
     }
 
+    /// Encodes a 4×4 grid of two-channel colors into a BC5 block.
     pub fn encode(colors: [[Rg32F; 4]; 4]) -> Self {
         let mut red = [[R32F::BLACK; 4]; 4];
         let mut green = [[R32F::BLACK; 4]; 4];

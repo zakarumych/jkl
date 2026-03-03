@@ -7,6 +7,11 @@ use crate::{
     vle,
 };
 
+/// A run-length encoded element: a `value` repeated `count` times.
+///
+/// `Rle` is [`Copy`] when `T` is, and implements [`IntoIterator`] to expand
+/// back into individual elements. It also implements [`VarCode`] for
+/// bit-level serialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rle<T> {
     pub value: T,
@@ -69,6 +74,7 @@ where
     }
 }
 
+/// Iterator that expands a single [`Rle`] back into `count` copies of its value.
 pub struct RleIntoIter<T> {
     value: T,
     count: usize,
@@ -135,9 +141,16 @@ where
     }
 }
 
+/// Configuration for the RLE encoder.
+///
+/// Controls the maximum run length and whether runs are split into
+/// power-of-two lengths (useful for encodings where power-of-two counts
+/// compress more efficiently).
 #[derive(Clone, Copy, Debug)]
 pub struct RleCfg {
+    /// Maximum allowed run length. Runs longer than this are split.
     pub max: usize,
+    /// When `true`, each emitted run length is a power of two.
     pub only_power_of_two: bool,
 }
 
@@ -150,6 +163,10 @@ impl Default for RleCfg {
     }
 }
 
+/// Compresses an iterator of elements into a run-length encoded iterator.
+///
+/// Consecutive equal elements are collapsed into [`Rle`] runs with no upper
+/// bound on run length. Equivalent to `rle_with_cfg(iter, RleCfg::default())`.
 pub fn rle<T, I>(iter: I) -> RleIter<T, I::IntoIter>
 where
     T: Eq + Copy,
@@ -158,6 +175,9 @@ where
     rle_with_cfg(iter, RleCfg::default())
 }
 
+/// Like [`rle`], but every emitted run length is a power of two.
+///
+/// Longer runs are split into descending powers of two.
 pub fn rle_power_of_two<T, I>(iter: I) -> RleIter<T, I::IntoIter>
 where
     T: Eq + Copy,
@@ -172,6 +192,8 @@ where
     )
 }
 
+/// Compresses an iterator of elements into a run-length encoded iterator
+/// using the provided [`RleCfg`] configuration.
 pub fn rle_with_cfg<T, I>(iter: I, cfg: RleCfg) -> RleIter<T, I::IntoIter>
 where
     T: Eq + Copy,
@@ -187,6 +209,9 @@ where
     }
 }
 
+/// A lazy iterator adapter that yields [`Rle`] runs from an underlying element iterator.
+///
+/// Created by [`rle`], [`rle_power_of_two`], or [`rle_with_cfg`].
 #[derive(Clone, Debug)]
 pub struct RleIter<T, I> {
     last: Option<Rle<T>>,

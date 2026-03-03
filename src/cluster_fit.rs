@@ -2,12 +2,23 @@ use std::ops::{Add, AddAssign, Mul, Sub};
 
 use crate::math::{pca_axis, Region3, Vec3, Zero};
 
+/// Result of a cluster-fit quantization pass.
+///
+/// Contains the two palette endpoints, a per-sample index into the palette,
+/// and the total approximation error.
 pub struct ClusterFit<T, const N: usize> {
+    /// The two optimized palette endpoints.
     pub endpoints: (T, T),
+    /// Per-sample index into the palette built from `endpoints`.
     pub indices: [usize; N],
+    /// Total accumulated error across all samples.
     pub error: f32,
 }
 
+/// A value that can participate in cluster-fit quantization.
+///
+/// Implementors must support basic arithmetic, projection onto a
+/// principal axis, and a fallback heuristic for initial endpoint selection.
 pub trait Sample:
     Zero
     + Copy
@@ -17,10 +28,14 @@ pub trait Sample:
     + Mul<f32, Output = Self>
     + PartialEq
 {
+    /// The type used to represent the principal axis for ordering.
     type Axis: Copy;
 
+    /// Computes the principal axis of a set of samples.
     fn principal_axis(samples: &[Self]) -> Self::Axis;
+    /// Projects this sample onto `axis`, returning a scalar for ordering.
     fn project(self, axis: Self::Axis) -> f32;
+    /// Returns a pair of endpoints derived from the bounding extents of the samples.
     fn fallback_endpoints(samples: &[Self]) -> (Self, Self);
 }
 
@@ -69,6 +84,16 @@ impl Sample for Vec3 {
     }
 }
 
+/// Quantizes `samples` into `I` palette entries by exhaustive cluster-fit search.
+///
+/// Iterates all possible clusterings of `N` samples into `I` groups along the
+/// principal axis, solves for optimal endpoints via least-squares, then keeps
+/// the partition with the lowest total error.
+///
+/// * `samples` – the values to quantize (at most `N`).
+/// * `remap_endpoints` – snaps endpoints to the target representation (e.g.
+///   rounding to `Rgb565`) and returns the remapped pair.
+/// * `error` – distance function between two samples.
 pub fn cluster_fit<T, const I: usize, const N: usize>(
     samples: &[T],
     remap_endpoints: impl Fn(T, T) -> (T, T),

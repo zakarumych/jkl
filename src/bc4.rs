@@ -38,6 +38,7 @@ impl Block {
         texels: [0x00; 6],
     };
 
+    /// Returns the raw 8-byte representation of this block.
     pub fn bytes(&self) -> [u8; 8] {
         let color0 = self.color0.bits();
         let color1 = self.color1.bits();
@@ -48,6 +49,7 @@ impl Block {
         ]
     }
 
+    /// Constructs a `Block` from its raw 8-byte representation.
     pub fn from_bytes(bytes: [u8; 8]) -> Block {
         let color0 = R8U::new(bytes[0]);
         let color1 = R8U::new(bytes[1]);
@@ -113,6 +115,7 @@ impl Block {
         colors
     }
 
+    /// Encodes a 4×4 grid of single-channel colors into a BC4 block.
     pub fn encode(colors: [[R32F; 4]; 4]) -> Self {
         let mut samples = [0.0; 16];
 
