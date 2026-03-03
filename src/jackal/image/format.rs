@@ -180,6 +180,8 @@ impl Pixel for Rgb8U {
             &mut tokens,
         )?;
 
+        dbg!(tokens.len());
+
         let mut offsets = WriteOffsets::new(tokens.len(), &mut write)?;
 
         write_bits_scope(&mut write, |write_bits| context.var_write(write_bits))?;
@@ -277,8 +279,7 @@ impl Pixel for bc1::Block {
         let mut offsets = WriteOffsets::new(color_tokens.len(), &mut write)?;
 
         write_bits_scope(&mut write, |write| {
-            color_cx.var_write(write)?;
-            texel_cx.var_write(write)?;
+            (color_cx, texel_cx).var_write(write)?;
             Ok(())
         })?;
 
@@ -401,9 +402,13 @@ impl Offsets {
     pub fn slice(&self) -> &[u64] {
         &self.array
     }
+
+    pub fn bytes_size(&self) -> usize {
+        self.array.len() * <u64 as FixedCode>::SIZE
+    }
 }
 
-struct WriteOffsets {
+pub(super) struct WriteOffsets {
     offsets_start: u64,
     offsets: Offsets,
 }
@@ -416,7 +421,7 @@ impl WriteOffsets {
         W: io::Write + io::Seek,
     {
         let offsets_start = write.stream_position()?;
-        let offsets_len = u64::try_from(8 * len)
+        let offsets_len = u64::try_from(<u64 as FixedCode>::SIZE * len)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Too many tiles"))?; // 8 is the size of u64 in bytes
         let offsets_end = offsets_start + offsets_len;
 

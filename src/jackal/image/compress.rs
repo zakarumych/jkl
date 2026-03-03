@@ -138,9 +138,6 @@ impl Compressor for LZ77Compressor {
 #[derive(Clone, Copy, Debug)]
 pub struct AnsCompressor;
 
-#[derive(Clone, Copy, Debug)]
-pub struct AnsConfig;
-
 impl Compressor for AnsCompressor {
     type Token<T: Symbol> = u32;
     type Context<T: Symbol> = ans::Context<T>;
@@ -166,6 +163,7 @@ impl Compressor for AnsCompressor {
             }
 
             stream.extend(encoder.finish());
+            stream.reverse();
         }
 
         Ok(context)

@@ -54,8 +54,8 @@ impl<'a, T> Image2DRef<'a, T> {
         Image2DRef {
             width,
             height,
-            pixels,
             stride: width,
+            pixels,
         }
     }
 
@@ -73,13 +73,10 @@ impl<'a, T> Image2DRef<'a, T> {
     ///
     /// # Panics
     ///
-    /// Panics if `pixels.len() < (height - 1) * stride + width`.
+    /// Panics if pixels is too short to contain all pixels from the specified dimensions and stride.
     pub fn with_stride(width: usize, height: usize, stride: usize, pixels: &'a [T]) -> Self {
-        let len = (height != 0)
-            .then(|| (height - 1) * stride + width)
-            .unwrap_or(0);
-
-        assert!(pixels.len() >= len);
+        let plane_len = len2([width, height], stride);
+        assert!(pixels.len() >= plane_len);
         Image2DRef {
             width,
             height,
@@ -165,8 +162,10 @@ impl<'a, T> Image2DRef<'a, T> {
             pixels,
         } = *self;
 
-        pixels[..stride * height]
-            .chunks_exact(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks(stride)
             .map(move |row| &row[..width])
     }
 
@@ -179,8 +178,10 @@ impl<'a, T> Image2DRef<'a, T> {
             pixels,
         } = *self;
 
-        pixels[..stride * height]
-            .chunks_exact(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks(stride)
             .flat_map(move |row| &row[..width])
     }
 
@@ -262,12 +263,10 @@ impl<'a, T> Image2DMut<'a, T> {
     ///
     /// # Panics
     ///
-    /// Panics if `pixels.len() < (height - 1) * stride + width`.
+    /// Panics if pixels is too short to contain all pixels from the specified dimensions and stride.
     pub fn with_stride(width: usize, height: usize, stride: usize, pixels: &'a mut [T]) -> Self {
-        let len = (height != 0)
-            .then(|| (height - 1) * stride + width)
-            .unwrap_or(0);
-        assert!(pixels.len() >= len);
+        let plane_len = len2([width, height], stride);
+        assert!(pixels.len() >= plane_len);
         Image2DMut {
             width,
             height,
@@ -386,8 +385,10 @@ impl<'a, T> Image2DMut<'a, T> {
             ref pixels,
         } = *self;
 
-        pixels[..stride * height]
-            .chunks_exact(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks(stride)
             .map(move |row| &row[..width])
     }
 
@@ -400,8 +401,10 @@ impl<'a, T> Image2DMut<'a, T> {
             ref mut pixels,
         } = *self;
 
-        pixels[..stride * height]
-            .chunks_exact_mut(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks_mut(stride)
             .map(move |row| &mut row[..width])
     }
 
@@ -414,8 +417,10 @@ impl<'a, T> Image2DMut<'a, T> {
             pixels,
         } = self;
 
-        pixels[..stride * height]
-            .chunks_exact_mut(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks_mut(stride)
             .map(move |row| &mut row[..width])
     }
 
@@ -428,8 +433,10 @@ impl<'a, T> Image2DMut<'a, T> {
             ref pixels,
         } = *self;
 
-        pixels[..stride * height]
-            .chunks_exact(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks(stride)
             .flat_map(move |row| &row[..width])
     }
 
@@ -442,8 +449,10 @@ impl<'a, T> Image2DMut<'a, T> {
             ref mut pixels,
         } = *self;
 
-        pixels[..stride * height]
-            .chunks_exact_mut(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks_mut(stride)
             .flat_map(move |row| &mut row[..width])
     }
 
@@ -456,8 +465,10 @@ impl<'a, T> Image2DMut<'a, T> {
             pixels,
         } = self;
 
-        pixels[..stride * height]
-            .chunks_exact_mut(stride)
+        let plane_len = len2([width, height], stride);
+
+        pixels[..plane_len]
+            .chunks_mut(stride)
             .flat_map(move |row| &mut row[..width])
     }
 
@@ -606,7 +617,7 @@ impl<'a, T> Image3DRef<'a, T> {
     ///
     /// # Panics
     ///
-    /// Panics if `pixels.len() < (depth - 1) * plane_stride + (height - 1) * row_stride + width`.
+    /// Panics if pixels is too short to contain all pixels from the specified dimensions and stride.
     pub fn with_stride(
         width: usize,
         height: usize,
@@ -615,10 +626,8 @@ impl<'a, T> Image3DRef<'a, T> {
         plane_stride: usize,
         pixels: &'a [T],
     ) -> Self {
-        let len = (depth != 0 && height != 0)
-            .then(|| (depth - 1) * plane_stride + (height - 1) * row_stride + width)
-            .unwrap_or(0);
-        assert!(pixels.len() >= len);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+        assert!(pixels.len() >= volume_len);
         Image3DRef {
             width,
             height,
@@ -643,12 +652,13 @@ impl<'a, T> Image3DRef<'a, T> {
 
     /// Creates a new `Image3DRef` from a single XY plane of pixels.
     pub fn from_plane(plane: Image2DRef<'a, T>) -> Self {
+        let plane_len = len2([plane.width, plane.height], plane.stride);
         Image3DRef {
             width: plane.width,
             height: plane.height,
             depth: 1,
             row_stride: plane.stride,
-            plane_stride: plane.stride * plane.height,
+            plane_stride: plane_len,
             pixels: plane.pixels,
         }
     }
@@ -823,8 +833,10 @@ impl<'a, T> Image3DRef<'a, T> {
             pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact(plane_stride)
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks(plane_stride)
             .map(move |plane| Image2DRef {
                 width,
                 height,
@@ -852,9 +864,12 @@ impl<'a, T> Image3DRef<'a, T> {
             pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks(row_stride))
             .map(move |row| &row[..width])
     }
 
@@ -877,9 +892,12 @@ impl<'a, T> Image3DRef<'a, T> {
             pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks(row_stride))
             .flat_map(move |row| &row[..width])
     }
 }
@@ -949,7 +967,7 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// # Panics
     ///
-    /// Panics if `pixels.len() < (depth - 1) * plane_stride + (height - 1) * row_stride + width`.
+    /// Panics if pixels is too short to contain all pixels from the specified dimensions and strides.
     pub fn with_stride(
         width: usize,
         height: usize,
@@ -958,10 +976,8 @@ impl<'a, T> Image3DMut<'a, T> {
         plane_stride: usize,
         pixels: &'a mut [T],
     ) -> Self {
-        let len = (depth != 0 && height != 0)
-            .then(|| (depth - 1) * plane_stride + (height - 1) * row_stride + width)
-            .unwrap_or(0);
-        assert!(pixels.len() >= len);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+        assert!(pixels.len() >= volume_len);
         Image3DMut {
             width,
             height,
@@ -986,12 +1002,13 @@ impl<'a, T> Image3DMut<'a, T> {
 
     /// Creates a new `Image3DMut` from a single XY plane of pixels.
     pub fn from_plane(plane: Image2DMut<'a, T>) -> Self {
+        let plane_len = len2([plane.width, plane.height], plane.stride);
         Image3DMut {
             width: plane.width,
             height: plane.height,
             depth: 1,
             row_stride: plane.stride,
-            plane_stride: plane.stride * plane.height,
+            plane_stride: plane_len,
             pixels: plane.pixels,
         }
     }
@@ -1326,8 +1343,10 @@ impl<'a, T> Image3DMut<'a, T> {
             ref pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact(plane_stride)
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks(plane_stride)
             .map(move |plane| Image2DRef {
                 width,
                 height,
@@ -1352,8 +1371,10 @@ impl<'a, T> Image3DMut<'a, T> {
             ref mut pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact_mut(plane_stride)
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks_mut(plane_stride)
             .map(move |plane| Image2DMut {
                 width,
                 height,
@@ -1378,8 +1399,10 @@ impl<'a, T> Image3DMut<'a, T> {
             pixels,
         } = self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact_mut(plane_stride)
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks_mut(plane_stride)
             .map(move |plane| Image2DMut {
                 width,
                 height,
@@ -1406,9 +1429,12 @@ impl<'a, T> Image3DMut<'a, T> {
             ref pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks(row_stride))
             .map(move |row| &row[..width])
     }
 
@@ -1428,9 +1454,12 @@ impl<'a, T> Image3DMut<'a, T> {
             ref mut pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact_mut(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact_mut(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks_mut(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks_mut(row_stride))
             .map(move |row| &mut row[..width])
     }
 
@@ -1450,9 +1479,12 @@ impl<'a, T> Image3DMut<'a, T> {
             pixels,
         } = self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact_mut(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact_mut(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks_mut(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks_mut(row_stride))
             .map(move |row| &mut row[..width])
     }
 
@@ -1474,9 +1506,12 @@ impl<'a, T> Image3DMut<'a, T> {
             ref pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks(row_stride))
             .flat_map(move |row| &row[..width])
     }
 
@@ -1496,9 +1531,12 @@ impl<'a, T> Image3DMut<'a, T> {
             ref mut pixels,
         } = *self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact_mut(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact_mut(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks_mut(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks_mut(row_stride))
             .flat_map(move |row| &mut row[..width])
     }
 
@@ -1518,9 +1556,12 @@ impl<'a, T> Image3DMut<'a, T> {
             pixels,
         } = self;
 
-        pixels[..plane_stride * depth]
-            .chunks_exact_mut(plane_stride)
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact_mut(row_stride))
+        let plane_len = len2([width, height], row_stride);
+        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+        pixels[..volume_len]
+            .chunks_mut(plane_stride)
+            .flat_map(move |plane| plane[..plane_len].chunks_mut(row_stride))
             .flat_map(move |row| &mut row[..width])
     }
 }
@@ -1768,15 +1809,9 @@ impl<'a, T> ImageRef<'a, T> {
             }
             Dimensions::D2 | Dimensions::D1Array => {
                 assert_eq!(extent[2], 1);
-                (extent[1] != 0 && extent[0] != 0)
-                    .then(|| (extent[1] - 1) * stride[0] + extent[0])
-                    .unwrap_or(0)
+                len2([extent[0], extent[1]], stride[0])
             }
-            Dimensions::D3 | Dimensions::D2Array => {
-                (extent[2] != 0 && extent[1] != 0 && extent[0] != 0)
-                    .then(|| (extent[2] - 1) * stride[1] + (extent[1] - 1) * stride[0] + extent[0])
-                    .unwrap_or(0)
-            }
+            Dimensions::D3 | Dimensions::D2Array => len3(extent, stride),
         };
 
         assert_eq!(pixels.len(), len);
@@ -2040,16 +2075,15 @@ impl<'a, T> ImageRef<'a, T> {
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'a, T>> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact(plane_stride))
+        self.pixels[..sizes.total_len]
+            .chunks(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
             .map(move |plane| Image2DRef {
-                width,
-                height,
-                stride: row_stride,
+                width: sizes.width,
+                height: sizes.height,
+                stride: sizes.row_stride,
                 pixels: plane,
             })
     }
@@ -2064,14 +2098,13 @@ impl<'a, T> ImageRef<'a, T> {
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
     pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact(plane_stride))
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
-            .map(move |row| &row[..width])
+        self.pixels[..sizes.total_len]
+            .chunks(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks(sizes.row_stride))
+            .map(move |row| &row[..sizes.width])
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
@@ -2084,14 +2117,13 @@ impl<'a, T> ImageRef<'a, T> {
     /// In case you want to iterate over pixels in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact(plane_stride))
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
-            .flat_map(move |row| &row[..width])
+        self.pixels[..sizes.total_len]
+            .chunks(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks(sizes.row_stride))
+            .flat_map(move |row| &row[..sizes.width])
     }
 }
 
@@ -2498,16 +2530,15 @@ impl<'a, T> ImageMut<'a, T> {
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'_, T>> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact(plane_stride))
+        self.pixels[..sizes.total_len]
+            .chunks(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
             .map(move |plane| Image2DRef {
-                width,
-                height,
-                stride: row_stride,
+                width: sizes.width,
+                height: sizes.height,
+                stride: sizes.row_stride,
                 pixels: plane,
             })
     }
@@ -2523,16 +2554,15 @@ impl<'a, T> ImageMut<'a, T> {
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes_mut(&mut self) -> impl DoubleEndedIterator<Item = Image2DMut<'_, T>> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact_mut(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact_mut(plane_stride))
+        self.pixels[..sizes.total_len]
+            .chunks_mut(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
             .map(move |plane| Image2DMut {
-                width,
-                height,
-                stride: row_stride,
+                width: sizes.width,
+                height: sizes.height,
+                stride: sizes.row_stride,
                 pixels: plane,
             })
     }
@@ -2548,16 +2578,15 @@ impl<'a, T> ImageMut<'a, T> {
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn into_iter_planes(self) -> impl DoubleEndedIterator<Item = Image2DMut<'a, T>> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact_mut(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact_mut(plane_stride))
+        self.pixels[..sizes.total_len]
+            .chunks_mut(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
             .map(move |plane| Image2DMut {
-                width,
-                height,
-                stride: row_stride,
+                width: sizes.width,
+                height: sizes.height,
+                stride: sizes.row_stride,
                 pixels: plane,
             })
     }
@@ -2572,14 +2601,51 @@ impl<'a, T> ImageMut<'a, T> {
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
     pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'_ [T]> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact(plane_stride))
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
-            .map(move |row| &row[..width])
+        self.pixels[..sizes.total_len]
+            .chunks(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks(sizes.row_stride))
+            .map(move |row| &row[..sizes.width])
+    }
+
+    /// Returns an iterator over all rows in this image in row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
+    /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
+    ///
+    /// In case you want to iterate over rows in an image with arbitrary strides,
+    /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
+    pub fn iter_rows_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut [T]> {
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
+
+        self.pixels[..sizes.total_len]
+            .chunks_mut(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks_mut(sizes.row_stride))
+            .map(move |row| &mut row[..sizes.width])
+    }
+
+    /// Returns an iterator over all rows in this image in row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
+    /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
+    ///
+    /// In case you want to iterate over rows in an image with arbitrary strides,
+    /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
+    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = &'a mut [T]> {
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
+
+        self.pixels[..sizes.total_len]
+            .chunks_mut(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks_mut(sizes.row_stride))
+            .map(move |row| &mut row[..sizes.width])
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
@@ -2592,36 +2658,169 @@ impl<'a, T> ImageMut<'a, T> {
     /// In case you want to iterate over pixels in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'_ T> {
-        let [width, height, depth, layers] = total_extent(self.dimensions, self.extent);
-        let [row_stride, plane_stride, layer_stride] = total_stride(self.dimensions, self.stride);
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
 
-        self.pixels[..layer_stride * layers]
-            .chunks_exact(layer_stride)
-            .flat_map(move |layer| layer[..plane_stride * depth].chunks_exact(plane_stride))
-            .flat_map(move |plane| plane[..row_stride * height].chunks_exact(row_stride))
-            .flat_map(move |row| &row[..width])
+        self.pixels[..sizes.total_len]
+            .chunks(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks(sizes.row_stride))
+            .flat_map(move |row| &row[..sizes.width])
+    }
+
+    /// Returns an iterator over all pixels in this image in row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
+    /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
+    ///
+    /// In case you want to iterate over pixels in an image with arbitrary strides,
+    /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
+    pub fn iter_pixels_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut T> {
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
+
+        self.pixels[..sizes.total_len]
+            .chunks_mut(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks_mut(sizes.row_stride))
+            .flat_map(move |row| &mut row[..sizes.width])
+    }
+
+    /// Returns an iterator over all pixels in this image in row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
+    /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
+    ///
+    /// In case you want to iterate over pixels in an image with arbitrary strides,
+    /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
+    pub fn into_iter_pixels(self) -> impl DoubleEndedIterator<Item = &'a mut T> {
+        let sizes = sizes(self.dimensions, self.extent, self.stride);
+
+        self.pixels[..sizes.total_len]
+            .chunks_mut(sizes.layer_stride)
+            .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
+            .flat_map(move |plane| plane[..sizes.plane_len].chunks_mut(sizes.row_stride))
+            .flat_map(move |row| &mut row[..sizes.width])
     }
 }
 
-fn total_extent(dimensions: Dimensions, extent: [usize; 3]) -> [usize; 4] {
-    match dimensions {
-        Dimensions::D1 => [extent[0], 1, 1, 1],
-        Dimensions::D2 => [extent[0], extent[1], 1, 1],
-        Dimensions::D3 => [extent[0], extent[1], extent[2], 1],
-        Dimensions::D1Array => [extent[0], 1, 1, extent[1]],
-        Dimensions::D2Array => [extent[0], extent[1], 1, extent[2]],
+/// Returns the length of the slice required to store a 2D array with the given extent and stride.
+fn len2(extent: [usize; 2], stride: usize) -> usize {
+    if extent[0] == 0 || extent[1] == 0 {
+        0
+    } else {
+        (extent[1] - 1) * stride + extent[0]
     }
 }
 
-fn total_stride(dimensions: Dimensions, stride: [usize; 2]) -> [usize; 3] {
-    match dimensions {
-        Dimensions::D1 => [stride[0], stride[0], stride[0]],
-        Dimensions::D2 => [stride[0], stride[1], stride[1]],
-        Dimensions::D3 => [stride[0], stride[1], stride[1]],
-        Dimensions::D1Array => [stride[0], stride[0], stride[1]],
-        Dimensions::D2Array => [stride[0], stride[1], stride[2]],
+/// Returns the length of the slice required to store a 3D array with the given extent and stride.
+fn len3(extent: [usize; 3], stride: [usize; 2]) -> usize {
+    if extent[0] == 0 || extent[1] == 0 || extent[2] == 0 {
+        0
+    } else {
+        (extent[2] - 1) * stride[1] + (extent[1] - 1) * stride[0] + extent[0]
     }
 }
+
+struct Sizes {
+    total_len: usize,
+    layer_stride: usize,
+    layer_len: usize,
+    plane_stride: usize,
+    plane_len: usize,
+    row_stride: usize,
+    height: usize,
+    width: usize,
+}
+
+fn sizes(dimensions: Dimensions, extent: [usize; 3], stride: [usize; 2]) -> Sizes {
+    let total_len = match dimensions {
+        Dimensions::D1 => extent[0],
+        Dimensions::D2 | Dimensions::D1Array => len2([extent[0], extent[1]], stride[0]),
+        Dimensions::D3 | Dimensions::D2Array => len3(extent, stride),
+    };
+
+    let layer_stride = match dimensions {
+        Dimensions::D1 | Dimensions::D2 | Dimensions::D3 => total_len,
+        Dimensions::D1Array => stride[0],
+        Dimensions::D2Array => stride[1],
+    };
+
+    let layer_len = match dimensions {
+        Dimensions::D1 | Dimensions::D2 | Dimensions::D3 => total_len,
+        Dimensions::D1Array => extent[0],
+        Dimensions::D2Array => len2([extent[0], extent[1]], stride[0]),
+    };
+
+    let plane_stride = match dimensions {
+        Dimensions::D1 | Dimensions::D1Array | Dimensions::D2 | Dimensions::D2Array => total_len,
+        Dimensions::D3 => stride[1],
+    };
+
+    let plane_len = match dimensions {
+        Dimensions::D1 | Dimensions::D1Array | Dimensions::D2 | Dimensions::D2Array => layer_len,
+        Dimensions::D3 => len2([extent[0], extent[1]], stride[0]),
+    };
+
+    let row_stride = match dimensions {
+        Dimensions::D1 | Dimensions::D1Array => plane_len,
+        Dimensions::D2 | Dimensions::D2Array | Dimensions::D3 => stride[0],
+    };
+
+    let height = match dimensions {
+        Dimensions::D1 | Dimensions::D1Array => 1,
+        Dimensions::D2 | Dimensions::D2Array | Dimensions::D3 => extent[1],
+    };
+
+    let width = extent[0];
+
+    Sizes {
+        total_len,
+        layer_stride,
+        layer_len,
+        plane_stride,
+        plane_len,
+        row_stride,
+        height,
+        width,
+    }
+}
+
+// /// Returns 4 extents of the image,
+// /// width, height, depth and layers
+// ///
+// /// While technically image can't have both depth and layers, this function returns them as if they were separate dimensions,
+// fn total_extent(dimensions: Dimensions, extent: [usize; 3]) -> [usize; 4] {
+//     match dimensions {
+//         Dimensions::D1 => [extent[0], 1, 1, 1],
+//         Dimensions::D2 => [extent[0], extent[1], 1, 1],
+//         Dimensions::D3 => [extent[0], extent[1], extent[2], 1],
+//         Dimensions::D1Array => [extent[0], 1, 1, extent[1]],
+//         Dimensions::D2Array => [extent[0], extent[1], 1, extent[2]],
+//     }
+// }
+
+// /// Returns 3 strides of the image,
+// /// row stride, plane stride and layer stride
+// ///
+// /// For missing stride kind it takes last stride and multiplies it by the corresponding extent.
+// fn total_stride(dimensions: Dimensions, extent: [usize; 3], stride: [usize; 2]) -> [usize; 3] {
+//     let [width, height, depth, _] = total_extent(dimensions, extent);
+//     let [row_stride, plane_stride] = stride;
+
+//     let plane_len = len2([width, height], row_stride);
+//     let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
+
+//     match dimensions {
+//         Dimensions::D1 => [width; 3],
+//         Dimensions::D2 => [row_stride, plane_len, plane_len],
+//         Dimensions::D3 => [row_stride, plane_stride, volume_len],
+//         Dimensions::D1Array => [row_stride, row_stride, row_stride],
+//         Dimensions::D2Array => [row_stride, plane_stride, plane_stride],
+//     }
+// }
 
 // impl<'a, T> ImageRef<'a, T> {
 //     /// Calculates total error between the reference map patch and the given block using the provided error function.

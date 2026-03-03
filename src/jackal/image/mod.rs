@@ -1,4 +1,60 @@
-//! Jackal image file format.
+//! # Jackal Image File Format (JKLI)
+//!
+//! This module provides comprehensive support for the Jackal Image (JKLI) file format,
+//! a flexible and efficient image storage format designed for high-performance image encoding
+//! and decoding with support for multiple compression methods and tile-based processing.
+//!
+//! ## Overview
+//!
+//! The JKLI format is optimized for storing images with varying levels of compression,
+//! allowing users to balance between file size and processing speed. The format supports
+//! tile-based encoding, which enables efficient streaming and partial image loading.
+//!
+//! ## Features
+//!
+//! - **Multiple Compression Methods**: Support for uncompressed, LZ77, ANS, LZ77+ANS, and RLE+ANS compression
+//! - **Tile-Based Architecture**: Images are divided into optimally-sized tiles for efficient processing
+//! - **Flexible Pixel Formats**: Support for various pixel formats including R8, RG8, RGB8, RGBA8, BC1, BC2, BC3, BC4, BC5 and more to come.
+//! - **Random Access**: Tile offsets enable seeking and reading specific image regions without decompressing the entire file
+//!
+//! ## Writing Images
+//!
+//! Use [`write_image`] to encode an image to a stream. Configure compression and tiling behavior
+//! through the [`Options`] struct:
+//!
+//! ```ignore
+//! let options = Options::new().with_compression(Compression::Ans);
+//! write_image(image, options, file)?;
+//! ```
+//!
+//! ## Reading Images
+//!
+//! Use [`JackalReader`] to open and read JKLI files. The reader provides:
+//! - Header and metadata inspection without full decompression
+//! - Tile offset information for random access
+//! - A [`JackalTileReader`] for efficient tile-by-tile decoding, requires user to provide generic type parameter for pixel format, which must match the image format.
+//!
+//! ```ignore
+//! let mut reader = JackalReader::open(file)?;
+//! if reader.format() == Format::RGB8 {
+//!     let mut tile_reader = reader.tile_reader::<Rgb8U>()?;
+//!     tile_reader.read_tile(0, tile_buffer)?;
+//! }
+//! ```
+//!
+//! ## File Structure
+//!
+//! A JKLI file consists of:
+//! 1. **Header**: File metadata including format, dimensions, compression method, and tile size
+//! 2. **Tile Offsets**: Lookup table for random access to individual tiles
+//! 3. **Context Data**: Compression context information common for all tiles.
+//! 4. **Tile Data**: Compressed or uncompressed pixel data for each tile.
+//!
+//! ## Error Handling
+//!
+//! Decoding errors are represented by the [`DecodeError`] enum, which covers validation failures
+//! such as invalid magic numbers, unsupported formats, and platform-specific limitations.
+//!
 
 use std::{convert::Infallible, fmt, io};
 
@@ -8,7 +64,7 @@ use crate::{
     image::{Extent, Image2DMut, ImageRef},
     jackal::image::{
         compress::{AnsCompressor, LZ77Compressor, RleCompressor},
-        format::Offsets,
+        format::{Offsets, WriteOffsets},
         header::JackalHeader,
     },
 };
@@ -25,23 +81,63 @@ mod format;
 mod header;
 mod tiles;
 
+/// Tile options for image compression.
+pub enum TileOptions {
+    /// Use fixed tile size for image compression.
+    Size(TileSize),
+
+    /// Use optimal tile size for image compression.
+    Optimal {
+        /// Flat cost factor for tile size cost function.
+        flat_cost: f32,
+
+        /// Size cost factor for tile size cost function.
+        size_cost: f32,
+    },
+}
+
 pub struct Options {
-    flat_cost: f32,
-    size_cost: f32,
     compression: Compression,
+    tile_options: TileOptions,
 }
 
 impl Options {
+    /// Creates a new `Options` with default parameters:
+    ///
+    /// - No compression
+    /// - Optimal tile calculation using pre-defined cost factors.
     pub const fn new() -> Self {
         Options {
-            flat_cost: 64.0,
-            size_cost: 1.0,
+            tile_options: TileOptions::Optimal {
+                flat_cost: 64.0,
+                size_cost: 1.0,
+            },
             compression: Compression::None,
         }
     }
 
     pub const fn with_compression(mut self, compression: Compression) -> Self {
         self.compression = compression;
+        self
+    }
+
+    /// Configures fixed tile size for the image compression.
+    ///
+    /// Compression will panic if tile size is not a multiple of block size of pixel format.
+    pub fn with_tile_size(mut self, tile_size: TileSize) -> Self {
+        self.tile_options = TileOptions::Size(tile_size);
+        self
+    }
+
+    /// Configures optimal tile size for the image compression.
+    ///
+    /// The optimal tile size is calculated based on the image extent, block size of pixel format,
+    /// and the provided cost factors.
+    pub fn with_optimal_tile_size(mut self, flat_cost: f32, size_cost: f32) -> Self {
+        self.tile_options = TileOptions::Optimal {
+            flat_cost,
+            size_cost,
+        };
         self
     }
 }
@@ -59,13 +155,23 @@ where
 {
     let extent = input.extent();
 
-    let tile_size = TileSize::find_optimal(
-        extent,
-        T::FORMAT.block_width(),
-        T::FORMAT.block_height(),
-        options.flat_cost,
-        options.size_cost,
-    );
+    let tile_size = match options.tile_options {
+        TileOptions::Optimal {
+            flat_cost,
+            size_cost,
+        } => TileSize::find_optimal(
+            extent,
+            T::FORMAT.block_width(),
+            T::FORMAT.block_height(),
+            flat_cost,
+            size_cost,
+        ),
+        TileOptions::Size(size) => size,
+    };
+
+    assert!(tile_size.width.is_multiple_of(T::FORMAT.block_width()));
+    assert!(tile_size.height.is_multiple_of(T::FORMAT.block_height()));
+
     let tiles_iter = tile_size.iter_tiles(input);
 
     let header = JackalHeader {
@@ -81,9 +187,18 @@ where
     match options.compression {
         Compression::None => {
             // Simply write all pixels using fixed code.
-            input
-                .iter_pixels()
-                .try_for_each(|p| p.fix_write(&mut write))
+
+            let mut offsets = WriteOffsets::new(tiles_iter.len(), &mut write)?;
+
+            for tile in tiles_iter {
+                offsets.push_next(&mut write)?;
+
+                tile.iter_pixels()
+                    .try_for_each(|p| p.fix_write(&mut write))?
+            }
+
+            offsets.write(&mut write)?;
+            Ok(())
         }
         Compression::Lz77 => T::compress_images(tiles_iter, LZ77Compressor::new(), write),
         Compression::Ans => T::compress_images(tiles_iter, AnsCompressor, write),
@@ -165,6 +280,8 @@ enum AnyContext<T: Pixel> {
     None,
     Lz77(T::Context<LZ77Compressor>),
     Ans(T::Context<AnsCompressor>),
+    Lz77Ans(T::Context<(LZ77Compressor, AnsCompressor)>),
+    RleAns(T::Context<(RleCompressor, AnsCompressor)>),
 }
 
 impl<T> AnyContext<T>
@@ -177,13 +294,10 @@ where
     ) -> io::Result<Self> {
         read_bits_scope(read, |read| match compression {
             Compression::None => Ok(AnyContext::None),
-            Compression::Lz77 => Ok(AnyContext::Lz77(T::Context::<LZ77Compressor>::var_read(
-                read,
-            )?)),
-            Compression::Ans => Ok(AnyContext::Ans(T::Context::<AnsCompressor>::var_read(
-                read,
-            )?)),
-            _ => unimplemented!(),
+            Compression::Lz77 => Ok(AnyContext::Lz77(T::Context::var_read(read)?)),
+            Compression::Ans => Ok(AnyContext::Ans(T::Context::var_read(read)?)),
+            Compression::Lz77Ans => Ok(AnyContext::Lz77Ans(T::Context::var_read(read)?)),
+            Compression::RleAns => Ok(AnyContext::RleAns(T::Context::var_read(read)?)),
         })
     }
 }
@@ -210,6 +324,14 @@ impl<R> JackalReader<R> {
         })
     }
 
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    pub fn extent(&self) -> Extent {
+        self.extent
+    }
+
     pub fn tiles(&self) -> usize {
         self.offsets.slice().len()
     }
@@ -226,14 +348,10 @@ impl<R> JackalReader<R> {
         self.tile_size.tile_pos(self.extent, tile_index)
     }
 
-    pub fn format(&self) -> Format {
-        self.format
-    }
-
-    pub fn pixel_reader<T>(&mut self) -> io::Result<JackalPixelReader<'_, R, T>>
+    pub fn pixel_reader<T>(&mut self) -> io::Result<JackalTileReader<'_, R, T>>
     where
         T: Pixel,
-        R: io::Read,
+        R: io::Read + io::Seek,
     {
         assert_eq!(
             self.format,
@@ -241,9 +359,14 @@ impl<R> JackalReader<R> {
             "Pixel type format does not match image format"
         );
 
+        let context_pos = JackalHeader::SIZE + self.offsets.bytes_size();
+        let context_pos = u64::try_from(context_pos)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
+
+        self.read.seek(io::SeekFrom::Start(context_pos))?;
         let context = AnyContext::read_for_complression(self.compression, &mut self.read)?;
 
-        Ok(JackalPixelReader {
+        Ok(JackalTileReader {
             context,
             extent: self.extent,
             tile_size: self.tile_size,
@@ -253,7 +376,7 @@ impl<R> JackalReader<R> {
     }
 }
 
-pub struct JackalPixelReader<'a, R, T: Pixel> {
+pub struct JackalTileReader<'a, R, T: Pixel> {
     context: AnyContext<T>,
     extent: Extent,
     tile_size: TileSize,
@@ -261,11 +384,15 @@ pub struct JackalPixelReader<'a, R, T: Pixel> {
     read: &'a mut R,
 }
 
-impl<'a, R, T> JackalPixelReader<'a, R, T>
+impl<'a, R, T> JackalTileReader<'a, R, T>
 where
     T: Pixel,
     R: io::Read + io::Seek,
 {
+    pub fn extent(&self) -> Extent {
+        self.extent
+    }
+
     pub fn tiles(&self) -> usize {
         self.offsets.len()
     }
@@ -282,7 +409,7 @@ where
         self.tile_size.tile_pos(self.extent, tile_index)
     }
 
-    pub fn read_tile(&mut self, tile_index: usize, mut image: Image2DMut<'a, T>) -> io::Result<()> {
+    pub fn read_tile(&mut self, tile_index: usize, mut image: Image2DMut<'_, T>) -> io::Result<()> {
         assert!(tile_index < self.offsets.len(), "Tile index out of bounds");
         assert_eq!(
             usize::from(self.tile_size.width),
@@ -312,6 +439,154 @@ where
             AnyContext::Ans(context) => {
                 T::decompress_image(AnsCompressor, context, &mut *self.read, image)
             }
+            AnyContext::Lz77Ans(context) => T::decompress_image(
+                (LZ77Compressor::new(), AnsCompressor),
+                context,
+                &mut *self.read,
+                image,
+            ),
+            AnyContext::RleAns(context) => T::decompress_image(
+                (RleCompressor, AnsCompressor),
+                context,
+                &mut *self.read,
+                image,
+            ),
         }
     }
+}
+
+#[test]
+fn jkli_smoke_test_rgb() {
+    use crate::math::Rgb8U;
+
+    let extent = Extent::D2 {
+        width: 4,
+        height: 4,
+    };
+
+    let pixels = [
+        Rgb8U::RED,
+        Rgb8U::GREEN,
+        Rgb8U::BLUE,
+        Rgb8U::WHITE,
+        Rgb8U::BLACK,
+        Rgb8U::RED,
+        Rgb8U::BLACK,
+        Rgb8U::WHITE,
+        Rgb8U::GREEN,
+        Rgb8U::BLUE,
+        Rgb8U::WHITE,
+        Rgb8U::BLACK,
+        Rgb8U::BLUE,
+        Rgb8U::WHITE,
+        Rgb8U::BLACK,
+        Rgb8U::RED,
+    ];
+
+    // let pixels = [Rgb8U::WHITE; 16];
+
+    let image = ImageRef::new(crate::image::Dimensions::D2, [4, 4, 1], &pixels);
+
+    let mut buffer = Vec::new();
+
+    write_image(
+        image,
+        Options::new().with_compression(Compression::Ans),
+        std::io::Cursor::new(&mut buffer),
+    )
+    .unwrap();
+
+    let mut reader = JackalReader::open(std::io::Cursor::new(&buffer[..])).unwrap();
+
+    assert_eq!(reader.format(), Format::RGB8);
+
+    let mut reader = reader.pixel_reader::<Rgb8U>().unwrap();
+
+    assert_eq!(reader.extent(), extent);
+
+    let mut decoded_pixels = [Rgb8U::BLACK; 16];
+    let mut decoded_image = Image2DMut::new(4, 4, &mut decoded_pixels);
+
+    for tile_index in 0..reader.tiles() {
+        let [x, y, z] = reader.tile_pos(tile_index);
+        assert_eq!(z, 0);
+
+        let decoded_tile = decoded_image.get_range_mut(
+            x,
+            y,
+            usize::from(reader.tile_size().width),
+            usize::from(reader.tile_size().height),
+        );
+
+        reader.read_tile(tile_index, decoded_tile).unwrap();
+    }
+
+    assert_eq!(decoded_pixels, pixels);
+}
+
+#[test]
+fn jkli_smoke_test_bc1() {
+    use crate::bc1::Block;
+
+    let extent = Extent::D2 {
+        width: 4,
+        height: 4,
+    };
+
+    let blocks = [
+        Block::BLACK,
+        Block::TRANSPARENT,
+        Block::WHITE,
+        Block::WHITE,
+        Block::BLACK,
+        Block::BLACK,
+        Block::BLACK,
+        Block::WHITE,
+        Block::TRANSPARENT,
+        Block::WHITE,
+        Block::WHITE,
+        Block::BLACK,
+        Block::TRANSPARENT,
+        Block::WHITE,
+        Block::BLACK,
+        Block::BLACK,
+    ];
+
+    let image = ImageRef::new(crate::image::Dimensions::D2, [4, 4, 1], &blocks);
+
+    let mut buffer = Vec::new();
+
+    write_image(
+        image,
+        Options::new().with_compression(Compression::Ans),
+        std::io::Cursor::new(&mut buffer),
+    )
+    .unwrap();
+
+    let mut reader = JackalReader::open(std::io::Cursor::new(&buffer[..])).unwrap();
+
+    assert_eq!(reader.format(), Format::BC1);
+
+    let mut reader = reader.pixel_reader::<Block>().unwrap();
+
+    assert_eq!(reader.extent(), extent);
+
+    let mut decoded_blocks = [Block::BLACK; 16];
+    let mut decoded_image = Image2DMut::new(4, 4, &mut decoded_blocks);
+
+    for tile_index in 0..reader.tiles() {
+        let [x, y, z] = reader.tile_pos(tile_index);
+        assert_eq!(z, 0);
+
+        let decoded_tile = decoded_image.get_range_mut(
+            x,
+            y,
+            usize::from(reader.tile_size().width),
+            usize::from(reader.tile_size().height),
+        );
+
+        reader.read_tile(tile_index, decoded_tile).unwrap();
+    }
+
+    assert_eq!(decoded_blocks, blocks);
 }

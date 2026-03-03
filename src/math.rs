@@ -3198,9 +3198,12 @@ pub struct R8U(u8);
 impl_fixedcode_struct!(R8U(r: u8) | Infallible);
 
 impl R8U {
+    /// Full white (maximum value).
     pub const WHITE: R8U = R8U(255);
+    /// Full black (zero value).
     pub const BLACK: R8U = R8U(0);
 
+    /// Creates a new single-channel color from a `u8` value.
     #[inline(always)]
     pub const fn new(r: u8) -> Self {
         R8U(r)
@@ -3218,53 +3221,63 @@ impl R8U {
         R8U(bytes[0])
     }
 
+    /// Returns the raw `u8` bit pattern.
     #[inline(always)]
     pub const fn bits(&self) -> u8 {
         self.0
     }
 
+    /// Constructs from a raw `u8` bit pattern.
     #[inline(always)]
     pub const fn from_bits(bits: u8) -> Self {
         Self(bits)
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> u8 {
         self.0
     }
 
+    /// Converts this color to its 32-bit float representation.
     #[inline(always)]
     pub const fn into_f32(self) -> R32F {
         R32F(self.0 as f32 / 255.0)
     }
 
+    /// Converts from a 32-bit float representation, clamping to [0, 255].
     #[inline(always)]
     pub const fn from_f32(luma: R32F) -> R8U {
         let clamped = (luma.r() * 255.0).clamp(0.0, 255.0);
         R8U(clamped as u8)
     }
 
+    /// Wrapping unsigned addition per channel.
     #[inline(always)]
     pub fn wrapping_add(self, other: Self) -> Self {
         R8U(self.0.wrapping_add(other.0))
     }
 
+    /// Wrapping unsigned subtraction per channel.
     #[inline(always)]
     pub fn wrapping_sub(self, other: Self) -> Self {
         R8U(self.0.wrapping_sub(other.0))
     }
 
+    /// Returns the per-channel difference.
     #[inline(always)]
     pub const fn diff(a: Self, b: Self) -> f32 {
         a.r() as f32 - b.r() as f32
     }
 
+    /// Returns the squared Euclidean distance.
     #[inline(always)]
     pub const fn distance_squared(a: Self, b: Self) -> f32 {
         let diff = Self::diff(a, b);
         diff * diff
     }
 
+    /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
         Self::diff(a, b)
@@ -3279,45 +3292,55 @@ pub struct R32F(f32);
 impl_fixedcode_struct!(R32F(r: f32) | Infallible);
 
 impl R32F {
+    /// Full white (maximum value).
     pub const WHITE: R32F = R32F(1.0);
+    /// Full black (zero value).
     pub const BLACK: R32F = R32F(0.0);
 
+    /// Creates a new single-channel color from an `f32` value.
     #[inline(always)]
     pub const fn new(r: f32) -> Self {
         R32F(r)
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> f32 {
         self.0
     }
 
+    /// Extends to a two-channel color by appending a green component.
     #[inline(always)]
     pub const fn with_g(self, g: f32) -> Rg32F {
         Rg32F([self.r(), g])
     }
 
+    /// Linearly interpolates between two colors component-wise.
     #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         R32F(lerp(a.r(), b.r(), t))
     }
 
+    /// Returns the per-channel difference.
     #[inline(always)]
     pub const fn diff(a: Self, b: Self) -> f32 {
         a.r() - b.r()
     }
 
+    /// Returns the squared Euclidean distance.
     #[inline(always)]
     pub const fn distance_squared(a: Self, b: Self) -> f32 {
         let diff = Self::diff(a, b);
         diff * diff
     }
 
+    /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
         Self::diff(a, b)
     }
 
+    /// Translates this color by the given offset.
     #[inline(always)]
     pub const fn offset(self, offset: f32) -> Self {
         R32F(self.r() + offset)
@@ -3332,9 +3355,12 @@ pub struct Rg8U([u8; 2]);
 impl_fixedcode_array!(Rg8U([u8; 2]) | Infallible);
 
 impl Rg8U {
+    /// Full white (all channels maximum).
     pub const WHITE: Rg8U = Rg8U([255, 255]);
+    /// Full black (all channels zero).
     pub const BLACK: Rg8U = Rg8U([0, 0]);
 
+    /// Creates a new two-channel color from `u8` red and green values.
     #[inline(always)]
     pub const fn new(r: u8, g: u8) -> Self {
         Rg8U([r, g])
@@ -3352,43 +3378,51 @@ impl Rg8U {
         Rg8U(bytes)
     }
 
+    /// Returns the raw `u16` bit pattern (little-endian).
     #[inline(always)]
     pub const fn bits(&self) -> u16 {
         u16::from_le_bytes(self.0)
     }
 
+    /// Constructs from a raw `u16` bit pattern (little-endian).
     #[inline(always)]
     pub const fn from_bits(bits: u16) -> Self {
         Rg8U(bits.to_le_bytes())
     }
 
+    /// Returns the channels as an interleaved `u16` bit pattern.
     #[inline(always)]
     pub const fn bits_interleaved(&self) -> u16 {
         let [r, g] = self.0;
         interleave8_2(r, g)
     }
 
+    /// Constructs from an interleaved `u16` bit pattern.
     #[inline(always)]
     pub const fn from_bits_interleaved(bits: u16) -> Self {
         let (r, g) = deinterleave8_2(bits);
         Rg8U::new(r, g)
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> u8 {
         self.0[0]
     }
 
+    /// Returns the green channel value.
     #[inline(always)]
     pub const fn g(&self) -> u8 {
         self.0[1]
     }
 
+    /// Converts this color to its 32-bit float representation.
     #[inline(always)]
     pub const fn into_f32(self) -> Rg32F {
         Rg32F([self.r() as f32 / 255.0, self.g() as f32 / 255.0])
     }
 
+    /// Converts from a 32-bit float representation, clamping each channel to [0, 255].
     #[inline(always)]
     pub const fn from_f32(rg: Rg32F) -> Rg8U {
         let r = (rg.r() * 255.0).clamp(0.0, 255.0);
@@ -3396,6 +3430,7 @@ impl Rg8U {
         Rg8U([r as u8, g as u8])
     }
 
+    /// Wrapping unsigned addition per channel.
     #[inline(always)]
     pub fn wrapping_add(self, other: Self) -> Self {
         Rg8U([
@@ -3404,6 +3439,7 @@ impl Rg8U {
         ])
     }
 
+    /// Wrapping unsigned subtraction per channel.
     #[inline(always)]
     pub fn wrapping_sub(self, other: Self) -> Self {
         Rg8U([
@@ -3412,17 +3448,20 @@ impl Rg8U {
         ])
     }
 
+    /// Returns the per-channel difference as a `Vec2`.
     #[inline(always)]
     pub const fn diff(a: Self, b: Self) -> Vec2 {
         Vec2([a.r() as f32 - b.r() as f32, a.g() as f32 - b.g() as f32])
     }
 
+    /// Returns the squared Euclidean distance.
     #[inline(always)]
     pub const fn distance_squared(a: Self, b: Self) -> f32 {
         let diff = Self::diff(a, b);
         diff.dot(diff)
     }
 
+    /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
         Self::distance_squared(a, b).sqrt()
@@ -3437,50 +3476,61 @@ pub struct Rg32F([f32; 2]);
 impl_fixedcode_array!(Rg32F([f32; 2]) | Infallible);
 
 impl Rg32F {
+    /// Full white (all channels maximum).
     pub const WHITE: Rg32F = Rg32F([1.0, 1.0]);
+    /// Full black (all channels zero).
     pub const BLACK: Rg32F = Rg32F([0.0, 0.0]);
 
+    /// Creates a new two-channel color from `f32` red and green values.
     #[inline(always)]
     pub const fn new(r: f32, g: f32) -> Self {
         Rg32F([r, g])
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> f32 {
         self.0[0]
     }
 
+    /// Returns the green channel value.
     #[inline(always)]
     pub const fn g(&self) -> f32 {
         self.0[1]
     }
 
+    /// Extends to a three-channel color by appending a blue component.
     #[inline(always)]
     pub const fn with_b(self, b: f32) -> Rgb32F {
         Rgb32F([self.r(), self.g(), b])
     }
 
+    /// Linearly interpolates between two colors component-wise.
     #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Rg32F([lerp(a.r(), b.r(), t), lerp(a.g(), b.g(), t)])
     }
 
+    /// Returns the per-channel difference as a `Vec2`.
     #[inline(always)]
     pub const fn diff(a: Self, b: Self) -> Vec2 {
         Vec2([a.r() - b.r(), a.g() - b.g()])
     }
 
+    /// Returns the squared Euclidean distance.
     #[inline(always)]
     pub const fn distance_squared(a: Self, b: Self) -> f32 {
         let diff = Self::diff(a, b);
         diff.dot(diff)
     }
 
+    /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
         Self::distance_squared(a, b).sqrt()
     }
 
+    /// Translates this color by the given offset.
     #[inline(always)]
     pub const fn offset(self, offset: Vec2) -> Self {
         Rg32F([self.r() + offset.x(), self.g() + offset.y()])
@@ -3495,9 +3545,18 @@ pub struct Rgb8U([u8; 3]);
 impl_fixedcode_array!(Rgb8U([u8; 3]) | Infallible);
 
 impl Rgb8U {
+    /// Full white (all channels maximum).
     pub const WHITE: Rgb8U = Rgb8U([255, 255, 255]);
+    /// Full black (all channels zero).
     pub const BLACK: Rgb8U = Rgb8U([0, 0, 0]);
+    /// Pure red.
+    pub const RED: Rgb8U = Rgb8U([255, 0, 0]);
+    /// Pure green.
+    pub const GREEN: Rgb8U = Rgb8U([0, 255, 0]);
+    /// Pure blue.
+    pub const BLUE: Rgb8U = Rgb8U([0, 0, 255]);
 
+    /// Creates a new three-channel color from `u8` red, green, and blue values.
     #[inline(always)]
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Rgb8U([r, g, b])
@@ -3515,76 +3574,90 @@ impl Rgb8U {
         Rgb8U(bytes)
     }
 
+    /// Returns the raw `u32` bit pattern (little-endian, high byte zero).
     #[inline(always)]
     pub const fn bits(&self) -> u32 {
         let [r, g, b] = self.0;
         u32::from_le_bytes([r, g, b, 0])
     }
 
+    /// Constructs from a raw `u32` bit pattern (little-endian, high byte ignored).
     #[inline(always)]
     pub const fn from_bits(bits: u32) -> Self {
         let [r, g, b, _] = bits.to_le_bytes();
         Rgb8U([r, g, b])
     }
 
+    /// Returns the channels as an interleaved `u32` bit pattern.
     #[inline(always)]
     pub const fn bits_interleaved(&self) -> u32 {
         let [r, g, b] = self.0;
         interleave8_3(r, b, g)
     }
 
+    /// Constructs from an interleaved `u32` bit pattern.
     #[inline(always)]
     pub const fn from_bits_interleaved(bits: u32) -> Self {
         let (r, b, g) = deinterleave8_3(bits);
         Rgb8U::new(r, g, b)
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> u8 {
         self.0[0]
     }
 
+    /// Returns the green channel value.
     #[inline(always)]
     pub const fn g(&self) -> u8 {
         self.0[1]
     }
 
+    /// Returns the blue channel value.
     #[inline(always)]
     pub const fn b(&self) -> u8 {
         self.0[2]
     }
 
+    /// Sets the red channel value.
     #[inline(always)]
     pub fn set_r(&mut self, r: u8) {
         self.0[0] = r;
     }
 
+    /// Sets the green channel value.
     #[inline(always)]
     pub fn set_g(&mut self, g: u8) {
         self.0[1] = g;
     }
 
+    /// Sets the blue channel value.
     #[inline(always)]
     pub fn set_b(&mut self, b: u8) {
         self.0[2] = b;
     }
 
+    /// Extends to a four-channel color by appending an alpha component.
     #[inline(always)]
     pub const fn with_alpha(self, a: u8) -> Rgba8U {
         Rgba8U([self.r(), self.g(), self.b(), a])
     }
 
+    /// Extends to a four-channel color with full opacity (alpha = 255).
     #[inline(always)]
     pub const fn into_opaque(self) -> Rgba8U {
         Rgba8U([self.r(), self.g(), self.b(), 255])
     }
 
+    /// Converts this color to its 32-bit float representation.
     #[inline(always)]
     pub const fn into_f32(self) -> Rgb32F {
         let [r, g, b] = self.0;
         Rgb32F([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
     }
 
+    /// Converts from a 32-bit float representation, clamping each channel to [0, 255].
     #[inline(always)]
     pub fn from_f32(rgb: Rgb32F) -> Self {
         let r = (rgb.r() * 255.0).clamp(0.0, 255.0) as u8;
@@ -3593,6 +3666,7 @@ impl Rgb8U {
         Rgb8U::new(r, g, b)
     }
 
+    /// Wrapping unsigned addition per channel.
     #[inline(always)]
     pub fn wrapping_add(lhs: Self, rhs: Self) -> Self {
         let r = lhs.r().wrapping_add(rhs.r());
@@ -3601,6 +3675,7 @@ impl Rgb8U {
         Rgb8U::new(r, g, b)
     }
 
+    /// Wrapping unsigned subtraction per channel.
     #[inline(always)]
     pub fn wrapping_sub(lhs: Self, rhs: Self) -> Self {
         let r = lhs.r().wrapping_sub(rhs.r());
@@ -3609,6 +3684,7 @@ impl Rgb8U {
         Rgb8U::new(r, g, b)
     }
 
+    /// Returns the per-channel difference as a `Vec3`.
     #[inline(always)]
     pub const fn diff(lhs: Self, rhs: Self) -> Vec3 {
         Vec3([
@@ -3618,12 +3694,14 @@ impl Rgb8U {
         ])
     }
 
+    /// Returns the squared Euclidean distance.
     #[inline(always)]
     pub const fn distance_squared(lhs: Self, rhs: Self) -> f32 {
         let diff = Self::diff(lhs, rhs);
         diff.dot(diff)
     }
 
+    /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(lhs: Self, rhs: Self) -> f32 {
         Self::distance_squared(lhs, rhs).sqrt()
@@ -3638,39 +3716,54 @@ pub struct Rgb32F([f32; 3]);
 impl_fixedcode_array!(Rgb32F([f32; 3]) | Infallible);
 
 impl Rgb32F {
+    /// Full white (all channels maximum).
     pub const WHITE: Rgb32F = Rgb32F([1.0, 1.0, 1.0]);
+    /// Full black (all channels zero).
     pub const BLACK: Rgb32F = Rgb32F([0.0, 0.0, 0.0]);
+    /// Pure red.
+    pub const RED: Rgb32F = Rgb32F([1.0, 0.0, 0.0]);
+    /// Pure green.
+    pub const GREEN: Rgb32F = Rgb32F([0.0, 1.0, 0.0]);
+    /// Pure blue.
+    pub const BLUE: Rgb32F = Rgb32F([0.0, 0.0, 1.0]);
 
+    /// Creates a new three-channel color from `f32` red, green, and blue values.
     #[inline(always)]
     pub const fn new(r: f32, g: f32, b: f32) -> Self {
         Rgb32F([r, g, b])
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> f32 {
         self.0[0]
     }
 
+    /// Returns the green channel value.
     #[inline(always)]
     pub const fn g(&self) -> f32 {
         self.0[1]
     }
 
+    /// Returns the blue channel value.
     #[inline(always)]
     pub const fn b(&self) -> f32 {
         self.0[2]
     }
 
+    /// Extends to a four-channel color by appending an alpha component.
     #[inline(always)]
     pub const fn with_alpha(self, a: f32) -> Rgba32F {
         Rgba32F([self.r(), self.g(), self.b(), a])
     }
 
+    /// Extends to a four-channel color with full opacity (alpha = 1.0).
     #[inline(always)]
     pub const fn into_opaque(self) -> Rgba32F {
         Rgba32F([self.r(), self.g(), self.b(), 1.0])
     }
 
+    /// Linearly interpolates between two colors component-wise.
     #[inline(always)]
     pub fn lerp(lhs: Self, rhs: Self, t: f32) -> Self {
         Rgb32F([
@@ -3680,22 +3773,26 @@ impl Rgb32F {
         ])
     }
 
+    /// Returns the per-channel difference as a `Vec3`.
     #[inline(always)]
     pub const fn diff(lhs: Self, rhs: Self) -> Vec3 {
         Vec3([lhs.r() - rhs.r(), lhs.g() - rhs.g(), lhs.b() - rhs.b()])
     }
 
+    /// Returns the squared Euclidean distance.
     #[inline(always)]
     pub const fn distance_squared(lhs: Self, rhs: Self) -> f32 {
         let diff = Self::diff(lhs, rhs);
         diff.dot(diff)
     }
 
+    /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(lhs: Self, rhs: Self) -> f32 {
         Self::distance_squared(lhs, rhs).sqrt()
     }
 
+    /// Translates this color by the given offset.
     #[inline(always)]
     pub const fn offset(self, offset: Vec3) -> Self {
         Rgb32F([
@@ -3714,10 +3811,20 @@ pub struct Rgba8U([u8; 4]);
 impl_fixedcode_array!(Rgba8U([u8; 4]) | Infallible);
 
 impl Rgba8U {
+    /// Full white (all channels maximum).
     pub const WHITE: Rgba8U = Rgba8U([255, 255, 255, 255]);
+    /// Full black (all channels zero, fully opaque).
     pub const BLACK: Rgba8U = Rgba8U([0, 0, 0, 255]);
+    /// Pure red.
+    pub const RED: Rgba8U = Rgba8U([255, 0, 0, 255]);
+    /// Pure green.
+    pub const GREEN: Rgba8U = Rgba8U([0, 255, 0, 255]);
+    /// Pure blue.
+    pub const BLUE: Rgba8U = Rgba8U([0, 0, 255, 255]);
+    /// Fully transparent black.
     pub const TRANSPARENT: Rgba8U = Rgba8U([0, 0, 0, 0]);
 
+    /// Creates a new four-channel color from `u8` red, green, blue, and alpha values.
     #[inline(always)]
     pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
         Rgba8U([r, g, b, a])
@@ -3735,69 +3842,82 @@ impl Rgba8U {
         Rgba8U(bytes)
     }
 
+    /// Returns the raw `u32` bit pattern (little-endian).
     #[inline(always)]
     pub const fn bits(&self) -> u32 {
         u32::from_le_bytes(self.0)
     }
 
+    /// Constructs from a raw `u32` bit pattern (little-endian).
     #[inline(always)]
     pub const fn from_bits(bits: u32) -> Self {
         let [r, g, b, a] = bits.to_le_bytes();
         Rgba8U([r, g, b, a])
     }
 
+    /// Returns the channels as an interleaved `u32` bit pattern.
     #[inline(always)]
     pub const fn bits_interleaved(&self) -> u32 {
         let [r, g, b, a] = self.0;
         interleave8_4(r, b, g, a)
     }
 
+    /// Constructs from an interleaved `u32` bit pattern.
     #[inline(always)]
     pub const fn from_bits_interleaved(bits: u32) -> Self {
         let (r, b, g, a) = deinterleave8_4(bits);
         Rgba8U::new(r, g, b, a)
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> u8 {
         self.0[0]
     }
 
+    /// Returns the green channel value.
     #[inline(always)]
     pub const fn g(&self) -> u8 {
         self.0[1]
     }
 
+    /// Returns the blue channel value.
     #[inline(always)]
     pub const fn b(&self) -> u8 {
         self.0[2]
     }
 
+    /// Returns the alpha channel value.
     #[inline(always)]
     pub const fn a(&self) -> u8 {
         self.0[3]
     }
 
+    /// Sets the red channel value.
     #[inline(always)]
     pub fn set_r(&mut self, r: u8) {
         self.0[0] = r;
     }
 
+    /// Sets the green channel value.
     #[inline(always)]
     pub fn set_g(&mut self, g: u8) {
         self.0[1] = g;
     }
 
+    /// Sets the blue channel value.
     #[inline(always)]
     pub fn set_b(&mut self, b: u8) {
         self.0[2] = b;
     }
 
+    /// Sets the alpha channel value.
     #[inline(always)]
     pub fn set_a(&mut self, a: u8) {
         self.0[3] = a;
     }
 
+    /// Converts this color to its 32-bit float representation.
     #[inline(always)]
     pub const fn into_f32(self) -> Rgba32F {
         let [r, g, b, a] = self.0;
@@ -3809,6 +3929,7 @@ impl Rgba8U {
         ])
     }
 
+    /// Converts from a 32-bit float representation, clamping each channel to [0, 255].
     #[inline(always)]
     pub fn from_f32(rgb: Rgba32F) -> Self {
         let r = (rgb.r() * 255.0).clamp(0.0, 255.0) as u8;
@@ -3818,11 +3939,13 @@ impl Rgba8U {
         Rgba8U::new(r, g, b, a)
     }
 
+    /// Returns only the RGB channels, discarding alpha.
     #[inline(always)]
     pub const fn rgb(&self) -> Rgb8U {
         Rgb8U::new(self.r(), self.g(), self.b())
     }
 
+    /// Wrapping unsigned addition per channel.
     #[inline(always)]
     pub fn wrapping_add(lhs: Self, rhs: Self) -> Self {
         let r = lhs.r().wrapping_add(rhs.r());
@@ -3832,6 +3955,7 @@ impl Rgba8U {
         Rgba8U::new(r, g, b, a)
     }
 
+    /// Wrapping unsigned subtraction per channel.
     #[inline(always)]
     pub fn wrapping_sub(lhs: Self, rhs: Self) -> Self {
         let r = lhs.r().wrapping_sub(rhs.r());
@@ -3851,40 +3975,56 @@ pub struct Rgba32F([f32; 4]);
 impl_fixedcode_array!(Rgba32F([f32; 4]) | Infallible);
 
 impl Rgba32F {
+    /// Full white (all channels maximum).
     pub const WHITE: Rgba32F = Rgba32F([1.0, 1.0, 1.0, 1.0]);
+    /// Full black (all channels zero, fully opaque).
     pub const BLACK: Rgba32F = Rgba32F([0.0, 0.0, 0.0, 1.0]);
+    /// Pure red.
+    pub const RED: Rgba32F = Rgba32F([1.0, 0.0, 0.0, 1.0]);
+    /// Pure green.
+    pub const GREEN: Rgba32F = Rgba32F([0.0, 1.0, 0.0, 1.0]);
+    /// Pure blue.
+    pub const BLUE: Rgba32F = Rgba32F([0.0, 0.0, 1.0, 1.0]);
+    /// Fully transparent black.
     pub const TRANSPARENT: Rgba32F = Rgba32F([0.0, 0.0, 0.0, 0.0]);
 
+    /// Creates a new four-channel color from `f32` red, green, blue, and alpha values.
     #[inline(always)]
     pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Rgba32F([r, g, b, a])
     }
 
+    /// Returns the red channel value.
     #[inline(always)]
     pub const fn r(&self) -> f32 {
         self.0[0]
     }
 
+    /// Returns the green channel value.
     #[inline(always)]
     pub const fn g(&self) -> f32 {
         self.0[1]
     }
 
+    /// Returns the blue channel value.
     #[inline(always)]
     pub const fn b(&self) -> f32 {
         self.0[2]
     }
 
+    /// Returns the alpha channel value.
     #[inline(always)]
     pub const fn a(&self) -> f32 {
         self.0[3]
     }
 
+    /// Returns only the RGB channels, discarding alpha.
     #[inline(always)]
     pub const fn rgb(&self) -> Rgb32F {
         Rgb32F([self.r(), self.g(), self.b()])
     }
 
+    /// Linearly interpolates between two colors component-wise.
     #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Rgba32F([
@@ -3904,9 +4044,16 @@ pub struct Rgb565(u16);
 impl_fixedcode_struct!(Rgb565(rgb: u16) | Infallible);
 
 impl Rgb565 {
+    /// Full white (all channels maximum).
     pub const WHITE: Rgb565 = Rgb565(0b11111_111111_11111);
+    /// Full black (all channels zero).
     pub const BLACK: Rgb565 = Rgb565(0);
 
+    /// Creates a new color from 5-bit red, 6-bit green, and 5-bit blue values.
+    ///
+    /// # Panics
+    ///
+    /// Debug-asserts that `r` ≤ 31, `g` ≤ 63, and `b` ≤ 31.
     #[inline(always)]
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         debug_assert!(r <= 31, "Red channel must be in range 0..=31");
@@ -3931,6 +4078,7 @@ impl Rgb565 {
         Rgb565(bits)
     }
 
+    /// Returns the channels as an interleaved `u16` bit pattern.
     #[inline(always)]
     pub const fn bits_interleaved(&self) -> u16 {
         let r = self.r();
@@ -3940,6 +4088,7 @@ impl Rgb565 {
         interleave655_3(g, r, b)
     }
 
+    /// Constructs from an interleaved `u16` bit pattern.
     #[inline(always)]
     pub const fn from_bits_interleaved(bits: u16) -> Self {
         let (g, r, b) = deinterleave655_3(bits);
@@ -3958,39 +4107,46 @@ impl Rgb565 {
         self.0.to_le_bytes()
     }
 
+    /// Returns the red channel value (5 bits).
     #[inline(always)]
     pub const fn r(&self) -> u8 {
         (self.0 >> 11) as u8
     }
 
+    /// Returns the green channel value (6 bits).
     #[inline(always)]
     pub const fn g(&self) -> u8 {
         ((self.0 >> 5) & 0b111111) as u8
     }
 
+    /// Returns the blue channel value (5 bits).
     #[inline(always)]
     pub const fn b(&self) -> u8 {
         (self.0 & 0b11111) as u8
     }
 
+    /// Sets the red channel value (5 bits).
     #[inline(always)]
     pub fn set_r(&mut self, r: u8) {
         debug_assert!(r <= 31, "Red channel must be in range 0..=31");
         self.0 = (self.0 & 0b00000_111111_11111) | ((r as u16) << 11);
     }
 
+    /// Sets the green channel value (6 bits).
     #[inline(always)]
     pub fn set_g(&mut self, g: u8) {
         debug_assert!(g <= 63, "Green channel must be in range 0..=63");
         self.0 = (self.0 & 0b11111_000000_11111) | ((g as u16) << 5);
     }
 
+    /// Sets the blue channel value (5 bits).
     #[inline(always)]
     pub fn set_b(&mut self, b: u8) {
         debug_assert!(b <= 31, "Blue channel must be in range 0..=31");
         self.0 = (self.0 & 0b11111_111111_00000) | (b as u16);
     }
 
+    /// Converts this color to its `Rgb32F` float representation.
     #[inline(always)]
     pub const fn into_f32(self) -> Rgb32F {
         let r = ((self.0 >> 11) & 0b11111) as f32 / 31.0;
@@ -3999,6 +4155,7 @@ impl Rgb565 {
         Rgb32F([r, g, b])
     }
 
+    /// Converts from an `Rgb32F` float representation, clamping to valid ranges.
     #[inline(always)]
     pub fn from_f32(rgb: Rgb32F) -> Self {
         let [r, g, b] = rgb.0;
@@ -4008,6 +4165,7 @@ impl Rgb565 {
         Rgb565((r << 11) | (g << 5) | b)
     }
 
+    /// Wrapping unsigned addition per channel, masked to valid bit widths.
     #[inline(always)]
     pub fn wrapping_add(a: Self, b: Self) -> Self {
         let r = a.r().wrapping_add(b.r()) & 31;
@@ -4016,6 +4174,7 @@ impl Rgb565 {
         Rgb565::new(r, g, b)
     }
 
+    /// Wrapping unsigned subtraction per channel, masked to valid bit widths.
     #[inline(always)]
     pub fn wrapping_sub(a: Self, b: Self) -> Self {
         let r = a.r().wrapping_sub(b.r()) & 31;
@@ -4024,11 +4183,13 @@ impl Rgb565 {
         Rgb565::new(r, g, b)
     }
 
+    /// Converts to an `Rgb8U` color via float intermediary.
     #[inline(always)]
     pub fn into_8u(self) -> Rgb8U {
         Rgb8U::from_f32(self.into_f32())
     }
 
+    /// Converts from an `Rgb8U` color via float intermediary.
     #[inline(always)]
     pub fn from_8u(rgb: Rgb8U) -> Self {
         Self::from_f32(rgb.into_f32())
@@ -4043,29 +4204,36 @@ pub struct Yiq32F([f32; 3]);
 impl_fixedcode_array!(Yiq32F([f32; 3]) | Infallible);
 
 impl Yiq32F {
+    /// Full white (luminance 1.0, no chrominance).
     pub const WHITE: Yiq32F = Yiq32F([1.0, 0.0, 0.0]);
+    /// Full black (all components zero).
     pub const BLACK: Yiq32F = Yiq32F([0.0, 0.0, 0.0]);
 
+    /// Creates a new YIQ color from luminance (`y`), in-phase (`i`), and quadrature (`q`).
     #[inline(always)]
     pub const fn new(y: f32, i: f32, q: f32) -> Self {
         Yiq32F([y, i, q])
     }
 
+    /// Returns the luminance (Y) component.
     #[inline(always)]
     pub const fn y(&self) -> f32 {
         self.0[0]
     }
 
+    /// Returns the in-phase (I) chrominance component.
     #[inline(always)]
     pub const fn i(&self) -> f32 {
         self.0[1]
     }
 
+    /// Returns the quadrature (Q) chrominance component.
     #[inline(always)]
     pub const fn q(&self) -> f32 {
         self.0[2]
     }
 
+    /// Converts an `Rgb32F` color to YIQ color space.
     #[inline(always)]
     pub const fn from_rgb(rgb: Rgb32F) -> Self {
         let [r, g, b] = rgb.0;
@@ -4075,6 +4243,7 @@ impl Yiq32F {
         Yiq32F([y, i, q])
     }
 
+    /// Converts this YIQ color back to RGB color space.
     #[inline(always)]
     pub const fn into_rgb(self) -> Rgb32F {
         let [y, i, q] = self.0;
@@ -4084,6 +4253,7 @@ impl Yiq32F {
         Rgb32F([r, g, b])
     }
 
+    /// Linearly interpolates between two colors component-wise.
     #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Yiq32F([
@@ -4093,6 +4263,7 @@ impl Yiq32F {
         ])
     }
 
+    /// Returns the perceptual distance, weighting luminance higher than chrominance.
     #[inline(always)]
     pub fn perceptual_distance(a: Self, b: Self) -> f32 {
         let [y1, i1, q1] = a.0;
@@ -4104,22 +4275,26 @@ impl Yiq32F {
         (luminance_diff + chrominance_diff).sqrt()
     }
 
+    /// Returns the per-channel difference as a `Vec3`.
     #[inline(always)]
     pub const fn diff(a: Self, b: Self) -> Vec3 {
         Vec3([a.y() - b.y(), a.i() - b.i(), a.q() - b.q()])
     }
 
+    /// Returns the squared Euclidean distance.
     #[inline(always)]
     pub const fn distance_squared(a: Self, b: Self) -> f32 {
         let diff = Self::diff(a, b);
         diff.dot(diff)
     }
 
+    /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
         Self::distance_squared(a, b).sqrt()
     }
 
+    /// Translates this color by the given offset.
     #[inline(always)]
     pub const fn offset(self, offset: Vec3) -> Self {
         Yiq32F([
