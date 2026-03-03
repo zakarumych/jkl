@@ -1,3 +1,9 @@
+//! LZ77 sliding-window compression.
+//!
+//! Symbols are compressed into [`Token`]s — either literals or back-references
+//! into a sliding window. The [`Encoder`] builds tokens from an input stream and
+//! the [`Decoder`] reconstructs the original data.
+
 use std::{error::Error, fmt, io};
 
 use crate::{
@@ -7,9 +13,12 @@ use crate::{
     vle,
 };
 
+/// An LZ77 token: either a literal symbol or a back-reference into the sliding window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Token<T> {
+    /// A single uncompressed symbol.
     Literal { symbol: T },
+    /// A back-reference copying `length` symbols from `distance` positions back in the window.
     Reference { length: u32, distance: u32 },
 }
 
@@ -338,6 +347,7 @@ impl<T> Encoder<T>
 where
     T: Copy + Eq,
 {
+    /// Creates a new encoder with a sliding window of `length` entries, initialized to `init`.
     #[inline]
     pub fn new(init: T, length: u32) -> Self {
         debug_assert!(usize::try_from(length).is_ok());
@@ -349,6 +359,7 @@ where
         }
     }
 
+    /// Feeds one symbol into the encoder, emitting tokens to `output` as matches are resolved.
     #[inline]
     pub fn encode(&mut self, symbol: T, output: &mut impl Extend<Token<T>>) {
         if self.length > 0 {
@@ -421,6 +432,7 @@ where
         }
     }
 
+    /// Flushes any pending match, emitting final tokens to `output`.
     #[inline]
     pub fn finish(&mut self, output: &mut impl Extend<Token<T>>) {
         let should_emit_reference = self.length >= 2;
@@ -448,11 +460,13 @@ struct Entry {
     length: usize,
 }
 
+/// LZ77 decoder that reconstructs the original symbol stream from [`Token`]s.
 pub struct Decoder<T> {
     window: Window<T>,
     entry: Option<Entry>,
 }
 
+/// Errors that can occur while decoding an LZ77 stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DecodeError {
     /// Signals that decoder did not end emitting tokens,
@@ -483,6 +497,7 @@ impl<T> Decoder<T>
 where
     T: Copy + Eq,
 {
+    /// Creates a new decoder with a sliding window of `length` entries, initialized to `init`.
     #[inline]
     pub fn new(init: T, length: u32) -> Self {
         debug_assert!(usize::try_from(length).is_ok());
@@ -493,6 +508,7 @@ where
         }
     }
 
+    /// Decodes one symbol from `tokens`, returning `Ok(None)` when the stream is exhausted.
     #[inline]
     pub fn decode(
         &mut self,
@@ -552,6 +568,7 @@ where
         }
     }
 
+    /// Decodes all remaining symbols from `tokens` and appends them to `extend`.
     #[inline]
     pub fn decode_all(
         &mut self,
@@ -605,7 +622,7 @@ where
         Ok(())
     }
 
-    // If decoding finished correctly, state should be clean, i.e. no pending entries.
+    /// Verifies that decoding finished cleanly with no pending entries.
     pub fn finish(&self) -> Result<(), DecodeError> {
         if self.entry.is_some() {
             Err(DecodeError::Incomplete)

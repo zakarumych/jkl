@@ -1,5 +1,8 @@
-//! BC4 implementation.
+//! BC4 (RGTC1) single-channel block texture compression.
 //!
+//! BC4 compresses single-channel texels into 8-byte blocks. Each block stores two
+//! [`R8U`] endpoint values and a 4×4 grid of 3-bit indices into an 8-entry
+//! interpolated palette.
 
 use std::convert::Infallible;
 

@@ -1,3 +1,9 @@
+//! Variable-length Elias delta encoding for unsigned integers.
+//!
+//! Small values are encoded in fewer bits, making this scheme well-suited for
+//! compressing data with a skewed distribution. The [`Vle`] newtype provides a
+//! convenient [`VarCode`] implementation.
+
 use std::{error::Error, fmt, io, ops};
 
 use crate::{

@@ -1,3 +1,12 @@
+//! A compression and image processing toolkit.
+//!
+//! This crate provides entropy coders ([`ans`], [`rle`], [`vle`]),
+//! dictionary compressors ([`lz77`], [`lz78`], [`lzw`]),
+//! GPU-oriented block texture codecs ([`bc1`]–[`bc5`]),
+//! bit-level I/O ([`bits`]), serialization traits ([`encode`]),
+//! a 2D bin packer ([`max_rects`]), Z-order curve utilities ([`z_curve`]),
+//! and the Jackal image format ([`jackal`]).
+
 macro_rules! impl_fixedcode_struct {
     ($name:ident { $($field_name:ident: $field_ty:ty),* $(,)? } | $error:ty) => {
         impl $crate::encode::FixedCode for $name {

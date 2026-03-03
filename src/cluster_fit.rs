@@ -1,3 +1,9 @@
+//! Least-squares cluster-fit quantization.
+//!
+//! Exhaustively searches all clusterings of samples along their principal axis
+//! to find optimal palette endpoints with minimum total error. Used internally
+//! by the BC1–BC5 block texture encoders.
+
 use std::ops::{Add, AddAssign, Mul, Sub};
 
 use crate::math::{pca_axis, Region3, Vec3, Zero};

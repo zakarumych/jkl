@@ -1,3 +1,9 @@
+//! Trainable 2D lookup table for patch-based image compression.
+//!
+//! [`ReferenceMap`] stores a pixel buffer that is iteratively refined by matching
+//! patches against an input image. It supports random initialization, block-copy
+//! seeding, and several training strategies.
+
 use std::ops;
 
 use hashbrown::HashSet;

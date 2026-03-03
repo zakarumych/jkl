@@ -1,3 +1,9 @@
+//! Run-length encoding (RLE) compression.
+//!
+//! Provides the [`Rle`] element type, a lazy iterator adapter ([`RleIter`]),
+//! and configuration ([`RleCfg`]) to control maximum run length and
+//! power-of-two splitting.
+
 use std::num::NonZero;
 
 use crate::{

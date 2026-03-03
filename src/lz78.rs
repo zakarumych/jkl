@@ -207,15 +207,8 @@ impl<T> Decoder<T> {
 /// Errors that can occur while decoding an LZ78 stream.
 #[derive(Debug)]
 pub enum DecodeError {
-    Io(std::io::Error),
+    /// A token referenced a dictionary index that does not exist.
     InvalidIndex,
-}
-
-impl From<std::io::Error> for DecodeError {
-    #[inline(always)]
-    fn from(err: std::io::Error) -> Self {
-        DecodeError::Io(err)
-    }
 }
 
 impl<T> Decoder<T>
@@ -258,6 +251,7 @@ where
         Ok((new_start, new_end))
     }
 
+    /// Decodes a single token, returning the expanded symbol slice.
     pub fn decode_next_slice<'a>(&'a mut self, token: Token<T>) -> Result<&'a [T], DecodeError> {
         let output = self.decode_next_range(token)?;
 

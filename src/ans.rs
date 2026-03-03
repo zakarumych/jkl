@@ -1,3 +1,9 @@
+//! Asymmetric Numeral Systems (ANS) entropy coder.
+//!
+//! Provides a [`Context`] that holds per-symbol frequency tables, an [`Encoder`]
+//! that compresses symbols into a stream of `u32` tokens, and a [`Decoder`] that
+//! reconstructs the original symbols from that token stream in reverse order.
+
 use std::{cmp, error::Error, fmt, hash::Hash, io};
 
 use hashbrown::HashMap;
@@ -228,9 +234,9 @@ impl<T> Context<T> {
         Ok(())
     }
 
-    /// Write minimal header for Ans encoding.
+    /// Read minimal header for ANS encoding.
     ///
-    /// Should be used if context was writtent without delta encoding.
+    /// Should be used if context was written without delta encoding.
     pub fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self>
     where
         T: Copy + Default + Eq + Hash + Delta + VarCode,
@@ -255,12 +261,12 @@ impl<T> Context<T> {
         Ok(Self::from_sorted_frequencies(freqs_sorted))
     }
 
-    /// Write minimal header for Ans encoding.
+    /// Read minimal header for ANS encoding.
     ///
     /// Uses provided order and delta function for symbols.
     /// Decodes deltas between symbols, which can be more efficient.
     ///
-    /// Should be used if context was writtent with delta encoding.
+    /// Should be used if context was written with delta encoding.
     /// Using same order and delta function as for writing is required for correct decoding.
     pub fn read_with_delta<U>(
         reader: &mut ReadBits<impl io::Read>,
@@ -405,6 +411,7 @@ where
     }
 }
 
+/// Error type for ANS decoding failures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DecodeError {
     /// Signals that decoder did not end in final state,

@@ -1,3 +1,9 @@
+//! Traits for fixed-size and variable-length binary serialization.
+//!
+//! [`FixedCode`] covers types with a constant byte-width representation,
+//! while [`VarCode`] extends to bit-level variable-length encoding via
+//! [`WriteBits`] / [`ReadBits`].
+
 use std::{error::Error, io};
 
 use crate::bits::{ReadBits, WriteBits};

@@ -224,7 +224,9 @@ where
 /// Errors that can occur while decoding an LZW stream.
 #[derive(Debug)]
 pub enum DecodeError {
+    /// An I/O error from the underlying reader.
     Io(std::io::Error),
+    /// A code referenced a dictionary index that does not exist.
     InvalidIndex,
 }
 
@@ -266,6 +268,7 @@ impl<T> Decoder<T> {
     ///
     /// Panics if the decoder still holds un-consumed output.
     pub fn finish(&self) {
+        match self.output {
             Output::Range(start, end) if start == end => {}
             _ => {
                 panic!("Decoder output was not consumed.");

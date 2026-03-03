@@ -1,3 +1,9 @@
+//! Zigzag encoding that maps signed integers to unsigned integers.
+//!
+//! Values with small absolute magnitude produce small unsigned outputs, which is
+//! ideal for variable-length encodings. The [`ZigZag`] trait provides `zigzag` /
+//! `zagzig` round-trip conversions and is implemented for all primitive integer types.
+
 /// Bidirectional zigzag encoding between signed and unsigned integers.
 ///
 /// Zigzag encoding maps signed values to unsigned ones so that values with small

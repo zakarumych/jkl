@@ -1,3 +1,9 @@
+//! Z-order (Morton) curve utilities for 2D coordinate interleaving.
+//!
+//! Provides [`even_odd_split_squash`] for deinterleaving a Z-index into `(x, y)`
+//! and [`BoundZCurve`], an iterator that yields coordinates in Z-order within a
+//! bounded rectangle, efficiently skipping out-of-bounds indices.
+
 /// Separates the even-indexed and odd-indexed bits of `index` into two compacted `u16` values.
 ///
 /// Even bits (positions 0, 2, 4, …) are packed into the first element and odd bits

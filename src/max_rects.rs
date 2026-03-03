@@ -1,3 +1,9 @@
+//! 2D rectangle bin packing via the maximal-rectangles algorithm.
+//!
+//! [`MaximalRectangles`] maintains a set of free regions inside a bin and greedily
+//! places rectangles according to a configurable [`Heuristic`]. Supports optional
+//! rotation and quantized placement.
+
 use std::cmp::{max, min};
 use std::f32;
 
@@ -64,7 +70,7 @@ impl MaximalRectangles {
         self
     }
 
-    /// Configure packer to quantization all sizes to specified values.
+    /// Configure packer to quantize all sizes to specified values.
     ///
     /// # Panics
     ///

@@ -1,5 +1,7 @@
-//! BC1 implementation.
+//! BC1 (DXT1) block texture compression.
 //!
+//! BC1 compresses RGB texels into 8-byte blocks. Each block stores two [`Rgb565`]
+//! endpoint colors and a 4×4 grid of 2-bit indices into a 4-entry interpolated palette.
 
 use std::convert::Infallible;
 

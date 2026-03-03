@@ -1,5 +1,7 @@
-//! BC2 implementation.
+//! BC2 (DXT3) block texture compression.
 //!
+//! BC2 compresses RGBA texels into 16-byte blocks. Alpha is stored as explicit
+//! 4-bit values per texel, while the RGB portion uses the same encoding as [`bc1`].
 
 use std::convert::Infallible;
 

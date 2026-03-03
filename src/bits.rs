@@ -2,7 +2,7 @@
 
 use std::io::{self, Read, Write};
 
-/// Wrapper around writer to write bits.
+/// Buffered bit-level writer that wraps an [`io::Write`] byte stream.
 pub struct WriteBits<W> {
     writer: W,
     buffer: u128,
@@ -10,6 +10,7 @@ pub struct WriteBits<W> {
 }
 
 impl<W> WriteBits<W> {
+    /// Creates a new `WriteBits` wrapping the given writer.
     pub fn new(write: W) -> Self {
         WriteBits {
             writer: write,
@@ -275,7 +276,7 @@ where
     }
 }
 
-/// Wrapper around reader to read bits.
+/// Buffered bit-level reader that wraps an [`io::Read`] byte stream.
 pub struct ReadBits<R> {
     reader: R,
     buffer: u128,
@@ -283,6 +284,7 @@ pub struct ReadBits<R> {
 }
 
 impl<R> ReadBits<R> {
+    /// Creates a new `ReadBits` wrapping the given reader.
     pub fn new(reader: R) -> Self {
         ReadBits {
             reader,
