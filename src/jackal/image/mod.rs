@@ -266,7 +266,7 @@ impl fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// Convenience reader object for reading Jackal images from a stream.
+/// Convenience reader object for reading Jackal Images from a stream.
 pub struct JackalReader<R> {
     compression: Compression,
     format: Format,

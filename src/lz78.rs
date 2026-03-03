@@ -1,11 +1,8 @@
-//! This module contains implementation of LZ78 based compression for Jackal format.
+//! LZ78 dictionary compression.
 //!
-//! This variation is adapted to allow efficient decoding on GPUs.
-//!
-//! Uses 8 and 16-bit alphabets.
-//! Indices in code grow by 8 bits, with first sequence added to the dictionary, the index becomes 8 bits,
-//! when 256th entry is added, the index becomes 16bits.
-//!
+//! Symbols are compressed into [`Token`]s - a prefix index into the dictionary paired with a trailing literal.
+//! The [`Encoder`] builds tokens from an input stream and
+//! the [`Decoder`] reconstructs the original data.
 
 use std::{
     io,

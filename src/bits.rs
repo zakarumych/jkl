@@ -327,7 +327,7 @@ where
 
     /// Read bits into the buffer.
     /// `bit_offset` specifies the bit offset in the buffer to read into.
-    /// All bits before [`bit_offset`] will be preserved.
+    /// All bits before `bit_offset` will be preserved.
     /// `bit_len` specifies number of bits to read.
     ///
     /// Returns number of bits read.

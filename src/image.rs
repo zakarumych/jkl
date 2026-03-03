@@ -18,7 +18,7 @@
 ///
 /// # Type Parameters
 ///
-/// * `T` — The pixel type. Must be `Copy` for most operations.
+/// * `T` - The pixel type. Must be `Copy` for most operations.
 pub struct Image2DRef<'a, T> {
     /// The width of the image view in pixels.
     width: usize,
@@ -42,9 +42,9 @@ impl<'a, T> Image2DRef<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `pixels` — The underlying pixel data slice.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `pixels` - The underlying pixel data slice.
     ///
     /// # Panics
     ///
@@ -66,10 +66,10 @@ impl<'a, T> Image2DRef<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `pixels` — The underlying pixel data slice.
-    /// * `stride` — The number of `T` elements between the start of consecutive rows.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `pixels` - The underlying pixel data slice.
+    /// * `stride` - The number of `T` elements between the start of consecutive rows.
     ///
     /// # Panics
     ///
@@ -215,7 +215,7 @@ impl<'a, T> Image2DRef<'a, T> {
 ///
 /// # Type Parameters
 ///
-/// * `T` — The pixel type. Must be `Copy` for most operations.
+/// * `T` - The pixel type. Must be `Copy` for most operations.
 pub struct Image2DMut<'a, T> {
     /// The width of the image view in pixels.
     width: usize,
@@ -232,9 +232,9 @@ impl<'a, T> Image2DMut<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `pixels` — The underlying mutable pixel data slice.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `pixels` - The underlying mutable pixel data slice.
     ///
     /// # Panics
     ///
@@ -256,10 +256,10 @@ impl<'a, T> Image2DMut<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `pixels` — The underlying mutable pixel data slice.
-    /// * `stride` — The number of `T` elements between the start of consecutive rows.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `pixels` - The underlying mutable pixel data slice.
+    /// * `stride` - The number of `T` elements between the start of consecutive rows.
     ///
     /// # Panics
     ///
@@ -555,7 +555,7 @@ impl<'a, T> Image2DMut<'a, T> {
 ///
 /// # Type Parameters
 ///
-/// * `T` — The pixel type. Must be `Copy` for most operations.
+/// * `T` - The pixel type. Must be `Copy` for most operations.
 pub struct Image3DRef<'a, T> {
     /// The width of the image view in pixels.
     width: usize,
@@ -583,10 +583,10 @@ impl<'a, T> Image3DRef<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `depth` — The depth of the image in pixels.
-    /// * `pixels` — The underlying pixel data slice.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `depth` - The depth of the image in pixels.
+    /// * `pixels` - The underlying pixel data slice.
     ///
     /// # Panics
     ///
@@ -610,10 +610,10 @@ impl<'a, T> Image3DRef<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `pixels` — The underlying pixel data slice.
-    /// * `stride` — The number of `T` elements between the start of consecutive rows.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `pixels` - The underlying pixel data slice.
+    /// * `stride` - The number of `T` elements between the start of consecutive rows.
     ///
     /// # Panics
     ///
@@ -910,7 +910,7 @@ impl<'a, T> Image3DRef<'a, T> {
 ///
 /// # Type Parameters
 ///
-/// * `T` — The pixel type. Must be `Copy` for most operations.
+/// * `T` - The pixel type. Must be `Copy` for most operations.
 pub struct Image3DMut<'a, T> {
     /// The width of the image view in pixels.
     width: usize,
@@ -931,10 +931,10 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `depth` — The depth of the image in pixels.
-    /// * `pixels` — The underlying mutable pixel data slice.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `depth` - The depth of the image in pixels.
+    /// * `pixels` - The underlying mutable pixel data slice.
     ///
     /// # Panics
     ///
@@ -958,12 +958,12 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// # Parameters
     ///
-    /// * `width` — The width of the image in pixels.
-    /// * `height` — The height of the image in pixels.
-    /// * `depth` — The depth of the image in pixels.
-    /// * `pixels` — The underlying mutable pixel data slice.
-    /// * `row_stride` — The number of `T` elements between the start of consecutive rows.
-    /// * `plane_stride` — The number of `T` elements between the start of consecutive planes.
+    /// * `width` - The width of the image in pixels.
+    /// * `height` - The height of the image in pixels.
+    /// * `depth` - The depth of the image in pixels.
+    /// * `pixels` - The underlying mutable pixel data slice.
+    /// * `row_stride` - The number of `T` elements between the start of consecutive rows.
+    /// * `plane_stride` - The number of `T` elements between the start of consecutive planes.
     ///
     /// # Panics
     ///
@@ -2830,10 +2830,10 @@ fn sizes(dimensions: Dimensions, extent: [usize; 3], stride: [usize; 2]) -> Size
 //     ///
 //     /// # Parameters
 //     ///
-//     /// * `x` — Left offset into `self` where the comparison starts.
-//     /// * `y` — Top offset into `self` where the comparison starts.
-//     /// * `block` — The block to compare against this image region.
-//     /// * `error` — A function that computes the error between two pixels.
+//     /// * `x` - Left offset into `self` where the comparison starts.
+//     /// * `y` - Top offset into `self` where the comparison starts.
+//     /// * `block` - The block to compare against this image region.
+//     /// * `error` - A function that computes the error between two pixels.
 //     ///
 //     /// # Panics
 //     ///
@@ -2874,11 +2874,11 @@ fn sizes(dimensions: Dimensions, extent: [usize; 3], stride: [usize; 2]) -> Size
 //     ///
 //     /// # Parameters
 //     ///
-//     /// * `x` — Left offset into `self` where the comparison starts.
-//     /// * `y` — Top offset into `self` where the comparison starts.
-//     /// * `block` — The block to compare against this image region.
-//     /// * `upper_bound` — Maximum acceptable total error. If exceeded, returns `None`.
-//     /// * `error` — A function that computes the error between two pixels.
+//     /// * `x` - Left offset into `self` where the comparison starts.
+//     /// * `y` - Top offset into `self` where the comparison starts.
+//     /// * `block` - The block to compare against this image region.
+//     /// * `upper_bound` - Maximum acceptable total error. If exceeded, returns `None`.
+//     /// * `error` - A function that computes the error between two pixels.
 //     ///
 //     /// # Returns
 //     ///
@@ -2932,10 +2932,10 @@ fn sizes(dimensions: Dimensions, extent: [usize; 3], stride: [usize; 2]) -> Size
 //     ///
 //     /// # Parameters
 //     ///
-//     /// * `step_x` — Horizontal step size between candidate positions.
-//     /// * `step_y` — Vertical step size between candidate positions.
-//     /// * `block` — The block to search for within this image.
-//     /// * `error` — A function that computes the per-pixel error between two pixels.
+//     /// * `step_x` - Horizontal step size between candidate positions.
+//     /// * `step_y` - Vertical step size between candidate positions.
+//     /// * `block` - The block to search for within this image.
+//     /// * `error` - A function that computes the per-pixel error between two pixels.
 //     ///
 //     /// # Returns
 //     ///
@@ -3000,12 +3000,12 @@ fn sizes(dimensions: Dimensions, extent: [usize; 3], stride: [usize; 2]) -> Size
 //     ///
 //     /// # Parameters
 //     ///
-//     /// * `x` — Left offset into `self` for the reference patch.
-//     /// * `y` — Top offset into `self` for the reference patch.
-//     /// * `input` — The input block to compute residuals against.
-//     /// * `output` — The mutable image to write residual values into. Must have the same
+//     /// * `x` - Left offset into `self` for the reference patch.
+//     /// * `y` - Top offset into `self` for the reference patch.
+//     /// * `input` - The input block to compute residuals against.
+//     /// * `output` - The mutable image to write residual values into. Must have the same
 //     ///   dimensions as `input`.
-//     /// * `residual` — A function that computes the residual between a reference pixel and
+//     /// * `residual` - A function that computes the residual between a reference pixel and
 //     ///   an input pixel.
 //     ///
 //     /// # Panics

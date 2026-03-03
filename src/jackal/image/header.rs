@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use crate::{
     encode::FixedCode,
     image::{Dimensions, Extent},
@@ -204,16 +202,4 @@ impl JackalHeader {
     pub fn tiles_count(&self) -> usize {
         self.tile_size.tiles_count(self.extent)
     }
-
-    #[inline]
-    pub fn tiles(&self) -> [usize; 3] {
-        self.tile_size.tiles(self.extent)
-    }
 }
-
-#[derive(Clone, Copy)]
-pub struct JackalBlock {
-    pub offset: u64,
-}
-
-impl_fixedcode_struct!(JackalBlock { offset: u64 } | Infallible);

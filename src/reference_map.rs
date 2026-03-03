@@ -67,8 +67,8 @@ where
     ///
     /// # Parameters
     ///
-    /// * `input` — The source image to sample patches from.
-    /// * `block_size` — The side length of each square patch.
+    /// * `input` - The source image to sample patches from.
+    /// * `block_size` - The side length of each square patch.
     pub fn initialize_patches(&mut self, input: Image2DRef<'_, T>, block_size: usize) {
         if self.width == 0
             || self.height == 0

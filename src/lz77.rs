@@ -1,6 +1,6 @@
 //! LZ77 sliding-window compression.
 //!
-//! Symbols are compressed into [`Token`]s — either literals or back-references
+//! Symbols are compressed into [`Token`]s - either literals or back-references
 //! into a sliding window. The [`Encoder`] builds tokens from an input stream and
 //! the [`Decoder`] reconstructs the original data.
 

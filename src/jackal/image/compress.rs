@@ -381,10 +381,6 @@ impl<T> RleIoExpand<T> {
         })
     }
 
-    pub fn empty() -> Self {
-        RleIoExpand(RleIoExpandVariant::NoRepeat { error: None })
-    }
-
     pub fn error(err: io::Error) -> Self {
         RleIoExpand(RleIoExpandVariant::NoRepeat { error: Some(err) })
     }
