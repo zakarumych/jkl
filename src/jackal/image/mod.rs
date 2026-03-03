@@ -3,98 +3,96 @@
 use std::{convert::Infallible, fmt, io};
 
 use crate::{
+    bits::read_bits_scope,
     encode::{FixedCode, VarCode},
-    image::{Image, ImageRef},
-    jackal::image::{compress::Symbol, format::AnyFormat, header::Extent},
-    math::{Rgb8U, R8U},
+    image::{Extent, Image2DMut, ImageRef},
+    jackal::image::{
+        compress::{AnsCompressor, LZ77Compressor, RleCompressor},
+        format::Offsets,
+        header::JackalHeader,
+    },
 };
 
 pub use self::{
-    compress::LZ77Compressor,
-    header::{Compression, Format, JackalBlock, JackalHeader, MipLevels, TileSize},
+    format::{Format, Pixel},
+    header::{Compression, MipLevels},
+    tiles::TileSize,
 };
 
 mod compress;
 mod filter;
 mod format;
 mod header;
+mod tiles;
 
-pub(super) trait Pixel: Symbol + FixedCode + AnyFormat {}
+pub struct Options {
+    flat_cost: f32,
+    size_cost: f32,
+    compression: Compression,
+}
 
-fn image_extent(input: ImageRef<impl Pixel>) -> Extent {
-    match input {
-        ImageRef::D1(input) => Extent::D1 {
-            width: u64::try_from(input.len()).expect("Image length exceeds u64::MAX"),
-        },
-        ImageRef::D2(input) => Extent::D2 {
-            width: u64::try_from(input.width()).expect("Image width exceeds u64::MAX"),
-            height: u64::try_from(input.height()).expect("Image height exceeds u64::MAX"),
-        },
-        ImageRef::D3(input) => Extent::D3 {
-            width: u64::try_from(input.width()).expect("Image width exceeds u64::MAX"),
-            height: u64::try_from(input.height()).expect("Image height exceeds u64::MAX"),
-            depth: u64::try_from(input.depth()).expect("Image depth exceeds u64::MAX"),
-        },
+impl Options {
+    pub const fn new() -> Self {
+        Options {
+            flat_cost: 64.0,
+            size_cost: 1.0,
+            compression: Compression::None,
+        }
+    }
+
+    pub const fn with_compression(mut self, compression: Compression) -> Self {
+        self.compression = compression;
+        self
     }
 }
 
-pub struct Config {
-    pub flat_cost: f32,
-    pub size_cost: f32,
-}
-
-pub(super) fn encode_image<T>(
+/// Encode entire image to the IO stream.
+///
+/// Uses options to determine the compression method and tile size.
+pub fn write_image<T>(
     input: ImageRef<T>,
-    compression: Compression,
-    config: &Config,
+    options: Options,
     mut write: impl io::Write + io::Seek,
 ) -> io::Result<()>
 where
     T: Pixel,
 {
-    let extent = image_extent(input);
+    let extent = input.extent();
+
+    let tile_size = TileSize::find_optimal(
+        extent,
+        T::FORMAT.block_width(),
+        T::FORMAT.block_height(),
+        options.flat_cost,
+        options.size_cost,
+    );
+    let tiles_iter = tile_size.iter_tiles(input);
+
     let header = JackalHeader {
-        compression,
+        compression: options.compression,
         format: T::FORMAT,
         extent,
+        tile_size,
         ..JackalHeader::new()
     };
 
-    match compression {
-        Compression::None => match input {
-            ImageRef::D1(input) => {
-                for pixel in input {
-                    pixel.fix_write(&mut write)?;
-                }
-                Ok(())
-            }
-            ImageRef::D2(input) => {
-                for pixel in input.iter_pixels() {
-                    pixel.fix_write(&mut write)?;
-                }
-                Ok(())
-            }
-            ImageRef::D3(input) => {
-                for pixel in input.iter_pixels() {
-                    pixel.fix_write(&mut write)?;
-                }
-                Ok(())
-            }
-        },
-        Compression::Lz77 => {
-            let tile_size = TileSize::find_optimal(extent, 1, config.flat_cost, config.size_cost);
-            let tiles_iter = tile_size.iter_tiles(input);
+    header.fix_write(&mut write)?;
 
-            JackalHeader {
-                tile_size,
-                ..header
-            }
-            .fix_write(&mut write)?;
-
-            let compressor = LZ77Compressor { window_size: 1024 };
-            T::compress_images(tiles_iter, compressor, write)
+    match options.compression {
+        Compression::None => {
+            // Simply write all pixels using fixed code.
+            input
+                .iter_pixels()
+                .try_for_each(|p| p.fix_write(&mut write))
         }
-        _ => unimplemented!(),
+        Compression::Lz77 => T::compress_images(tiles_iter, LZ77Compressor::new(), write),
+        Compression::Ans => T::compress_images(tiles_iter, AnsCompressor, write),
+        Compression::Lz77Ans => {
+            T::compress_images(tiles_iter, (LZ77Compressor::new(), AnsCompressor), write)
+        }
+        Compression::RleAns => {
+            T::compress_images(tiles_iter, (RleCompressor, AnsCompressor), write)
+        }
     }
 }
 
@@ -121,6 +119,13 @@ pub enum DecodeError {
     // Data is invalid.
     // Such as position is out of bounds.
     InvalidData,
+
+    /// Numeric values exceed the maximum allowed on current platform.
+    /// For example dimensions exceed usize::MAX.
+    ///
+    /// In theory this may happen if image with dimension 2^32 or larger is created on 64-bit platform,
+    /// and then attempted to be read on 32-bit platform, where `usize` can't represent dimensions as large as 2^32.
+    TooLarge,
 }
 
 impl From<Infallible> for DecodeError {
@@ -139,29 +144,174 @@ impl fmt::Display for DecodeError {
             DecodeError::InvalidDimensions => write!(f, "Invalid dimensions"),
             DecodeError::InvalidExtent => write!(f, "Invalid extent"),
             DecodeError::InvalidData => write!(f, "Invalid data"),
+            DecodeError::TooLarge => write!(f, "Numeric value is too large for current platform"),
         }
     }
 }
 
 impl std::error::Error for DecodeError {}
 
-/// Read Jackal header from the stream.
-pub fn read_header(mut read: impl io::Read) -> io::Result<JackalHeader> {
-    let mut bytes = [0; JackalHeader::SIZE];
-    read.read_exact(&mut bytes)?;
-    JackalHeader::fix_decode(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+/// Convenience reader object for reading Jackal images from a stream.
+pub struct JackalReader<R> {
+    compression: Compression,
+    format: Format,
+    extent: Extent,
+    tile_size: TileSize,
+    offsets: Offsets,
+    read: R,
 }
 
-/// Read super-blocks from the stream.
-pub fn read_jackal_blocks(
-    mut read: impl io::Read,
-    jackal_blocks: &mut [JackalBlock],
-) -> io::Result<()> {
-    let mut buffer = [0; JackalBlock::SIZE];
-    for block in jackal_blocks.iter_mut() {
-        read.read_exact(&mut buffer)?;
-        *block = JackalBlock::fix_decode(&buffer)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+enum AnyContext<T: Pixel> {
+    None,
+    Lz77(T::Context<LZ77Compressor>),
+    Ans(T::Context<AnsCompressor>),
+}
+
+impl<T> AnyContext<T>
+where
+    T: Pixel,
+{
+    fn read_for_complression(
+        compression: Compression,
+        read: &mut impl io::Read,
+    ) -> io::Result<Self> {
+        read_bits_scope(read, |read| match compression {
+            Compression::None => Ok(AnyContext::None),
+            Compression::Lz77 => Ok(AnyContext::Lz77(T::Context::<LZ77Compressor>::var_read(
+                read,
+            )?)),
+            Compression::Ans => Ok(AnyContext::Ans(T::Context::<AnsCompressor>::var_read(
+                read,
+            )?)),
+            _ => unimplemented!(),
+        })
     }
-    Ok(())
+}
+
+impl<R> JackalReader<R> {
+    /// Opens a JackalReader, reads the header and tile offsets from the stream.
+    pub fn open(mut read: R) -> io::Result<Self>
+    where
+        R: io::Read,
+    {
+        let header = JackalHeader::fix_read(&mut read)?;
+
+        // Read tile offsets.
+        let tiles_count = header.tiles_count();
+        let offsets = Offsets::read(tiles_count, &mut read)?;
+
+        Ok(JackalReader {
+            compression: header.compression,
+            format: header.format,
+            extent: header.extent,
+            tile_size: header.tile_size,
+            offsets,
+            read,
+        })
+    }
+
+    pub fn tiles(&self) -> usize {
+        self.offsets.slice().len()
+    }
+
+    pub fn tile_offsets(&self) -> &[u64] {
+        self.offsets.slice()
+    }
+
+    pub fn tile_size(&self) -> TileSize {
+        self.tile_size
+    }
+
+    pub fn tile_pos(&self, tile_index: usize) -> [usize; 3] {
+        self.tile_size.tile_pos(self.extent, tile_index)
+    }
+
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    pub fn pixel_reader<T>(&mut self) -> io::Result<JackalPixelReader<'_, R, T>>
+    where
+        T: Pixel,
+        R: io::Read,
+    {
+        assert_eq!(
+            self.format,
+            T::FORMAT,
+            "Pixel type format does not match image format"
+        );
+
+        let context = AnyContext::read_for_complression(self.compression, &mut self.read)?;
+
+        Ok(JackalPixelReader {
+            context,
+            extent: self.extent,
+            tile_size: self.tile_size,
+            offsets: self.offsets.slice(),
+            read: &mut self.read,
+        })
+    }
+}
+
+pub struct JackalPixelReader<'a, R, T: Pixel> {
+    context: AnyContext<T>,
+    extent: Extent,
+    tile_size: TileSize,
+    offsets: &'a [u64],
+    read: &'a mut R,
+}
+
+impl<'a, R, T> JackalPixelReader<'a, R, T>
+where
+    T: Pixel,
+    R: io::Read + io::Seek,
+{
+    pub fn tiles(&self) -> usize {
+        self.offsets.len()
+    }
+
+    pub fn tile_offsets(&self) -> &[u64] {
+        self.offsets
+    }
+
+    pub fn tile_size(&self) -> TileSize {
+        self.tile_size
+    }
+
+    pub fn tile_pos(&self, tile_index: usize) -> [usize; 3] {
+        self.tile_size.tile_pos(self.extent, tile_index)
+    }
+
+    pub fn read_tile(&mut self, tile_index: usize, mut image: Image2DMut<'a, T>) -> io::Result<()> {
+        assert!(tile_index < self.offsets.len(), "Tile index out of bounds");
+        assert_eq!(
+            usize::from(self.tile_size.width),
+            image.width(),
+            "Tile width mismatch"
+        );
+
+        assert_eq!(
+            usize::from(self.tile_size.height),
+            image.height(),
+            "Tile height mismatch"
+        );
+
+        self.read
+            .seek(io::SeekFrom::Start(self.offsets[tile_index]))?;
+
+        match &self.context {
+            AnyContext::None => {
+                for pixel in image.iter_pixels_mut() {
+                    *pixel = T::fix_read(&mut *self.read)?;
+                }
+                Ok(())
+            }
+            AnyContext::Lz77(context) => {
+                T::decompress_image(LZ77Compressor::new(), context, &mut *self.read, image)
+            }
+            AnyContext::Ans(context) => {
+                T::decompress_image(AnsCompressor, context, &mut *self.read, image)
+            }
+        }
+    }
 }

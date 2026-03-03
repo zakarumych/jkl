@@ -2,10 +2,21 @@ use std::{error::Error, io};
 
 use crate::bits::{ReadBits, WriteBits};
 
+pub trait ByteArray: AsRef<[u8]> + AsMut<[u8]> + Send + Sync + 'static {
+    fn zeroed() -> Self;
+}
+
+impl<const N: usize> ByteArray for [u8; N] {
+    #[inline]
+    fn zeroed() -> Self {
+        [0u8; N]
+    }
+}
+
 // A trait for generic encoding of values that can be represented as a fixed-size array of bytes.
 pub trait FixedCode: Sized {
     const SIZE: usize;
-    type Array: Default + AsRef<[u8]> + AsMut<[u8]> + Send + Sync + 'static;
+    type Array: ByteArray;
     type Error: Error + Send + Sync + 'static;
     fn fix_encode(&self) -> Self::Array;
     fn fix_decode(input: &Self::Array) -> Result<Self, Self::Error>;
@@ -17,7 +28,7 @@ pub trait FixedCode: Sized {
 
     #[inline]
     fn fix_read(read: &mut impl io::Read) -> io::Result<Self> {
-        let mut buffer = Self::Array::default();
+        let mut buffer = Self::Array::zeroed();
         io::Read::read_exact(read, buffer.as_mut())?;
         Self::fix_decode(&buffer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
@@ -25,7 +36,7 @@ pub trait FixedCode: Sized {
 
 impl<const N: usize> FixedCode for [u8; N]
 where
-    [u8; N]: Default,
+    [u8; N]: ByteArray,
 {
     const SIZE: usize = N;
     type Array = [u8; N];

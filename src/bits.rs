@@ -514,6 +514,30 @@ where
     }
 }
 
+pub fn write_bits_scope<W, O>(
+    write: W,
+    f: impl FnOnce(&mut WriteBits<W>) -> io::Result<O>,
+) -> io::Result<O>
+where
+    W: io::Write,
+{
+    let mut write = WriteBits::new(write);
+    let result = f(&mut write);
+    write.finish()?;
+    result
+}
+
+pub fn read_bits_scope<R, O>(
+    read: R,
+    f: impl FnOnce(&mut ReadBits<R>) -> io::Result<O>,
+) -> io::Result<O>
+where
+    R: io::Read,
+{
+    let mut read = ReadBits::new(read);
+    f(&mut read)
+}
+
 #[test]
 fn test_writer() {
     let writes = [

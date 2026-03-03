@@ -38,14 +38,14 @@ pub trait Compressor {
     /// Called for each chunk independently.
     fn decompress_tokens<T: Symbol>(
         &self,
-        cx: &Self::Context<T>,
+        context: &Self::Context<T>,
         input: impl Iterator<Item = Self::Token<T>>,
         output: &mut impl Extend<T>,
     ) -> io::Result<()>;
 
     fn decompress_tokens2<T: Symbol>(
         &self,
-        cx: &Self::Context<T>,
+        context: &Self::Context<T>,
         input: impl Iterator<Item = io::Result<Self::Token<T>>>,
     ) -> impl Iterator<Item = io::Result<T>>;
 }
@@ -53,6 +53,12 @@ pub trait Compressor {
 #[derive(Clone, Copy, Debug)]
 pub struct LZ77Compressor {
     pub window_size: u32,
+}
+
+impl LZ77Compressor {
+    pub fn new() -> Self {
+        LZ77Compressor { window_size: 1024 }
+    }
 }
 
 pub struct LZ77Context;
@@ -144,10 +150,10 @@ impl Compressor for AnsCompressor {
         input: impl Iterator<Item = impl DoubleEndedIterator<Item = T>> + Clone,
         output: &mut Vec<Vec<u32>>,
     ) -> io::Result<Self::Context<T>> {
-        let cx = ans::Context::from_input(input.clone().flatten());
+        let context = ans::Context::from_input(input.clone().flatten());
 
         for (i, chunk) in input.enumerate() {
-            let mut encoder = ans::Encoder::new(&cx);
+            let mut encoder = ans::Encoder::new(&context);
 
             if output.len() == i {
                 output.push(Vec::new());
@@ -162,17 +168,17 @@ impl Compressor for AnsCompressor {
             stream.extend(encoder.finish());
         }
 
-        Ok(cx)
+        Ok(context)
     }
 
     #[inline]
     fn decompress_tokens<T: Symbol>(
         &self,
-        cx: &ans::Context<T>,
+        context: &ans::Context<T>,
         mut input: impl Iterator<Item = u32>,
         output: &mut impl Extend<T>,
     ) -> io::Result<()> {
-        let mut decoder = ans::Decoder::new(&cx);
+        let mut decoder = ans::Decoder::new(&context);
 
         loop {
             match decoder.decode(input.by_ref()) {
@@ -190,10 +196,10 @@ impl Compressor for AnsCompressor {
     #[inline]
     fn decompress_tokens2<T: Symbol>(
         &self,
-        cx: &ans::Context<T>,
+        context: &ans::Context<T>,
         input: impl Iterator<Item = io::Result<u32>>,
     ) -> impl Iterator<Item = io::Result<T>> {
-        let mut decoder = ans::Decoder::new(&cx);
+        let mut decoder = ans::Decoder::new(&context);
         let mut extact_error = ExtractError::new(input);
 
         std::iter::from_fn(move || match decoder.decode(extact_error.by_ref()) {
@@ -278,13 +284,13 @@ where
     #[inline]
     fn decompress_tokens<T: Symbol>(
         &self,
-        cx: &Self::Context<T>,
+        context: &Self::Context<T>,
         input: impl Iterator<Item = B::Token<A::Token<T>>>,
         output: &mut impl Extend<T>,
     ) -> io::Result<()> {
         let (a, b) = self;
 
-        let (a_cx, b_cx) = cx;
+        let (a_cx, b_cx) = context;
         let mut a_tokens = Vec::new();
 
         b.decompress_tokens(b_cx, input, &mut a_tokens)?;
@@ -295,12 +301,12 @@ where
     #[inline]
     fn decompress_tokens2<T: Symbol>(
         &self,
-        cx: &Self::Context<T>,
+        context: &Self::Context<T>,
         input: impl Iterator<Item = io::Result<Self::Token<T>>>,
     ) -> impl Iterator<Item = io::Result<T>> {
         let (a, b) = self;
 
-        let (a_cx, b_cx) = cx;
+        let (a_cx, b_cx) = context;
 
         let a_tokens = b.decompress_tokens2(b_cx, input);
         let symbols = a.decompress_tokens2(a_cx, a_tokens);

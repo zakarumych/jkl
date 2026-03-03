@@ -500,6 +500,8 @@ where
 
 #[test]
 fn test_u16() {
+    use crate::bits::{read_bits_scope, write_bits_scope};
+
     let data = [
         1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
         1, 1, 2, 1, 1, 2, 3, 1, 2, 1, 1, 1, 2, 1, 1, 3, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 3, 1, 2,
@@ -524,11 +526,10 @@ fn test_u16() {
     compressed.extend(encoder.finish());
 
     let mut ctx_buf = Vec::new();
-    let mut bit_writer = WriteBits::new(&mut ctx_buf);
-    ctx.write(&mut bit_writer).unwrap();
-    bit_writer.finish().unwrap();
-    let mut bit_reader = ReadBits::new(&ctx_buf[..]);
-    let ctx2 = Context::read(&mut bit_reader).unwrap();
+
+    write_bits_scope(&mut ctx_buf, |writer| ctx.write(writer)).unwrap();
+
+    let ctx2 = read_bits_scope(&ctx_buf[..], |reader| Context::read(reader)).unwrap();
 
     let mut decoder = Decoder::new(&ctx2);
 
