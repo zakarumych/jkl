@@ -14,6 +14,8 @@
   <!-- Jackal silhouette built from progressively degraded pixel blocks -->
   <!-- Left ear -->
   <rect x="84" y="84" width="33" height="33" fill="#3a7"/>
+  <rect x="84" y="84" width="33" height="33" fill="#3a7"/>
+  <rect x="84" y="120" width="33" height="33" fill="#3a7"/>
   <rect x="84" y="120" width="33" height="33" fill="#3a7"/>
   <rect x="120" y="48" width="33" height="33" fill="#3a7"/>
   <rect x="156" y="84" width="33" height="33" fill="#3a7"/>
@@ -70,7 +72,7 @@
   <rect x="30" y="480" width="424" height="10" rx="6" fill="url(#g1)" opacity="0.5"/>
   <text x="30" y="525" font-family="Consolas" font-size="30" fill="#666">1</text>
   <text x="420" y="525" font-family="Consolas" font-size="30" fill="#666">10</text>
-  <text x="126" y="525" font-family="Consolas" font-size="26" fill="#555">jackality scale</text>
+  <text x="240" y="525" font-family="Consolas" font-size="26" fill="#555" text-anchor="middle">jackality</text>
 
   <!-- J K L -->
   <text x="760" y="240" font-family="Consolas" font-size="300" font-weight="bold" fill="url(#g2)" text-anchor="middle" letter-spacing="48">J</text>
@@ -89,5 +91,5 @@
   <text x="1020" y="480" font-family="Consolas" font-size="40" fill="#888" text-anchor="middle">blazingly fast compression</text>
 
   <!-- subtle wink -->
-  <text x="1020" y="550" font-family="Consolas" font-size="26" fill="#666" text-anchor="middle">jackal responsibly</text>
+  <text x="1020" y="525" font-family="Consolas" font-size="20" fill="#666" text-anchor="middle" opacity="0.3">jackal responsibly</text>
 </svg>
