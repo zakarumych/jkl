@@ -2,26 +2,25 @@
 
 ---
 
-JKL is a batteries-included Rust crate for compressing, encoding and
-packing data that needs to travel fast and decompress even faster - on the
+JKL is a batteries-included Rust crate for compressing data
+for reduced footprint and blazing fast decompression on
 CPU *or* directly on the GPU. If you ship textures, sprite atlases, tile
 maps, or any bulk binary payload that must be ready the instant it hits
 VRAM, JKL was built for you.
 
 ## Feature highlights
 
-* **GPU-oriented block texture codecs** - encode and decode BC1 through BC5
-  blocks with cluster-fit quality.
-* **Layered entropy coding** - stack LZ77 or RLE with ANS for
-  near-optimal compression ratios while keeping decompression blazingly fast
-  - simple enough for a GPU compute shader.
-* **Bit-perfect I/O** - the [`bits`] module reads and writes individual bits
-  so every encoder can squeeze out every last fraction of a byte.
-* **Jackal Image format** - the [`jackal::image`] module ties everything together
-  into a tiled, mip-mapped, GPU-ready image container.
-* **Packing and spatial indexing** - [`max_rects`] bin-packs rectangles for
-  atlas generation; [`z_curve`] provides Morton-order iteration for
-  cache-friendly traversal.
+* **GPU-oriented block texture codecs** - encode and decode BC1 through BC5 blocks.
+  Cluster-fit algorithm finds endpoints for best perceptual quality.
+* **Layered entropy coding** - Not all data is equally compressible,
+  stack loseless encoders such as rANS, LZ77 or simple RLE.
+  Find the optimal combination balancing compression ratio and decompression speed.
+* **Bit I/O** - the [`bits`] module provides bit-level IO wrapper for `std::io::Read` and `std::io::Write`.
+  Bitstreams are used extensively in JKL for variable-length coding of symbols.
+* **Jackal Image format** - the [`jackal::image`] module provides API for working with Jackal Image (JKLI) file format.
+  Write entire images and read them back as tiles, supporting parallelized decompression.
+* **Atlas** - [`max_rects`] packs rectangles for
+  atlas generation
 
 ## Quick orientation - "how do I …?"
 
