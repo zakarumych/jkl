@@ -1,4 +1,4 @@
-<div align="center"><img src="https://raw.githubusercontent.com/zakarumych/jkl/main/logo.svg" alt="JKL logo" width="768" alt="JKL"></div>
+<div align="center"><img src="https://raw.githubusercontent.com/zakarumych/jkl/main/logo.svg" alt="JKL logo" width="1440" alt="JKL"></div>
 
 ---
 
