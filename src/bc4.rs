@@ -67,6 +67,7 @@ impl Block {
 
     /// Decodes single BC4 block.
     pub fn decode(self) -> [[R32F; 4]; 4] {
+        #![allow(clippy::needless_range_loop)]
         // Decode endpoints.
         let color0 = self.color0.into_f32();
         let color1 = self.color1.into_f32();

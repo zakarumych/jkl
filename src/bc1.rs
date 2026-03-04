@@ -102,7 +102,7 @@ impl Block {
         // Decode texels.
         for y in 0..4 {
             for x in 0..4 {
-                let index = (texels[y] >> 2 * x) & 0b11;
+                let index = (texels[y] >> (2 * x)) & 0b11;
 
                 colors[y][x] = palette[index as usize];
             }
@@ -143,7 +143,7 @@ impl Block {
         // Decode texels.
         for y in 0..4 {
             for x in 0..4 {
-                let index = (texels[y] >> 2 * x) & 0b11;
+                let index = (texels[y] >> (2 * x)) & 0b11;
 
                 colors[y][x] = palette[index as usize];
             }
@@ -206,14 +206,13 @@ impl Block {
 
     /// Encode block into BC1 setting texels to TRANSPARENT if alpha <= threshold.
     pub fn encode_with_alpha(colors: [[Rgba32F; 4]; 4], threshold: f32) -> Self {
+        #![allow(clippy::needless_range_loop)]
         let mut samples = [Vec3::ZERO; 16];
 
         let mut num_samples = 0;
 
-        for y in 0..4 {
-            for x in 0..4 {
-                let c = colors[y][x];
-
+        for row in &colors {
+            for &c in row {
                 if c.a() <= threshold {
                     continue;
                 }

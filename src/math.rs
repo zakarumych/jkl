@@ -3127,7 +3127,7 @@ impl Region3 {
 
     /// Returns 4 diagonals of the region.
     pub fn diagonals(&self) -> [(Vec3, Vec3); 4] {
-        let diagonals = [
+        [
             (self.min, self.max),
             (
                 Vec3([self.min.x(), self.min.y(), self.max.z()]),
@@ -3141,14 +3141,12 @@ impl Region3 {
                 Vec3([self.max.x(), self.min.y(), self.min.z()]),
                 Vec3([self.min.x(), self.max.y(), self.max.z()]),
             ),
-        ];
-
-        diagonals
+        ]
     }
 
     /// Returns 4 normalized diagonal axes of the region.
     pub fn diagonal_axes(&self) -> [Vec3; 4] {
-        let axes = [
+        [
             Vec3([
                 self.max.x() - self.min.x(),
                 self.max.y() - self.min.y(),
@@ -3173,9 +3171,7 @@ impl Region3 {
                 self.max.z() - self.min.z(),
             ])
             .norm(),
-        ];
-
-        axes
+        ]
     }
 
     /// Returns `true` if the region is non-degenerate (min ≤ max on every axis).
@@ -4043,6 +4039,7 @@ pub struct Rgb565(u16);
 
 impl_fixedcode_struct!(Rgb565(rgb: u16) | Infallible);
 
+#[allow(clippy::unusual_byte_groupings)] // Grouped by RGB565 bit-field widths (5-6-5).
 impl Rgb565 {
     /// Full white (all channels maximum).
     pub const WHITE: Rgb565 = Rgb565(0b11111_111111_11111);
@@ -4389,6 +4386,7 @@ pub fn max_variance_diagonal_axis(samples: &[Vec3]) -> Vec3 {
 /// Estimates the principal component axis of a set of 3D points via
 /// power iteration on the covariance matrix.
 pub fn pca_axis(v: &[Vec3]) -> Vec3 {
+    #![allow(clippy::needless_range_loop)]
     let n = v.len() as f32;
     let mut mean = Vec3::ZERO;
     for p in v {

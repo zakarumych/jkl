@@ -29,6 +29,7 @@ impl_fixedcode_struct!(
     } | Infallible
 );
 
+#[allow(clippy::needless_range_loop)]
 impl Block {
     pub const BLACK: Block = Block {
         alpha: [0xFF; 8],
@@ -86,8 +87,6 @@ impl Block {
         let color0 = self.color0.into_f32();
         let color1 = self.color1.into_f32();
 
-        // Prepare local variables.
-        let mut colors = [[Rgb32F::BLACK; 4]; 4];
         let texels = self.texels;
 
         // Check mode and build palette.
@@ -109,10 +108,12 @@ impl Block {
             ]
         };
 
+        let mut colors = [[Rgb32F::BLACK; 4]; 4];
+
         // Decode texels.
         for i in 0..4 {
             for j in 0..4 {
-                let index = (texels[i] >> 2 * j) & 0b11;
+                let index = (texels[i] >> (2 * j)) & 0b11;
 
                 colors[i][j] = palette[index as usize];
             }
@@ -142,8 +143,8 @@ impl Block {
         // Decode texels.
         for y in 0..4 {
             for x in 0..4 {
-                let index = (texels[y] >> 2 * x) & 0b11;
-                let alpha = (self.alpha[y * 2 + x / 2] >> 4 * (x % 2)) & 0b1111;
+                let index = (texels[y] >> (2 * x)) & 0b11;
+                let alpha = (self.alpha[y * 2 + x / 2] >> (4 * (x % 2))) & 0b1111;
                 let alpha = alpha as f32 / 15.0;
 
                 colors[y][x] = palette[index as usize].with_alpha(alpha);

@@ -170,7 +170,7 @@ where
     /// the last byte with zeros if necessary.
     pub fn finish(&mut self) -> io::Result<()> {
         if self.buffer_len > 0 {
-            let write_bytes = (self.buffer_len + 7) / 8;
+            let write_bytes = self.buffer_len.div_ceil(8);
             self.writer
                 .write_all(&self.buffer.to_le_bytes()[..write_bytes as usize])?;
 
@@ -239,7 +239,7 @@ where
             if copy_len > 0 {
                 let mut copy_bytes = [0; 16];
 
-                let copy_bytes_len = (copy_len + 7) / 8;
+                let copy_bytes_len = copy_len.div_ceil(8);
                 copy_bytes[..copy_bytes_len].copy_from_slice(&buffer[..copy_bytes_len]);
 
                 let mut copy_bits = u128::from_le_bytes(copy_bytes);
@@ -250,7 +250,7 @@ where
                 self.buffer |= copy_bits << self.buffer_len;
                 self.buffer_len += copy_len as u8;
 
-                bit_offset += copy_len as usize;
+                bit_offset += copy_len;
                 bit_len -= copy_len;
             }
         }
@@ -346,7 +346,7 @@ where
         bit_offset: usize,
         bit_len: usize,
     ) -> io::Result<usize> {
-        assert!(buffer.len() >= (bit_offset + bit_len + 7) / 8);
+        assert!(buffer.len() >= (bit_offset + bit_len).div_ceil(8));
 
         if bit_len == 0 {
             return Ok(0);
@@ -417,7 +417,7 @@ where
         debug_assert!(bit_len > usize::from(self.buffer_len));
 
         // Figure out how many bytes is needed to fill the buffer to `bit_len` bits.
-        let desired_byte_len = (bit_len - usize::from(self.buffer_len) + 7) / 8;
+        let desired_byte_len = (bit_len - usize::from(self.buffer_len)).div_ceil(8);
 
         // Figure out how many bytes we can actually read without overflowing the buffer.
         let max_byte_len = (128 - self.buffer_len) / 8;
@@ -499,13 +499,13 @@ where
 
                 let copy_bytes = copy_bits.to_le_bytes();
 
-                let copy_bytes_len = (copy_len + 7) / 8;
+                let copy_bytes_len = copy_len.div_ceil(8);
                 buffer[..copy_bytes_len].copy_from_slice(&copy_bytes[..copy_bytes_len]);
 
                 self.buffer >>= copy_len;
                 self.buffer_len -= copy_len as u8;
 
-                bit_offset += copy_len as usize;
+                bit_offset += copy_len;
                 bit_len -= copy_len;
             }
         }

@@ -282,7 +282,7 @@ fn fold_rle<T: Copy, B>(
         acc = f(
             acc,
             Rle {
-                value: value,
+                value,
                 count: last_power_of_two,
             },
         );
@@ -408,7 +408,7 @@ where
             acc = process(acc, next);
         }
 
-        acc = iter.fold(acc, |acc, next| process(acc, next));
+        acc = iter.fold(acc, process);
 
         if let Some(rle) = last {
             acc = fold_rle(rle, cfg.only_power_of_two, acc, f);

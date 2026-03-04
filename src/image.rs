@@ -150,7 +150,7 @@ impl<'a, T> Image2DRef<'a, T> {
 
     /// Returns the raw underlying pixel slice.
     pub fn pixels(&self) -> &'a [T] {
-        &self.pixels
+        self.pixels
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
@@ -199,8 +199,8 @@ impl<'a, T> Image2DRef<'a, T> {
 
         let mut colors = [[self.pixels[0]; W]; H];
 
-        for y in 0..H {
-            colors[y].copy_from_slice(self.row(y));
+        for (y, row) in colors.iter_mut().enumerate() {
+            row.copy_from_slice(self.row(y));
         }
 
         colors
@@ -541,8 +541,8 @@ impl<'a, T> Image2DMut<'a, T> {
         assert_eq!(self.width, W);
         assert_eq!(self.height, H);
 
-        for y in 0..H {
-            self.row_mut(y).copy_from_slice(&matrix[y]);
+        for (y, row) in matrix.iter().enumerate() {
+            self.row_mut(y).copy_from_slice(row);
         }
     }
 }
@@ -811,7 +811,7 @@ impl<'a, T> Image3DRef<'a, T> {
 
     /// Returns the raw underlying pixel slice.
     pub fn pixels(&self) -> &'a [T] {
-        &self.pixels
+        self.pixels
     }
 
     /// Returns an iterator over all planes in this image in row-major order.
@@ -1316,12 +1316,12 @@ impl<'a, T> Image3DMut<'a, T> {
 
     /// Returns the raw underlying pixel slice.
     pub fn pixels(&self) -> &[T] {
-        &self.pixels
+        self.pixels
     }
 
     /// Returns the raw underlying pixel slice.
     pub fn pixels_mut(&mut self) -> &mut [T] {
-        &mut self.pixels
+        self.pixels
     }
 
     /// Returns an iterator over all planes in this image in row-major order.
@@ -2190,14 +2190,10 @@ impl<'a, T> ImageMut<'a, T> {
             }
             Dimensions::D2 | Dimensions::D1Array => {
                 assert_eq!(extent[2], 1);
-                (extent[1] != 0 && extent[0] != 0)
-                    .then(|| (extent[1] - 1) * stride[0] + extent[0])
-                    .unwrap_or(0)
+                if extent[1] != 0 && extent[0] != 0 { (extent[1] - 1) * stride[0] + extent[0] } else { 0 }
             }
             Dimensions::D3 | Dimensions::D2Array => {
-                (extent[2] != 0 && extent[1] != 0 && extent[0] != 0)
-                    .then(|| (extent[2] - 1) * stride[1] + (extent[1] - 1) * stride[0] + extent[0])
-                    .unwrap_or(0)
+                if extent[2] != 0 && extent[1] != 0 && extent[0] != 0 { (extent[2] - 1) * stride[1] + (extent[1] - 1) * stride[0] + extent[0] } else { 0 }
             }
         };
 

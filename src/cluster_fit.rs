@@ -48,9 +48,7 @@ pub trait Sample:
 impl Sample for f32 {
     type Axis = ();
 
-    fn principal_axis(_samples: &[Self]) -> Self::Axis {
-        ()
-    }
+    fn principal_axis(_samples: &[Self]) -> Self::Axis {}
 
     fn project(self, _axis: Self::Axis) -> f32 {
         self
@@ -108,6 +106,7 @@ pub fn cluster_fit<T, const I: usize, const N: usize>(
 where
     T: Sample,
 {
+    #![allow(clippy::needless_range_loop)]
     assert!(samples.len() <= N);
 
     let axis = T::principal_axis(samples);
@@ -245,6 +244,7 @@ fn build_palette<T, const I: usize>(c0: T, c1: T) -> [T; I]
 where
     T: Sample,
 {
+    #![allow(clippy::needless_range_loop)]
     let mut palette = [T::zero(); I];
 
     palette[0] = c0;

@@ -101,6 +101,12 @@ pub struct Options {
     tile_options: TileOptions,
 }
 
+impl Default for Options {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Options {
     /// Creates a new `Options` with default parameters:
     ///

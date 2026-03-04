@@ -139,9 +139,9 @@ where
         let v = v.next();
 
         // n = floor(log2(v))
-        let msb = T::BITS - v.leading_zeros() - 1;
+        
 
-        msb
+        T::BITS - v.leading_zeros() - 1
     } else {
         // v+1 is 2^BITS, so pos of MSB is BITS and the rest bits are 0.
         T::BITS

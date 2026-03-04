@@ -51,8 +51,8 @@ impl<T> Context<T> {
                 debug_assert_eq!(freqs[&symbol], count);
             }
 
-            cumul.insert(symbol, accum as u64);
-            accum += u64::from(count);
+            cumul.insert(symbol, accum);
+            accum += count;
         }
 
         if freqs.len() == 1 {
@@ -245,8 +245,7 @@ impl<T> Context<T> {
         let len = { vle::decode::<usize, _>(reader)? };
 
         // Read symbols and build frequency map.
-        let mut freqs_sorted = Vec::<(T, u64)>::new();
-        freqs_sorted.reserve(len);
+        let mut freqs_sorted = Vec::<(T, u64)>::with_capacity(len);
 
         let mut last = T::default();
         for _ in 0..len {
@@ -281,8 +280,7 @@ impl<T> Context<T> {
         let len = { vle::decode::<usize, _>(reader)? };
 
         // Read symbols and build frequency map.
-        let mut freqs_sorted = Vec::<(T, u64)>::new();
-        freqs_sorted.reserve(len);
+        let mut freqs_sorted = Vec::<(T, u64)>::with_capacity(len);
 
         let mut last = init;
         for _ in 0..len {

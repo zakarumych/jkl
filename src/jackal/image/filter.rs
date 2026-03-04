@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::ops::{Add, Sub};
 
 pub trait Filterable: Add<Output = Self> + Sub<Output = Self> + Copy + Sized {

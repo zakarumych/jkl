@@ -176,13 +176,10 @@ impl Compressor for AnsCompressor {
         mut input: impl Iterator<Item = u32>,
         output: &mut impl Extend<T>,
     ) -> io::Result<()> {
-        let mut decoder = ans::Decoder::new(&context);
+        let mut decoder = ans::Decoder::new(context);
 
-        loop {
-            match decoder.decode(input.by_ref()) {
-                Some(symbol) => output.extend(std::iter::once(symbol)),
-                None => break,
-            }
+        while let Some(symbol) = decoder.decode(input.by_ref()) {
+            output.extend(std::iter::once(symbol));
         }
 
         match decoder.finish() {
@@ -197,7 +194,7 @@ impl Compressor for AnsCompressor {
         context: &ans::Context<T>,
         input: impl Iterator<Item = io::Result<u32>>,
     ) -> impl Iterator<Item = io::Result<T>> {
-        let mut decoder = ans::Decoder::new(&context);
+        let mut decoder = ans::Decoder::new(context);
         let mut extact_error = ExtractError::new(input);
 
         std::iter::from_fn(move || match decoder.decode(extact_error.by_ref()) {
@@ -414,10 +411,7 @@ where
                 }
                 Some(Ok(result))
             }
-            RleIoExpandVariant::NoRepeat { error } => match error.take() {
-                Some(err) => Some(Err(err)),
-                None => None,
-            },
+            RleIoExpandVariant::NoRepeat { error } => error.take().map(Err),
         }
     }
 
@@ -441,10 +435,7 @@ where
                     }
                 }
             }
-            RleIoExpandVariant::NoRepeat { error } => match error.take() {
-                Some(err) => Some(Err(err)),
-                None => None,
-            },
+            RleIoExpandVariant::NoRepeat { error } => error.take().map(Err),
         }
     }
 

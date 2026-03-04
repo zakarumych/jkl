@@ -168,8 +168,8 @@ impl MaximalRectangles {
         }
 
         best_placement.map(|(x, y, rotated)| Rect {
-            x: x,
-            y: y,
+            x,
+            y,
             w: if rotated { h } else { w },
             h: if rotated { w } else { h },
         })
@@ -206,7 +206,7 @@ impl MaximalRectangles {
         }
 
         self.prune_free_list();
-        self.used.push(used.clone());
+        self.used.push(used);
     }
 
     fn split_free_node(&mut self, idx: usize, used: Rect<usize>) -> bool {
@@ -222,7 +222,7 @@ impl MaximalRectangles {
 
         let (qx, qy) = self.quantization;
 
-        let fr = self.free[idx].clone();
+        let fr = self.free[idx];
         self.free.remove(idx);
 
         // left split

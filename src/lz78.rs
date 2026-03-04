@@ -57,6 +57,12 @@ pub struct Encoder<T> {
     prefix: usize,
 }
 
+impl<T> Default for Encoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Encoder<T> {
     /// Creates a new, empty LZ78 encoder.
     pub fn new() -> Self {
@@ -156,7 +162,7 @@ where
     type Item = Token<T>;
 
     fn next(&mut self) -> Option<Token<T>> {
-        while let Some(input) = self.input.next() {
+        for input in self.input.by_ref() {
             if let Some(token) = self.encoder.encode(input) {
                 return Some(token);
             }
@@ -191,6 +197,12 @@ pub struct Decoder<T> {
     entires: Vec<(usize, usize)>,
 }
 
+impl<T> Default for Decoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Decoder<T> {
     /// Creates a new, empty LZ78 decoder.
     pub fn new() -> Self {
@@ -212,7 +224,7 @@ impl<T> Decoder<T>
 where
     T: Copy + Eq,
 {
-    fn decode_next_range<'a>(&'a mut self, token: Token<T>) -> Result<(usize, usize), DecodeError> {
+    fn decode_next_range(&mut self, token: Token<T>) -> Result<(usize, usize), DecodeError> {
         // Add the new substring to the cache.
         let (prefix_start, prefix_end) = if token.prefix > 0 {
             if token.prefix > self.entires.len() {
@@ -249,7 +261,7 @@ where
     }
 
     /// Decodes a single token, returning the expanded symbol slice.
-    pub fn decode_next_slice<'a>(&'a mut self, token: Token<T>) -> Result<&'a [T], DecodeError> {
+    pub fn decode_next_slice(&mut self, token: Token<T>) -> Result<&[T], DecodeError> {
         let output = self.decode_next_range(token)?;
 
         let slice = &self.scratch[output.0..output.1];

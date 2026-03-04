@@ -186,11 +186,11 @@ impl Pixel for Rgb8U {
 
         write_bits_scope(&mut write, |write_bits| context.var_write(write_bits))?;
 
-        for idx in 0..tokens.len() {
+        for token_group in &tokens {
             offsets.push_next(&mut write)?;
 
             write_bits_scope(&mut write, |write| {
-                for token in &tokens[idx] {
+                for token in token_group {
                     token.var_write(write)?;
                 }
                 Ok(())
@@ -214,11 +214,10 @@ impl Pixel for Rgb8U {
 
         let mut symbols = compressor.decompress_tokens2(context, read_tokens(&mut read_bits));
 
-        let width = image.width();
         let height = image.height();
         for y in 0..height {
             let row = image.row_mut(y);
-            for x in 0..width {
+            for pixel in row {
                 let Vle(bits) = symbols.next().ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -226,7 +225,7 @@ impl Pixel for Rgb8U {
                     )
                 })??;
 
-                row[x] = Rgb8U::from_bits_interleaved(bits);
+                *pixel = Rgb8U::from_bits_interleaved(bits);
             }
         }
 
@@ -322,12 +321,11 @@ impl Pixel for bc1::Block {
 
         let mut symbols = compressor.decompress_tokens2(color_cx, read_tokens(&mut read_bits));
 
-        let width = image.width();
         let height = image.height();
 
         for y in 0..height {
             let row = image.row_mut(y);
-            for x in 0..width {
+            for pixel in row {
                 let Vle(bits) = symbols.next().ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -335,7 +333,7 @@ impl Pixel for bc1::Block {
                     )
                 })??;
 
-                row[x].color0 = Rgb565::from_bits_interleaved(bits);
+                pixel.color0 = Rgb565::from_bits_interleaved(bits);
 
                 let Vle(bits) = symbols.next().ok_or_else(|| {
                     io::Error::new(
@@ -344,7 +342,7 @@ impl Pixel for bc1::Block {
                     )
                 })??;
 
-                row[x].color1 = Rgb565::from_bits_interleaved(bits);
+                pixel.color1 = Rgb565::from_bits_interleaved(bits);
             }
         }
 
@@ -354,7 +352,7 @@ impl Pixel for bc1::Block {
 
         for y in 0..height {
             let row = image.row_mut(y);
-            for x in 0..width {
+            for pixel in row {
                 for i in 0..4 {
                     let bits = symbols.next().ok_or_else(|| {
                         io::Error::new(
@@ -363,7 +361,7 @@ impl Pixel for bc1::Block {
                         )
                     })??;
 
-                    row[x].texels[i] = bits;
+                    pixel.texels[i] = bits;
                 }
             }
         }

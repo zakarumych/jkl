@@ -1,4 +1,4 @@
-//! # JKL - high-performance compression and image processing toolkit
+//! # JKL - blazingly fast compression and image processing toolkit
 //!
 //! JKL is a batteries-included Rust crate for compressing, encoding and
 //! packing data that needs to travel fast and decompress even faster - on the
@@ -11,8 +11,8 @@
 //! * **GPU-oriented block texture codecs** - encode and decode BC1 through BC5
 //!   blocks with cluster-fit quality ([`bc1`], [`bc2`], [`bc3`], [`bc4`], [`bc5`], powered by [`cluster_fit`]).
 //! * **Layered entropy coding** - stack [`lz77`] or [`rle`] with [`ans`] for
-//!   near-optimal compression ratios while keeping decompression simple enough
-//!   for a GPU compute shader.
+//!   near-optimal compression ratios while keeping decompression blazingly fast
+//!   - simple enough for a GPU compute shader.
 //! * **Bit-perfect I/O** - the [`bits`] module reads and writes individual bits
 //!   so every encoder can squeeze out every last fraction of a byte.
 //! * **Jackal Image format** - the [`jackal::image`] module ties everything together
@@ -176,7 +176,7 @@ macro_rules! impl_fixedcode_array {
                 let es = <$e as $crate::encode::FixedCode>::SIZE;
                 let mut output = [0u8; Self::SIZE];
                 for (i, item) in self.0.iter().enumerate() {
-                    output[i * es..i * es + es].copy_from_slice(&item.fix_encode());
+                    output[i * es..][..es].copy_from_slice(&item.fix_encode());
                 }
                 output
             }
@@ -186,7 +186,6 @@ macro_rules! impl_fixedcode_array {
                 let mut result = [const { None }; $n];
 
                 for (i, slot) in result.iter_mut().enumerate() {
-
                     match <$e as $crate::encode::FixedCode>::fix_decode(input[i * es..][..es].as_array().unwrap()) {
                         Ok(value) => {
                             *slot = Some(value)

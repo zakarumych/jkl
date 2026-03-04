@@ -97,7 +97,7 @@ impl Iterator for BoundZCurve {
                 let until_next = msb - (index & mask);
 
                 // Skip until next x < width
-                self.next_index += until_next as u32;
+                self.next_index += until_next;
                 continue;
             }
 
@@ -112,7 +112,7 @@ impl Iterator for BoundZCurve {
                 let until_next = msb - (index & mask);
 
                 // Skip until next y < height
-                self.next_index += until_next as u32;
+                self.next_index += until_next;
                 continue;
             }
 

@@ -427,7 +427,6 @@ where
 
                 self.distance = pos;
                 self.length = 1;
-                return;
             }
         }
     }
@@ -537,12 +536,12 @@ where
                         }
 
                         debug_assert!(length > 0);
-                        let first = *self.window.get(distance as usize);
+                        let first = *self.window.get(distance);
                         self.window.push(first);
 
                         if length > 1 {
                             self.entry = Some(Entry {
-                                distance: distance as usize,
+                                distance,
                                 length: length as usize - 1,
                             });
                         }
@@ -572,7 +571,7 @@ where
     #[inline]
     pub fn decode_all(
         &mut self,
-        mut tokens: impl Iterator<Item = Token<T>>,
+        tokens: impl Iterator<Item = Token<T>>,
         extend: &mut impl Extend<T>,
     ) -> Result<(), DecodeError> {
         if let Some(mut entry) = self.entry.take() {
@@ -585,7 +584,7 @@ where
             }
         }
 
-        while let Some(token) = tokens.next() {
+        for token in tokens {
             match token {
                 Token::Reference {
                     distance,

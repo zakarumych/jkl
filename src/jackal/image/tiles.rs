@@ -87,7 +87,7 @@ impl TileSize {
             let tile_height = (usize::from(block_height) * y_factor).min(max_tile_height);
 
             // Skip tiny factors for tiny blocks.
-            if tile_height < usize::from(min_tile_height) {
+            if tile_height < min_tile_height {
                 continue;
             }
 
@@ -95,7 +95,7 @@ impl TileSize {
                 let tile_width = (usize::from(block_width) * x_factor).min(max_tile_width);
 
                 // Skip tiny factors for tiny blocks.
-                if tile_width < usize::from(min_tile_width) {
+                if tile_width < min_tile_width {
                     continue;
                 }
 
@@ -104,7 +104,7 @@ impl TileSize {
                 let planes = extent.depth() * extent.layers();
 
                 let tiles_count = tiles_x * tiles_y * planes;
-                let warps_count = (tiles_count + 63) / 64;
+                let warps_count = tiles_count.div_ceil(64);
 
                 let cost = (flat_cost + size_cost * (tile_width as f32 * tile_height as f32))
                     * warps_count as f32;
@@ -131,8 +131,8 @@ impl TileSize {
         debug_assert!(best_width >= min_tile_width);
         debug_assert!(best_height >= min_tile_height);
 
-        debug_assert!(usize::from(best_width) <= max_tile_width);
-        debug_assert!(usize::from(best_height) <= max_tile_height);
+        debug_assert!(best_width <= max_tile_width);
+        debug_assert!(best_height <= max_tile_height);
 
         debug_assert!(best_width <= 65535);
         debug_assert!(best_height <= 65535);
