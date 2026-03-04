@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 200" fill="none">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="512" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f7931a"/>
+      <stop offset="100%" stop-color="#ff4e50"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="200" rx="20" fill="#444"/>
+
+  <!-- Jackal silhouette built from progressively degraded pixel blocks -->
+  <!-- Left ear -->
+  <rect x="28" y="28" width="11" height="11" fill="#275"/>
+  <rect x="28" y="40" width="11" height="11" fill="#275"/>
+  <rect x="40" y="16" width="11" height="11" fill="#275"/>
+  <rect x="40" y="28" width="11" height="11" fill="#265"/>
+  <rect x="40" y="40" width="11" height="11" fill="#265"/>
+  <!-- Right ear -->
+  <rect x="88" y="16" width="11" height="11" fill="#275"/>
+  <rect x="88" y="28" width="11" height="11" fill="#265"/>
+  <rect x="88" y="40" width="11" height="11" fill="#265"/>
+  <rect x="100" y="28" width="11" height="11" fill="#275"/>
+  <rect x="100" y="40" width="11" height="11" fill="#275"/>
+  <!-- Head -->
+  <rect x="40" y="52" width="11" height="11" fill="#275"/>
+  <rect x="52" y="40" width="11" height="11" fill="#264"/>
+  <!-- <rect x="52" y="52" width="11" height="11" fill="#275"/> -->
+  <rect x="64" y="40" width="11" height="11" fill="#264"/>
+  <rect x="64" y="52" width="11" height="11" fill="#275"/>
+  <rect x="76" y="40" width="11" height="11" fill="#264"/>
+  <!-- <rect x="76" y="52" width="11" height="11" fill="#275"/> -->
+  <rect x="88" y="52" width="11" height="11" fill="#275"/>
+  <!-- Eyes (dark pixels) -->
+  <rect x="52" y="52" width="11" height="11" fill="#924"/>
+  <rect x="76" y="52" width="11" height="11" fill="#924"/>
+  <!-- Snout -->
+  <rect x="52" y="64" width="11" height="11" fill="#275"/>
+  <rect x="64" y="64" width="11" height="11" fill="#222"/>
+  <rect x="76" y="64" width="11" height="11" fill="#275"/>
+  <!-- Body (gets progressively more "jackalled" - blocky and color-banded) -->
+  <rect x="42" y="76" width="13" height="13" fill="#264"/>
+  <rect x="56" y="76" width="13" height="13" fill="#275"/>
+  <rect x="70" y="76" width="13" height="13" fill="#275"/>
+  <rect x="84" y="76" width="13" height="13" fill="#264"/>
+  <rect x="38" y="90" width="15" height="15" fill="#264"/>
+  <rect x="54" y="90" width="15" height="15" fill="#265"/>
+  <rect x="70" y="90" width="15" height="15" fill="#265"/>
+  <rect x="86" y="90" width="15" height="15" fill="#264"/>
+  <!-- Legs (very degraded, large blocks, few colors) -->
+  <rect x="36" y="106" width="17" height="17" fill="#264"/>
+  <rect x="54" y="106" width="17" height="17" fill="#265"/>
+  <rect x="72" y="106" width="17" height="17" fill="#265"/>
+  <rect x="90" y="106" width="17" height="17" fill="#264"/>
+  <rect x="36" y="124" width="17" height="17" fill="#275"/>
+  <rect x="72" y="124" width="17" height="17" fill="#275"/>
+  <rect x="94" y="124" width="17" height="17" fill="#275"/>
+  <!-- Tail (almost gone, max jackalling) -->
+  <rect x="102" y="82" width="19" height="19" fill="#275"/>
+  <rect x="122" y="70" width="21" height="21" fill="#275"/>
+
+  <!-- Compression quality scale: 1..10 jackality -->
+  <rect x="30" y="156" width="108" height="4" rx="2" fill="#333"/>
+  <rect x="30" y="156" width="108" height="4" rx="2" fill="url(#g)" opacity="0.6"/>
+  <text x="30" y="175" font-family="monospace" font-size="9" fill="#666">1</text>
+  <text x="130" y="175" font-family="monospace" font-size="9" fill="#666">10</text>
+  <text x="50" y="175" font-family="monospace" font-size="8" fill="#555">jackality scale</text>
+
+  <!-- J K L -->
+  <text x="240" y="80" font-family="monospace, 'Courier New'" font-size="100" font-weight="bold" fill="url(#g)" text-anchor="middle" letter-spacing="16">J</text>
+  <text x="340" y="80" font-family="monospace, 'Courier New'" font-size="100" font-weight="bold" fill="url(#g)" text-anchor="middle" letter-spacing="16">K</text>
+  <text x="440" y="80" font-family="monospace, 'Courier New'" font-size="100" font-weight="bold" fill="url(#g)" text-anchor="middle" letter-spacing="16">L</text>
+
+  <!-- Decorative artifact blocks (right side, progressive degradation) -->
+  <rect x="397" y="100" width="8" height="8" fill="#f91" opacity="0.6"/>
+  <rect x="407" y="100" width="10" height="10" fill="#f91" opacity="0.5"/>
+  <rect x="419" y="100" width="12" height="12" fill="#f64" opacity="0.4"/>
+  <rect x="433" y="100" width="14" height="14" fill="#f64" opacity="0.3"/>
+  <rect x="449" y="100" width="16" height="16" fill="#f45" opacity="0.2"/>
+  <rect x="467" y="100" width="20" height="20" fill="#f45" opacity="0.1"/>
+
+  <!-- tagline -->
+  <text x="380" y="145" font-family="monospace, 'Courier New'" font-size="13" fill="#888" text-anchor="middle">blazingly fast compression</text>
+
+  <!-- subtle wink -->
+  <text x="380" y="165" font-family="monospace, 'Courier New'" font-size="10" fill="#666" text-anchor="middle">jackal responsibly</text>
+</svg>

@@ -1,3 +1,5 @@
+#![doc(html_logo_url = "https://raw.githubusercontent.com/zakarumych/jkl/main/logo.svg")]
+
 //! # JKL - blazingly fast compression and image processing toolkit
 //!
 //! JKL is a batteries-included Rust crate for compressing, encoding and
