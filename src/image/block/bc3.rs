@@ -5,10 +5,9 @@
 
 use std::convert::Infallible;
 
-use crate::{
-    bc1, bc4,
-    math::{Rgb32F, Rgba32F, R32F},
-};
+use crate::math::{Rgb32F, Rgba32F, R32F};
+
+use super::{bc1, bc4};
 
 /// A block of 4×4 texels compressed with BC3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

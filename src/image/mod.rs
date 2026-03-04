@@ -1,14 +1,171 @@
-//! Provides immutable (`Image2DRef`) and mutable (`Image2DMut`) 2D image views over flat pixel buffers.
-//!
-//! These types represent strided, non-owning references into pixel data, supporting sub-region
-//! extraction, block matching, residual computation, and patch-based initialization. They are
-//! generic over the pixel type `T`.
-//!
-//! # Layout
-//!
-//! Pixels are stored in row-major order in a flat slice. The `stride` field indicates the number
-//! of `T` elements between the start of consecutive rows, which may be larger than `width` when
-//! the view is a sub-region of a larger image.
+pub mod block;
+pub mod compress;
+pub mod filter;
+pub mod format;
+pub mod tiles;
+
+/// The spatial extent of an image, encoding both size and dimensionality.
+///
+/// Each variant carries only the dimensions relevant to that image type,
+/// so a `D2` stores width and height while a `D1Array` stores width and
+/// layer count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Extent {
+    /// A single-row, 1D image.
+    D1 { width: usize },
+    /// A 2D image.
+    D2 { width: usize, height: usize },
+    /// A 3D (volumetric) image.
+    D3 {
+        width: usize,
+        height: usize,
+        depth: usize,
+    },
+    /// An array of 1D images.
+    D1Array { width: usize, layers: usize },
+    /// An array of 2D images.
+    D2Array {
+        width: usize,
+        height: usize,
+        layers: usize,
+    },
+}
+
+impl Extent {
+    /// Returns the width (first dimension).
+    pub fn width(&self) -> usize {
+        match *self {
+            Extent::D1 { width } => width,
+            Extent::D2 { width, .. } => width,
+            Extent::D3 { width, .. } => width,
+            Extent::D1Array { width, .. } => width,
+            Extent::D2Array { width, .. } => width,
+        }
+    }
+
+    /// Returns the height, or `1` for dimensionalities without a height axis.
+    pub fn height(&self) -> usize {
+        match *self {
+            Extent::D1 { .. } => 1,
+            Extent::D2 { height, .. } => height,
+            Extent::D3 { height, .. } => height,
+            Extent::D1Array { .. } => 1,
+            Extent::D2Array { height, .. } => height,
+        }
+    }
+
+    /// Returns the depth, or `1` for non-volumetric extents.
+    pub fn depth(&self) -> usize {
+        match *self {
+            Extent::D1 { .. } => 1,
+            Extent::D2 { .. } => 1,
+            Extent::D3 { depth, .. } => depth,
+            Extent::D1Array { .. } => 1,
+            Extent::D2Array { .. } => 1,
+        }
+    }
+
+    /// Returns the layer count, or `1` for non-array extents.
+    pub fn layers(&self) -> usize {
+        match *self {
+            Extent::D1 { .. } => 1,
+            Extent::D2 { .. } => 1,
+            Extent::D3 { .. } => 1,
+            Extent::D1Array { layers, .. } => layers,
+            Extent::D2Array { layers, .. } => layers,
+        }
+    }
+
+    /// Returns the [`Dimensions`] discriminant for this extent.
+    pub fn dimensions(self) -> Dimensions {
+        match self {
+            Extent::D1 { .. } => Dimensions::D1,
+            Extent::D2 { .. } => Dimensions::D2,
+            Extent::D3 { .. } => Dimensions::D3,
+            Extent::D1Array { .. } => Dimensions::D1,
+            Extent::D2Array { .. } => Dimensions::D2,
+        }
+    }
+
+    /// Converts this extent into a `[width, height, depth_or_layers]` triple.
+    pub fn raw_size(self) -> [usize; 3] {
+        match self {
+            Extent::D1 { width } => [width, 1, 1],
+            Extent::D2 { width, height } => [width, height, 1],
+            Extent::D3 {
+                width,
+                height,
+                depth,
+            } => [width, height, depth],
+            Extent::D1Array { width, layers } => [width, 1, layers],
+            Extent::D2Array {
+                width,
+                height,
+                layers,
+            } => [width, height, layers],
+        }
+    }
+
+    /// Reconstructs an `Extent` from a raw `[width, height, depth_or_layers]`
+    /// triple and a [`Dimensions`] tag.
+    ///
+    /// Returns `None` if the values are inconsistent with the
+    /// chosen dimensionality (e.g. height ≠ 1 for `D1`).
+    pub fn from_raw_size(value: [usize; 3], dimensions: Dimensions) -> Option<Self> {
+        match dimensions {
+            Dimensions::D1 => {
+                if value[1] != 1 || value[2] != 1 {
+                    return None;
+                }
+                Some(Extent::D1 { width: value[0] })
+            }
+            Dimensions::D2 => {
+                if value[2] != 1 {
+                    return None;
+                }
+                Some(Extent::D2 {
+                    width: value[0],
+                    height: value[1],
+                })
+            }
+            Dimensions::D3 => Some(Extent::D3 {
+                width: value[0],
+                height: value[1],
+                depth: value[2],
+            }),
+            Dimensions::D1Array => {
+                if value[1] != 1 {
+                    return None;
+                }
+                Some(Extent::D1Array {
+                    width: value[0],
+                    layers: value[2],
+                })
+            }
+            Dimensions::D2Array => Some(Extent::D2Array {
+                width: value[0],
+                height: value[1],
+                layers: value[2],
+            }),
+        }
+    }
+}
+
+/// Discriminant for the dimensionality of an image, without carrying
+/// size information.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Dimensions {
+    /// One-dimensional.
+    D1,
+    /// Two-dimensional.
+    D2,
+    /// Three-dimensional (volumetric).
+    D3,
+    /// Array of one-dimensional images.
+    D1Array,
+    /// Array of two-dimensional images.
+    D2Array,
+}
 
 /// An immutable, non-owning 2D rectangular view into a pixel buffer.
 ///
@@ -146,6 +303,17 @@ impl<'a, T> Image2DRef<'a, T> {
             stride: self.stride,
             pixels: &self.pixels[y * self.stride + x..],
         }
+    }
+
+    /// Returns a sub-region of this image as a new `Image2DRef`.
+    ///
+    /// The returned view is described by `rect`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sub-region extends beyond the image bounds.
+    pub fn get_rect(&self, rect: crate::math::Rect<usize>) -> Image2DRef<'a, T> {
+        self.get_range(rect.x, rect.y, rect.w, rect.h)
     }
 
     /// Returns the raw underlying pixel slice.
@@ -492,6 +660,17 @@ impl<'a, T> Image2DMut<'a, T> {
         }
     }
 
+    /// Returns an immutable sub-region of this image as a new `Image2DRef`.
+    ///
+    /// The returned view is described by `rect`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sub-region extends beyond the image bounds.
+    pub fn get_rect(&mut self, rect: crate::math::Rect<usize>) -> Image2DRef<'_, T> {
+        self.get_range(rect.x, rect.y, rect.w, rect.h)
+    }
+
     /// Returns a mutable sub-region of this image as a new `Image2DMut`.
     ///
     /// The returned view starts at (`x`, `y`) and has dimensions `w` × `h`.
@@ -510,6 +689,17 @@ impl<'a, T> Image2DMut<'a, T> {
             stride: self.stride,
             pixels: &mut self.pixels[y * self.stride + x..],
         }
+    }
+
+    /// Returns a mutable sub-region of this image as a new `Image2DMut`.
+    ///
+    /// The returned view is described by `rect`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sub-region extends beyond the image bounds.
+    pub fn get_rect_mut(&mut self, rect: crate::math::Rect<usize>) -> Image2DMut<'_, T> {
+        self.get_range_mut(rect.x, rect.y, rect.w, rect.h)
     }
 
     /// Copies pixel data from `src` into this image.
@@ -1566,169 +1756,6 @@ impl<'a, T> Image3DMut<'a, T> {
     }
 }
 
-/// The spatial extent of an image, encoding both size and dimensionality.
-///
-/// Each variant carries only the dimensions relevant to that image type,
-/// so a `D2` stores width and height while a `D1Array` stores width and
-/// layer count.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Extent {
-    /// A single-row, 1D image.
-    D1 { width: usize },
-    /// A 2D image.
-    D2 { width: usize, height: usize },
-    /// A 3D (volumetric) image.
-    D3 {
-        width: usize,
-        height: usize,
-        depth: usize,
-    },
-    /// An array of 1D images.
-    D1Array { width: usize, layers: usize },
-    /// An array of 2D images.
-    D2Array {
-        width: usize,
-        height: usize,
-        layers: usize,
-    },
-}
-
-impl Extent {
-    /// Returns the width (first dimension).
-    pub fn width(&self) -> usize {
-        match *self {
-            Extent::D1 { width } => width,
-            Extent::D2 { width, .. } => width,
-            Extent::D3 { width, .. } => width,
-            Extent::D1Array { width, .. } => width,
-            Extent::D2Array { width, .. } => width,
-        }
-    }
-
-    /// Returns the height, or `1` for dimensionalities without a height axis.
-    pub fn height(&self) -> usize {
-        match *self {
-            Extent::D1 { .. } => 1,
-            Extent::D2 { height, .. } => height,
-            Extent::D3 { height, .. } => height,
-            Extent::D1Array { .. } => 1,
-            Extent::D2Array { height, .. } => height,
-        }
-    }
-
-    /// Returns the depth, or `1` for non-volumetric extents.
-    pub fn depth(&self) -> usize {
-        match *self {
-            Extent::D1 { .. } => 1,
-            Extent::D2 { .. } => 1,
-            Extent::D3 { depth, .. } => depth,
-            Extent::D1Array { .. } => 1,
-            Extent::D2Array { .. } => 1,
-        }
-    }
-
-    /// Returns the layer count, or `1` for non-array extents.
-    pub fn layers(&self) -> usize {
-        match *self {
-            Extent::D1 { .. } => 1,
-            Extent::D2 { .. } => 1,
-            Extent::D3 { .. } => 1,
-            Extent::D1Array { layers, .. } => layers,
-            Extent::D2Array { layers, .. } => layers,
-        }
-    }
-
-    /// Returns the [`Dimensions`] discriminant for this extent.
-    pub fn dimensions(self) -> Dimensions {
-        match self {
-            Extent::D1 { .. } => Dimensions::D1,
-            Extent::D2 { .. } => Dimensions::D2,
-            Extent::D3 { .. } => Dimensions::D3,
-            Extent::D1Array { .. } => Dimensions::D1,
-            Extent::D2Array { .. } => Dimensions::D2,
-        }
-    }
-
-    /// Converts this extent into a `[width, height, depth_or_layers]` triple.
-    pub fn raw_size(self) -> [usize; 3] {
-        match self {
-            Extent::D1 { width } => [width, 1, 1],
-            Extent::D2 { width, height } => [width, height, 1],
-            Extent::D3 {
-                width,
-                height,
-                depth,
-            } => [width, height, depth],
-            Extent::D1Array { width, layers } => [width, 1, layers],
-            Extent::D2Array {
-                width,
-                height,
-                layers,
-            } => [width, height, layers],
-        }
-    }
-
-    /// Reconstructs an `Extent` from a raw `[width, height, depth_or_layers]`
-    /// triple and a [`Dimensions`] tag.
-    ///
-    /// Returns `None` if the values are inconsistent with the
-    /// chosen dimensionality (e.g. height ≠ 1 for `D1`).
-    pub fn from_raw_size(value: [usize; 3], dimensions: Dimensions) -> Option<Self> {
-        match dimensions {
-            Dimensions::D1 => {
-                if value[1] != 1 || value[2] != 1 {
-                    return None;
-                }
-                Some(Extent::D1 { width: value[0] })
-            }
-            Dimensions::D2 => {
-                if value[2] != 1 {
-                    return None;
-                }
-                Some(Extent::D2 {
-                    width: value[0],
-                    height: value[1],
-                })
-            }
-            Dimensions::D3 => Some(Extent::D3 {
-                width: value[0],
-                height: value[1],
-                depth: value[2],
-            }),
-            Dimensions::D1Array => {
-                if value[1] != 1 {
-                    return None;
-                }
-                Some(Extent::D1Array {
-                    width: value[0],
-                    layers: value[2],
-                })
-            }
-            Dimensions::D2Array => Some(Extent::D2Array {
-                width: value[0],
-                height: value[1],
-                layers: value[2],
-            }),
-        }
-    }
-}
-
-/// Discriminant for the dimensionality of an image, without carrying
-/// size information.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Dimensions {
-    /// One-dimensional.
-    D1,
-    /// Two-dimensional.
-    D2,
-    /// Three-dimensional (volumetric).
-    D3,
-    /// Array of one-dimensional images.
-    D1Array,
-    /// Array of two-dimensional images.
-    D2Array,
-}
-
 /// A non-owning, immutable view into a pixel buffer interpreted as an image
 /// with a specific [`Dimensions`] and extent.
 ///
@@ -2190,10 +2217,18 @@ impl<'a, T> ImageMut<'a, T> {
             }
             Dimensions::D2 | Dimensions::D1Array => {
                 assert_eq!(extent[2], 1);
-                if extent[1] != 0 && extent[0] != 0 { (extent[1] - 1) * stride[0] + extent[0] } else { 0 }
+                if extent[1] != 0 && extent[0] != 0 {
+                    (extent[1] - 1) * stride[0] + extent[0]
+                } else {
+                    0
+                }
             }
             Dimensions::D3 | Dimensions::D2Array => {
-                if extent[2] != 0 && extent[1] != 0 && extent[0] != 0 { (extent[2] - 1) * stride[1] + (extent[1] - 1) * stride[0] + extent[0] } else { 0 }
+                if extent[2] != 0 && extent[1] != 0 && extent[0] != 0 {
+                    (extent[2] - 1) * stride[1] + (extent[1] - 1) * stride[0] + extent[0]
+                } else {
+                    0
+                }
             }
         };
 

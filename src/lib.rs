@@ -242,11 +242,6 @@ macro_rules! impl_fixedcode_zero {
 }
 
 pub mod ans;
-pub mod bc1;
-pub mod bc2;
-pub mod bc3;
-pub mod bc4;
-pub mod bc5;
 pub mod bits;
 pub mod cluster_fit;
 pub mod encode;
@@ -256,7 +251,6 @@ pub mod lz77;
 pub mod lz78;
 pub mod math;
 pub mod max_rects;
-// pub mod reference_map;
 pub mod rle;
 pub mod vle;
 pub mod z_curve;

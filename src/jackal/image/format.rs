@@ -3,115 +3,12 @@ use std::{hash::Hash, io};
 use smallvec::SmallVec;
 
 use crate::{
-    bc1,
     bits::{write_bits_scope, ReadBits},
     encode::{FixedCode, VarCode},
-    image::{Image2DMut, Image2DRef},
+    image::{block::bc1, compress::Compressor, format::Format, Image2DMut, Image2DRef},
     math::{Rgb565, Rgb8U},
     vle::Vle,
 };
-
-use super::{compress::Compressor, DecodeError};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u16)]
-pub enum Format {
-    /// 8-bit single channel.
-    R8,
-
-    /// 8-bit two channels.
-    RG8,
-
-    /// 8-bit three channels.
-    RGB8,
-
-    /// 8-bit four channels.
-    RGBA8,
-
-    /// BC1 (DXT1) block compression format.
-    BC1 = 256,
-
-    /// BC2 (DXT3) block compression format.
-    BC2,
-
-    /// BC3 (DXT5) block compression format.
-    BC3,
-
-    /// BC4 block compression format.
-    BC4,
-
-    /// BC5 block compression format.
-    BC5,
-
-    /// BC6 block compression format.
-    BC6,
-
-    /// BC7 block compression format.
-    BC7,
-}
-
-impl Format {
-    /// Returns width of a block in pixels for the format.
-    pub const fn block_width(&self) -> u16 {
-        match self {
-            Format::R8 | Format::RG8 | Format::RGB8 | Format::RGBA8 => 1,
-            Format::BC1
-            | Format::BC2
-            | Format::BC3
-            | Format::BC4
-            | Format::BC5
-            | Format::BC6
-            | Format::BC7 => 4,
-        }
-    }
-
-    /// Returns height of a block in pixels for the format.
-    pub const fn block_height(&self) -> u16 {
-        match self {
-            Format::R8 | Format::RG8 | Format::RGB8 | Format::RGBA8 => 1,
-            Format::BC1
-            | Format::BC2
-            | Format::BC3
-            | Format::BC4
-            | Format::BC5
-            | Format::BC6
-            | Format::BC7 => 4,
-        }
-    }
-}
-
-impl FixedCode for Format {
-    const SIZE: usize = 2;
-    type Array = [u8; 2];
-    type Error = DecodeError;
-
-    #[inline]
-    fn fix_encode(&self) -> [u8; 2] {
-        (*self as u16).to_le_bytes()
-    }
-
-    #[inline]
-    fn fix_decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
-        let value = u16::from_le_bytes(*bytes);
-
-        let format = match value {
-            0 => Format::R8,
-            1 => Format::RG8,
-            2 => Format::RGB8,
-            3 => Format::RGBA8,
-            256 => Format::BC1,
-            257 => Format::BC2,
-            258 => Format::BC3,
-            259 => Format::BC4,
-            260 => Format::BC5,
-            261 => Format::BC6,
-            262 => Format::BC7,
-            _ => return Err(DecodeError::InvalidFormat),
-        };
-
-        Ok(format)
-    }
-}
 
 /// This trait is an interface for compression images.
 pub trait Pixel: Copy + Eq + Hash + FixedCode + VarCode + 'static {

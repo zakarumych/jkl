@@ -1,7 +1,11 @@
 [package]
-name = "cli"
+name = "jkl-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+image.workspace = true
+jkl = { path = ".." }

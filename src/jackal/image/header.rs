@@ -1,7 +1,6 @@
 use crate::{
     encode::FixedCode,
-    image::{Dimensions, Extent},
-    jackal::image::{format::Format, tiles::TileSize},
+    image::{format::Format, tiles::TileSize, Dimensions, Extent},
 };
 
 use super::DecodeError;
@@ -91,14 +90,53 @@ impl FixedCode for Compression {
     }
 }
 
-impl FixedCode for Extent {
+#[derive(Clone, Copy)]
+struct JackalFormat(Format);
+
+impl FixedCode for JackalFormat {
+    const SIZE: usize = 2;
+    type Array = [u8; 2];
+    type Error = DecodeError;
+
+    #[inline]
+    fn fix_encode(&self) -> [u8; 2] {
+        (self.0 as u16).to_le_bytes()
+    }
+
+    #[inline]
+    fn fix_decode(bytes: &[u8; 2]) -> Result<Self, DecodeError> {
+        let value = u16::from_le_bytes(*bytes);
+
+        let format = match value {
+            0 => Format::R8,
+            1 => Format::RG8,
+            2 => Format::RGB8,
+            3 => Format::RGBA8,
+            256 => Format::BC1,
+            257 => Format::BC2,
+            258 => Format::BC3,
+            259 => Format::BC4,
+            260 => Format::BC5,
+            261 => Format::BC6,
+            262 => Format::BC7,
+            _ => return Err(DecodeError::InvalidFormat),
+        };
+
+        Ok(JackalFormat(format))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct JackalExtent(Extent);
+
+impl FixedCode for JackalExtent {
     const SIZE: usize = 25;
     type Array = [u8; 25];
     type Error = DecodeError;
 
     fn fix_encode(&self) -> [u8; 25] {
         let mut output = [0u8; 25];
-        output[0] = match self.dimensions() {
+        output[0] = match self.0.dimensions() {
             Dimensions::D1 => 0u8,
             Dimensions::D2 => 1u8,
             Dimensions::D3 => 2u8,
@@ -106,7 +144,7 @@ impl FixedCode for Extent {
             Dimensions::D2Array => 4u8,
         };
 
-        let raw_size = self.raw_size();
+        let raw_size = self.0.raw_size();
 
         output[1..9].copy_from_slice(
             &u64::try_from(raw_size[0])
@@ -148,58 +186,85 @@ impl FixedCode for Extent {
 
         let raw_size = [width, height, depth];
 
-        Extent::from_raw_size(raw_size, dimensions).ok_or(DecodeError::InvalidExtent)
+        let extent =
+            Extent::from_raw_size(raw_size, dimensions).ok_or(DecodeError::InvalidDimensions)?;
+        Ok(JackalExtent(extent))
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct JackalHeader {
-    pub magic: Magic,
+pub(super) struct JackalHeader {
+    magic: Magic,
 
     /// Compression method used for the texel data.
-    pub compression: Compression,
+    compression: Compression,
 
     // Format of the blocks.
-    pub format: Format,
+    format: JackalFormat,
 
     /// Extent of the image at mip-0.
-    pub extent: Extent,
+    extent: JackalExtent,
 
     // Number of texture mip levels.
-    pub levels: MipLevels,
+    levels: MipLevels,
 
     // Size of compression tiles.
-    pub tile_size: TileSize,
+    tile_size: TileSize,
+}
+
+impl JackalHeader {
+    pub fn new(
+        compression: Compression,
+        format: Format,
+        extent: Extent,
+        levels: u16,
+        tile_size: TileSize,
+    ) -> JackalHeader {
+        JackalHeader {
+            magic: Magic,
+            compression,
+            format: JackalFormat(format),
+            extent: JackalExtent(extent),
+            levels: MipLevels(levels),
+            tile_size,
+        }
+    }
+
+    pub fn compression(&self) -> Compression {
+        self.compression
+    }
+
+    pub fn format(&self) -> Format {
+        self.format.0
+    }
+
+    pub fn extent(&self) -> Extent {
+        self.extent.0
+    }
+
+    // pub fn levels(&self) -> u16 {
+    //     self.levels.0
+    // }
+
+    pub fn tile_size(&self) -> TileSize {
+        self.tile_size
+    }
 }
 
 impl_fixedcode_struct! {
     JackalHeader {
         magic: Magic,
         compression: Compression,
-        format: Format,
-        extent: Extent,
+        format: JackalFormat,
+        extent: JackalExtent,
         levels: MipLevels,
         tile_size: TileSize,
     } | DecodeError
 }
 
 impl JackalHeader {
-    pub const fn new() -> JackalHeader {
-        JackalHeader {
-            magic: Magic,
-            compression: Compression::None,
-            format: Format::R8,
-            extent: Extent::D1 { width: 1 },
-            levels: MipLevels(1),
-            tile_size: TileSize {
-                width: 1,
-                height: 1,
-            },
-        }
-    }
-
     #[inline]
     pub fn tiles_count(&self) -> usize {
-        self.tile_size.tiles_count(self.extent)
+        self.tile_size.tiles_count(self.extent.0)
     }
 }

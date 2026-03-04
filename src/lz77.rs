@@ -53,7 +53,9 @@ where
                     distance: base_d,
                 },
             ) => Token::Reference {
-                length: me - base,
+                // Keep reference-length deltas in valid reference domain (>= 2),
+                // because length == 1 is reserved for literal tag in `VarCode`.
+                length: me - base + 2,
                 distance: if me == base { me_d - base_d } else { me_d },
             },
             (me, Token::Reference { .. }) => me,
@@ -81,8 +83,9 @@ where
                     distance: distance_b,
                 },
             ) => Token::Reference {
-                length: length_a + length_b,
-                distance: if length_a == length_b {
+                // Inverse of `delta`: `length_b` stores `(me - base + 2)`.
+                length: length_a + (length_b - 2),
+                distance: if length_b == 2 {
                     distance_a + distance_b
                 } else {
                     distance_b

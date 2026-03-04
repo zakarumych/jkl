@@ -1,5 +1,5 @@
 [workspace]
-members = ["cli", "gui", "experiments"]
+members = ["cli"]
 resolver = "2"
 
 [workspace.package]
@@ -10,7 +10,6 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 hashbrown = "0.16"
 bitvec = "1.0"
-bytemuck = { version = "1.0" }
 rand = "0.10"
 egui = "0.33"
 eframe = "0.33"

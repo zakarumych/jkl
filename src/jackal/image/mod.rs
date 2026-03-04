@@ -61,25 +61,23 @@ use std::{convert::Infallible, fmt, io};
 use crate::{
     bits::read_bits_scope,
     encode::{FixedCode, VarCode},
-    image::{Extent, Image2DMut, ImageRef},
-    jackal::image::{
+    image::{
         compress::{AnsCompressor, LZ77Compressor, RleCompressor},
-        format::{Offsets, WriteOffsets},
-        header::JackalHeader,
+        format::Format,
+        tiles::{Tile, TileSize},
+        Extent, Image2DMut, ImageRef,
     },
 };
 
-pub use self::{
-    format::{Format, Pixel},
-    header::{Compression, MipLevels},
-    tiles::TileSize,
+use self::{
+    format::{Offsets, Pixel, WriteOffsets},
+    header::JackalHeader,
 };
 
-mod compress;
-mod filter;
+pub use self::header::Compression;
+
 mod format;
 mod header;
-mod tiles;
 
 /// Tile options for image compression.
 pub enum TileOptions {
@@ -178,15 +176,13 @@ where
     assert!(tile_size.width.is_multiple_of(T::FORMAT.block_width()));
     assert!(tile_size.height.is_multiple_of(T::FORMAT.block_height()));
 
-    let tiles_iter = tile_size.iter_tiles(input);
+    let tiles_iter = tile_size.iter_tiles(extent).map(|tile| {
+        input
+            .plane_ref(tile.plane)
+            .get_range(tile.rect.x, tile.rect.y, tile.rect.w, tile.rect.h)
+    });
 
-    let header = JackalHeader {
-        compression: options.compression,
-        format: T::FORMAT,
-        extent,
-        tile_size,
-        ..JackalHeader::new()
-    };
+    let header = JackalHeader::new(options.compression, T::FORMAT, extent, 1, tile_size);
 
     header.fix_write(&mut write)?;
 
@@ -321,10 +317,10 @@ impl<R> JackalReader<R> {
         let offsets = Offsets::read(tiles_count, &mut read)?;
 
         Ok(JackalReader {
-            compression: header.compression,
-            format: header.format,
-            extent: header.extent,
-            tile_size: header.tile_size,
+            compression: header.compression(),
+            format: header.format(),
+            extent: header.extent(),
+            tile_size: header.tile_size(),
             offsets,
             read,
         })
@@ -350,8 +346,8 @@ impl<R> JackalReader<R> {
         self.tile_size
     }
 
-    pub fn tile_pos(&self, tile_index: usize) -> [usize; 3] {
-        self.tile_size.tile_pos(self.extent, tile_index)
+    pub fn tile(&self, tile_index: usize) -> Tile {
+        self.tile_size.tile(self.extent, tile_index)
     }
 
     pub fn pixel_reader<T>(&mut self) -> io::Result<JackalTileReader<'_, R, T>>
@@ -411,22 +407,20 @@ where
         self.tile_size
     }
 
-    pub fn tile_pos(&self, tile_index: usize) -> [usize; 3] {
-        self.tile_size.tile_pos(self.extent, tile_index)
+    pub fn tile(&self, tile_index: usize) -> Tile {
+        self.tile_size.tile(self.extent, tile_index)
     }
 
     pub fn read_tile(&mut self, tile_index: usize, mut image: Image2DMut<'_, T>) -> io::Result<()> {
         assert!(tile_index < self.offsets.len(), "Tile index out of bounds");
-        assert_eq!(
-            usize::from(self.tile_size.width),
-            image.width(),
-            "Tile width mismatch"
+        assert!(
+            image.width() <= usize::from(self.tile_size.width),
+            "Tile width exceeds configured tile size"
         );
 
-        assert_eq!(
-            usize::from(self.tile_size.height),
-            image.height(),
-            "Tile height mismatch"
+        assert!(
+            image.height() <= usize::from(self.tile_size.height),
+            "Tile height exceeds configured tile size"
         );
 
         self.read
@@ -514,15 +508,10 @@ fn jkli_smoke_test_rgb() {
     let mut decoded_image = Image2DMut::new(4, 4, &mut decoded_pixels);
 
     for tile_index in 0..reader.tiles() {
-        let [x, y, z] = reader.tile_pos(tile_index);
-        assert_eq!(z, 0);
+        let tile = reader.tile(tile_index);
+        assert_eq!(tile.plane, 0);
 
-        let decoded_tile = decoded_image.get_range_mut(
-            x,
-            y,
-            usize::from(reader.tile_size().width),
-            usize::from(reader.tile_size().height),
-        );
+        let decoded_tile = decoded_image.get_rect_mut(tile.rect);
 
         reader.read_tile(tile_index, decoded_tile).unwrap();
     }
@@ -532,7 +521,7 @@ fn jkli_smoke_test_rgb() {
 
 #[test]
 fn jkli_smoke_test_bc1() {
-    use crate::bc1::Block;
+    use crate::image::block::bc1::Block;
 
     let extent = Extent::D2 {
         width: 4,
@@ -581,15 +570,10 @@ fn jkli_smoke_test_bc1() {
     let mut decoded_image = Image2DMut::new(4, 4, &mut decoded_blocks);
 
     for tile_index in 0..reader.tiles() {
-        let [x, y, z] = reader.tile_pos(tile_index);
-        assert_eq!(z, 0);
+        let tile = reader.tile(tile_index);
+        assert_eq!(tile.plane, 0);
 
-        let decoded_tile = decoded_image.get_range_mut(
-            x,
-            y,
-            usize::from(reader.tile_size().width),
-            usize::from(reader.tile_size().height),
-        );
+        let decoded_tile = decoded_image.get_rect_mut(tile.rect);
 
         reader.read_tile(tile_index, decoded_tile).unwrap();
     }

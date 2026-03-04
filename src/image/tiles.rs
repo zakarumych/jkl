@@ -1,9 +1,6 @@
 use std::convert::Infallible;
 
-use crate::{
-    encode::FixedCode,
-    image::{Extent, Image2DRef, ImageRef},
-};
+use crate::{encode::FixedCode, image::Extent, math::Rect};
 
 /// Size of the tile in number of blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,9 +63,9 @@ impl TileSize {
             .next_multiple_of(usize::from(block_height));
 
         let min_tile_width =
-            (256usize.next_multiple_of(usize::from(block_width))).min(max_tile_width);
+            (16usize.next_multiple_of(usize::from(block_width))).min(max_tile_width);
         let min_tile_height =
-            (256usize.next_multiple_of(usize::from(block_height))).min(max_tile_width);
+            (16usize.next_multiple_of(usize::from(block_height))).min(max_tile_height);
 
         let mut min_cost = f32::INFINITY;
         let mut best_width = min_tile_width;
@@ -134,6 +131,9 @@ impl TileSize {
         debug_assert!(best_width <= max_tile_width);
         debug_assert!(best_height <= max_tile_height);
 
+        debug_assert!(best_width.is_multiple_of(usize::from(block_width)));
+        debug_assert!(best_height.is_multiple_of(usize::from(block_height)));
+
         debug_assert!(best_width <= 65535);
         debug_assert!(best_height <= 65535);
 
@@ -143,13 +143,13 @@ impl TileSize {
         }
     }
 
-    pub fn iter_tiles<'a, T>(&self, image: ImageRef<'a, T>) -> TilesIter<'a, T> {
+    pub fn iter_tiles(&self, extent: Extent) -> TilesIter {
         TilesIter {
-            image,
+            extent,
             tile_size: *self,
-            x: 0,
-            y: 0,
-            z: 0,
+            tile_x: 0,
+            tile_y: 0,
+            tile_z: 0,
         }
     }
 
@@ -161,18 +161,11 @@ impl TileSize {
 
     #[inline]
     pub fn tiles(&self, extent: Extent) -> [usize; 3] {
-        let width = extent.width();
-        let height = extent.height();
-        let planes = extent.layers() * extent.layers();
-
-        let tiles_x = width.div_ceil(usize::from(self.width));
-        let tiles_y = height.div_ceil(usize::from(self.height));
-
-        [tiles_x, tiles_y, planes]
+        tiles_from_extent(*self, extent)
     }
 
-    pub fn tile_pos(&self, extent: Extent, index: usize) -> [usize; 3] {
-        let [tiles_x, tiles_y, planes] = self.tiles(extent);
+    pub fn tile(&self, extent: Extent, index: usize) -> Tile {
+        let [tiles_x, tiles_y, planes] = tiles_from_extent(*self, extent);
 
         let plane = index / (tiles_x * tiles_y);
         assert!(plane < planes);
@@ -182,83 +175,165 @@ impl TileSize {
         let tile_y = tile_index / tiles_x;
         let tile_x = tile_index % tiles_x;
 
-        let x = tile_x * usize::from(self.width);
-        let y = tile_y * usize::from(self.height);
+        let [x, y] = tile_pos_xy(*self, tile_x, tile_y);
 
-        [x, y, plane]
-    }
-}
+        let [w, h] = tile_extent(extent.width(), extent.height(), *self, x, y);
 
-pub struct TilesIter<'a, T> {
-    image: ImageRef<'a, T>,
-    tile_size: TileSize,
-    x: usize,
-    y: usize,
-    z: usize,
-}
-
-impl<'a, T> Clone for TilesIter<'a, T> {
-    fn clone(&self) -> Self {
-        TilesIter {
-            image: self.image,
-            tile_size: self.tile_size,
-            x: self.x,
-            y: self.y,
-            z: self.z,
+        Tile {
+            plane,
+            rect: Rect { x, y, w, h },
         }
     }
 }
 
-impl<'a, T> Iterator for TilesIter<'a, T> {
-    type Item = Image2DRef<'a, T>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tile {
+    pub plane: usize,
+    pub rect: Rect<usize>,
+}
+
+pub struct TilesIter {
+    extent: Extent,
+    tile_size: TileSize,
+    tile_x: usize,
+    tile_y: usize,
+    tile_z: usize,
+}
+
+impl Clone for TilesIter {
+    fn clone(&self) -> Self {
+        TilesIter {
+            extent: self.extent,
+            tile_size: self.tile_size,
+            tile_x: self.tile_x,
+            tile_y: self.tile_y,
+            tile_z: self.tile_z,
+        }
+    }
+}
+
+impl Iterator for TilesIter {
+    type Item = Tile;
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let len = self.len();
         (len, Some(len))
     }
 
-    fn next(&mut self) -> Option<Image2DRef<'a, T>> {
-        let w = usize::min(
-            usize::from(self.tile_size.width),
-            self.image.width() - self.x,
-        );
-        let h = usize::min(
-            usize::from(self.tile_size.height),
-            self.image.height() - self.y,
-        );
+    fn next(&mut self) -> Option<Tile> {
+        let [width, height, planes] = extent_to_raw(self.extent);
+        let [tiles_x, tiles_y, _] = tiles_from_raw_extent(self.tile_size, [width, height, planes]);
 
-        if self.z >= self.image.raw_extent()[2] {
+        if self.tile_z >= planes || tiles_x == 0 || tiles_y == 0 {
             return None;
         }
 
-        let plane = self.image.plane_ref(self.z);
+        let [x, y] = tile_pos_xy(self.tile_size, self.tile_x, self.tile_y);
+        let [w, h] = tile_extent(width, height, self.tile_size, x, y);
+        let z = self.tile_z;
 
-        let tile = plane.get_range(self.x, self.y, w, h);
+        advance_tile_cursor(
+            &mut self.tile_x,
+            &mut self.tile_y,
+            &mut self.tile_z,
+            tiles_x,
+            tiles_y,
+        );
 
-        self.x += w;
-
-        if self.x >= self.image.width() {
-            self.x = 0;
-            self.y += h;
-        }
-
-        if self.y >= self.image.height() {
-            self.y = 0;
-            self.z += 1;
-        }
-
-        Some(tile)
+        Some(Tile {
+            plane: z,
+            rect: Rect { x, y, w, h },
+        })
     }
 }
 
-impl<'a, T> ExactSizeIterator for TilesIter<'a, T> {
+impl ExactSizeIterator for TilesIter {
     fn len(&self) -> usize {
-        let extent = self.image.raw_extent();
+        let [width, height, planes] = extent_to_raw(self.extent);
+        let [tiles_x, tiles_y, _] = tiles_from_raw_extent(self.tile_size, [width, height, planes]);
 
-        let width = extent[0].div_ceil(usize::from(self.tile_size.width));
-        let height = extent[1].div_ceil(usize::from(self.tile_size.height));
-        let planes = extent[2];
+        if tiles_x == 0 || tiles_y == 0 || planes == 0 {
+            return 0;
+        }
 
-        planes * height * width - self.z * height * width - self.y * width - self.x
+        remaining_tiles(
+            self.tile_x,
+            self.tile_y,
+            self.tile_z,
+            tiles_x,
+            tiles_y,
+            planes,
+        )
     }
+}
+
+#[inline]
+fn tiles_from_extent(tile_size: TileSize, extent: Extent) -> [usize; 3] {
+    tiles_from_raw_extent(tile_size, extent_to_raw(extent))
+}
+
+#[inline]
+fn extent_to_raw(extent: Extent) -> [usize; 3] {
+    [
+        extent.width(),
+        extent.height(),
+        extent.depth() * extent.layers(),
+    ]
+}
+
+#[inline]
+fn tiles_from_raw_extent(tile_size: TileSize, extent: [usize; 3]) -> [usize; 3] {
+    let tiles_x = extent[0].div_ceil(usize::from(tile_size.width));
+    let tiles_y = extent[1].div_ceil(usize::from(tile_size.height));
+    [tiles_x, tiles_y, extent[2]]
+}
+
+#[inline]
+fn tile_pos_xy(tile_size: TileSize, tile_x: usize, tile_y: usize) -> [usize; 2] {
+    [
+        tile_x * usize::from(tile_size.width),
+        tile_y * usize::from(tile_size.height),
+    ]
+}
+
+#[inline]
+fn tile_extent(width: usize, height: usize, tile_size: TileSize, x: usize, y: usize) -> [usize; 2] {
+    [
+        usize::min(usize::from(tile_size.width), width - x),
+        usize::min(usize::from(tile_size.height), height - y),
+    ]
+}
+
+#[inline]
+fn advance_tile_cursor(
+    tile_x: &mut usize,
+    tile_y: &mut usize,
+    tile_z: &mut usize,
+    tiles_x: usize,
+    tiles_y: usize,
+) {
+    *tile_x += 1;
+    if *tile_x >= tiles_x {
+        *tile_x = 0;
+        *tile_y += 1;
+
+        if *tile_y >= tiles_y {
+            *tile_y = 0;
+            *tile_z += 1;
+        }
+    }
+}
+
+#[inline]
+fn remaining_tiles(
+    tile_x: usize,
+    tile_y: usize,
+    tile_z: usize,
+    tiles_x: usize,
+    tiles_y: usize,
+    planes: usize,
+) -> usize {
+    let tiles_per_plane = tiles_x * tiles_y;
+    let current_index = tile_z * tiles_per_plane + tile_y * tiles_x + tile_x;
+    planes * tiles_per_plane - current_index
 }
