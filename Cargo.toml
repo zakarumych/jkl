@@ -19,7 +19,9 @@ smallvec = "1.15"
 
 [package]
 name = "jkl"
-description = "Texture compression and packing tool"
+description = "Asset compression and packing tool"
+documentation = "https://docs.rs/jkl"
+repository = "https://github.com/zakarumych/jkl"
 
 version.workspace = true
 edition.workspace = true
