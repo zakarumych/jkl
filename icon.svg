@@ -6,21 +6,27 @@
   <rect x="84" y="84" width="33" height="33" fill="#3a7"/>
   <rect x="84" y="120" width="33" height="33" fill="#3a7"/>
   <rect x="120" y="48" width="33" height="33" fill="#3a7"/>
+  <rect x="156" y="84" width="33" height="33" fill="#3a7"/>
   <rect x="120" y="84" width="33" height="33" fill="#387"/>
   <rect x="120" y="120" width="33" height="33" fill="#387"/>
   <!-- Right ear -->
   <rect x="264" y="48" width="33" height="33" fill="#3a7"/>
+  <rect x="228" y="84" width="33" height="33" fill="#3a7"/>
   <rect x="264" y="84" width="33" height="33" fill="#387"/>
   <rect x="264" y="120" width="33" height="33" fill="#387"/>
   <rect x="300" y="84" width="33" height="33" fill="#3a7"/>
   <rect x="300" y="120" width="33" height="33" fill="#3a7"/>
   <!-- Head -->
-  <rect x="120" y="156" width="33" height="33" fill="#3a7"/>
+  <!-- <rect x="84" y="156" width="33" height="33" fill="#386"/> -->
+  <rect x="120" y="192" width="33" height="33" fill="#386"/>
+  <rect x="120" y="156" width="33" height="33" fill="#333"/>
   <rect x="156" y="120" width="33" height="33" fill="#386"/>
   <rect x="192" y="120" width="33" height="33" fill="#386"/>
   <rect x="192" y="156" width="33" height="33" fill="#3a7"/>
   <rect x="228" y="120" width="33" height="33" fill="#386"/>
-  <rect x="264" y="156" width="33" height="33" fill="#3a7"/>
+  <rect x="264" y="156" width="33" height="33" fill="#333"/>
+  <!-- <rect x="300" y="156" width="33" height="33" fill="#386"/> -->
+  <rect x="264" y="192" width="33" height="33" fill="#386"/>
   <!-- Eyes (dark pixels) -->
   <rect x="156" y="156" width="33" height="33" fill="#924"/>
   <rect x="228" y="156" width="33" height="33" fill="#924"/>
