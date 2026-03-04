@@ -4,7 +4,7 @@
 //! [`R8U`] endpoint values and a 4×4 grid of 3-bit indices into an 8-entry
 //! interpolated palette.
 
-use std::convert::Infallible;
+use std::{convert::Infallible, mem::swap};
 
 use crate::{
     cluster_fit::cluster_fit,
@@ -129,21 +129,11 @@ impl Block {
             }
         }
 
-        let cf = cluster_fit::<f32, 8, 16>(
+        let mut cf = cluster_fit::<f32, 8, 16>(
             &samples,
             |a: f32, b: f32| {
-                let mut a = R8U::from_f32(R32F::new(a));
-                let mut b = R8U::from_f32(R32F::new(b));
-
-                if a == b {
-                    if b == R8U::BLACK {
-                        a = R8U::WHITE;
-                    } else {
-                        b = R8U::BLACK;
-                    }
-                } else if a.bits() < b.bits() {
-                    core::mem::swap(&mut a, &mut b);
-                }
+                let a = R8U::from_f32(R32F::new(a));
+                let b = R8U::from_f32(R32F::new(b));
 
                 (a.into_f32().r(), b.into_f32().r())
             },
@@ -156,6 +146,23 @@ impl Block {
         );
 
         let (color0, color1) = cf.endpoints;
+
+        let mut color0 = R8U::from_f32(R32F::new(color0));
+        let mut color1 = R8U::from_f32(R32F::new(color1));
+
+        if color0 == color1 {
+            return Block {
+                color0,
+                color1: R8U::BLACK,
+                texels: [0x00; 6],
+            };
+        } else if color0.bits() < color1.bits() {
+            swap(&mut color0, &mut color1);
+            for index in &mut cf.indices {
+                *index = 7 - *index;
+            }
+        }
+
         let mut texels = [0; 6];
         for y in 0..4 {
             for x in 0..4 {
@@ -172,8 +179,8 @@ impl Block {
         }
 
         Block {
-            color0: R8U::from_f32(R32F::new(color0)),
-            color1: R8U::from_f32(R32F::new(color1)),
+            color0,
+            color1,
             texels,
         }
     }

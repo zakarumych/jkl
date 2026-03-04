@@ -187,15 +187,11 @@ impl Block {
         let mut color1 = Rgb565::from_f32(Rgb32F::from(color1));
 
         if color0 == color1 {
-            if color1 == Rgb565::BLACK {
-                return Block::BLACK;
-            } else {
-                return Block {
-                    color0,
-                    color1: Rgb565::BLACK,
-                    texels: [0x00; 4],
-                };
-            }
+            return Block {
+                color0,
+                color1: Rgb565::BLACK,
+                texels: [0x00; 4],
+            };
         } else if color0.bits() < color1.bits() {
             swap(&mut color0, &mut color1);
             for index in &mut cf.indices {
@@ -315,15 +311,11 @@ impl Block {
                 let mut color1 = Rgb565::from_f32(Rgb32F::from(color1));
 
                 if color0 == color1 {
-                    if color1 == Rgb565::BLACK {
-                        return Block::BLACK;
-                    } else {
-                        return Block {
-                            color0,
-                            color1: Rgb565::BLACK,
-                            texels: [0x00; 4],
-                        };
-                    }
+                    return Block {
+                        color0,
+                        color1: Rgb565::BLACK,
+                        texels: [0x00; 4],
+                    };
                 } else if color0.bits() < color1.bits() {
                     swap(&mut color0, &mut color1);
                     for index in &mut cf.indices {
