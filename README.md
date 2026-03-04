@@ -3,27 +3,27 @@
 ---
 
 JKL is a batteries-included Rust crate for compressing, encoding and
-packing data that needs to travel fast and decompress even faster — on the
+packing data that needs to travel fast and decompress even faster - on the
 CPU *or* directly on the GPU. If you ship textures, sprite atlases, tile
 maps, or any bulk binary payload that must be ready the instant it hits
 VRAM, JKL was built for you.
 
 ## Feature highlights
 
-* **GPU-oriented block texture codecs** — encode and decode BC1 through BC5
+* **GPU-oriented block texture codecs** - encode and decode BC1 through BC5
   blocks with cluster-fit quality.
-* **Layered entropy coding** — stack LZ77 or RLE with ANS for
+* **Layered entropy coding** - stack LZ77 or RLE with ANS for
   near-optimal compression ratios while keeping decompression blazingly fast
-  — simple enough for a GPU compute shader.
-* **Bit-perfect I/O** — the [`bits`] module reads and writes individual bits
+  - simple enough for a GPU compute shader.
+* **Bit-perfect I/O** - the [`bits`] module reads and writes individual bits
   so every encoder can squeeze out every last fraction of a byte.
-* **Jackal Image format** — the [`jackal::image`] module ties everything together
+* **Jackal Image format** - the [`jackal::image`] module ties everything together
   into a tiled, mip-mapped, GPU-ready image container.
-* **Packing and spatial indexing** — [`max_rects`] bin-packs rectangles for
+* **Packing and spatial indexing** - [`max_rects`] bin-packs rectangles for
   atlas generation; [`z_curve`] provides Morton-order iteration for
   cache-friendly traversal.
 
-## Quick orientation — "how do I …?"
+## Quick orientation - "how do I …?"
 
 | I want to …                              | Start here                                                                           |
 |-------------------------------------------|--------------------------------------------------------------------------------------|
