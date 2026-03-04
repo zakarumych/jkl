@@ -10,7 +10,8 @@
     </linearGradient>
   </defs>
   <rect width="1440" height="600" rx="50" fill="#444"/>
-<!-- Jackal silhouette built from progressively degraded pixel blocks -->
+
+  <!-- Jackal silhouette built from progressively degraded pixel blocks -->
   <!-- Left ear -->
   <rect x="84" y="84" width="33" height="33" fill="#3a7"/>
   <rect x="84" y="120" width="33" height="33" fill="#3a7"/>
@@ -48,17 +49,17 @@
   <rect x="168" y="228" width="39" height="39" fill="#3a7"/>
   <rect x="210" y="228" width="39" height="39" fill="#3a7"/>
   <rect x="252" y="228" width="39" height="39" fill="#386"/>
-  <rect x="114" y="270" width="45" height="45" fill="#386"/>
   <rect x="162" y="270" width="45" height="45" fill="#387"/>
-  <rect x="210" y="270" width="45" height="45" fill="#387"/>
-  <rect x="258" y="270" width="45" height="45" fill="#386"/>
+  <rect x="162" y="318" width="51" height="51" fill="#387"/>
   <!-- Legs (very degraded, large blocks, few colors) -->
   <rect x="108" y="318" width="51" height="51" fill="#386"/>
-  <rect x="162" y="318" width="51" height="51" fill="#387"/>
-  <rect x="216" y="318" width="51" height="51" fill="#387"/>
-  <rect x="270" y="318" width="51" height="51" fill="#386"/>
   <rect x="108" y="372" width="51" height="51" fill="#3a7"/>
+  <rect x="114" y="270" width="45" height="45" fill="#386"/>
+  <rect x="210" y="270" width="45" height="45" fill="#386"/>
+  <rect x="216" y="318" width="51" height="51" fill="#386"/>
   <rect x="216" y="372" width="51" height="51" fill="#3a7"/>
+  <rect x="258" y="270" width="45" height="45" fill="#386"/>
+  <rect x="270" y="318" width="51" height="51" fill="#386"/>
   <rect x="282" y="372" width="51" height="51" fill="#3a7"/>
   <!-- Tail (almost gone, max jackalling) -->
   <rect x="306" y="246" width="57" height="57" fill="#3a7"/>
