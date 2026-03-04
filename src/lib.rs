@@ -96,6 +96,8 @@
 //! |--------------------|-------------------------------------------------------------|
 //! | [`jackal::image`]  | Tiled, GPU-decompressible image container format            |
 
+#![forbid(unsafe_code)]
+
 macro_rules! impl_fixedcode_struct {
     ($name:ident { $($field_name:ident: $field_ty:ty),* $(,)? } | $error:ty) => {
         impl $crate::encode::FixedCode for $name {
