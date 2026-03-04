@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" fill="none">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="480" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4bd1fe"/>
+      <stop offset="100%" stop-color="#ff41bd"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="480" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f7931a"/>
+      <stop offset="100%" stop-color="#ff4e50"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="480" rx="50" fill="#444"/>
+
+  <!-- Jackal silhouette built from progressively degraded pixel blocks -->
+  <!-- Left ear -->
+  <rect x="84" y="84" width="33" height="33" fill="#3a7"/>
+  <rect x="84" y="120" width="33" height="33" fill="#3a7"/>
+  <rect x="120" y="48" width="33" height="33" fill="#3a7"/>
+  <rect x="120" y="84" width="33" height="33" fill="#387"/>
+  <rect x="120" y="120" width="33" height="33" fill="#387"/>
+  <!-- Right ear -->
+  <rect x="264" y="48" width="33" height="33" fill="#3a7"/>
+  <rect x="264" y="84" width="33" height="33" fill="#387"/>
+  <rect x="264" y="120" width="33" height="33" fill="#387"/>
+  <rect x="300" y="84" width="33" height="33" fill="#3a7"/>
+  <rect x="300" y="120" width="33" height="33" fill="#3a7"/>
+  <!-- Head -->
+  <rect x="120" y="156" width="33" height="33" fill="#3a7"/>
+  <rect x="156" y="120" width="33" height="33" fill="#386"/>
+  <rect x="192" y="120" width="33" height="33" fill="#386"/>
+  <rect x="192" y="156" width="33" height="33" fill="#3a7"/>
+  <rect x="228" y="120" width="33" height="33" fill="#386"/>
+  <rect x="264" y="156" width="33" height="33" fill="#3a7"/>
+  <!-- Eyes (dark pixels) -->
+  <rect x="156" y="156" width="33" height="33" fill="#924"/>
+  <rect x="228" y="156" width="33" height="33" fill="#924"/>
+  <!-- Snout -->
+  <rect x="156" y="192" width="33" height="33" fill="#3a7"/>
+  <rect x="192" y="192" width="33" height="33" fill="#333"/>
+  <rect x="228" y="192" width="33" height="33" fill="#3a7"/>
+  <!-- Body (gets progressively more "jackalled" - blocky and color-banded) -->
+  <rect x="126" y="228" width="39" height="39" fill="#386"/>
+  <rect x="168" y="228" width="39" height="39" fill="#3a7"/>
+  <rect x="210" y="228" width="39" height="39" fill="#3a7"/>
+  <rect x="252" y="228" width="39" height="39" fill="#386"/>
+  <rect x="114" y="270" width="45" height="45" fill="#386"/>
+  <rect x="162" y="270" width="45" height="45" fill="#387"/>
+  <rect x="210" y="270" width="45" height="45" fill="#387"/>
+  <rect x="258" y="270" width="45" height="45" fill="#386"/>
+  <!-- Legs (very degraded, large blocks, few colors) -->
+  <rect x="108" y="318" width="51" height="51" fill="#386"/>
+  <rect x="162" y="318" width="51" height="51" fill="#387"/>
+  <rect x="216" y="318" width="51" height="51" fill="#387"/>
+  <rect x="270" y="318" width="51" height="51" fill="#386"/>
+  <rect x="108" y="372" width="51" height="51" fill="#3a7"/>
+  <rect x="216" y="372" width="51" height="51" fill="#3a7"/>
+  <rect x="282" y="372" width="51" height="51" fill="#3a7"/>
+  <!-- Tail (almost gone, max jackalling) -->
+  <rect x="306" y="246" width="57" height="57" fill="#3a7"/>
+  <rect x="366" y="210" width="63" height="63" fill="#3a7"/>
+</svg>
