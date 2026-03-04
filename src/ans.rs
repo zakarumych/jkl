@@ -127,7 +127,7 @@ impl<T> Context<T> {
         ord: impl Fn(T, T) -> cmp::Ordering,
     ) -> Self
     where
-        T: Ord + Hash + Copy,
+        T: Eq + Hash + Copy,
     {
         let mut freqs = HashMap::<T, u64>::new();
 

@@ -3,7 +3,7 @@
 //! BC1 compresses RGB texels into 8-byte blocks. Each block stores two [`Rgb565`]
 //! endpoint colors and a 4×4 grid of 2-bit indices into a 4-entry interpolated palette.
 
-use std::convert::Infallible;
+use std::{convert::Infallible, mem::swap};
 
 use crate::{
     cluster_fit::cluster_fit,
@@ -42,7 +42,7 @@ impl Block {
 
     pub const TRANSPARENT: Block = Block {
         color0: Rgb565::BLACK,
-        color1: Rgb565::WHITE,
+        color1: Rgb565::BLACK,
         texels: [0xFF; 4],
     };
 
@@ -162,18 +162,11 @@ impl Block {
             }
         }
 
-        let cf = cluster_fit::<Vec3, 4, 16>(
+        let mut cf = cluster_fit::<Vec3, 4, 16>(
             &samples,
             |a: Vec3, b: Vec3| {
-                let mut a = Rgb565::from_f32(a.into());
-                let mut b = Rgb565::from_f32(b.into());
-
-                if a == b {
-                    b = Rgb565::from_bits(!a.bits());
-                }
-                if a.bits() < b.bits() {
-                    core::mem::swap(&mut a, &mut b);
-                }
+                let a = Rgb565::from_f32(a.into());
+                let b = Rgb565::from_f32(b.into());
 
                 (a.into_f32().into(), b.into_f32().into())
             },
@@ -189,6 +182,27 @@ impl Block {
         );
 
         let (color0, color1) = cf.endpoints;
+
+        let mut color0 = Rgb565::from_f32(Rgb32F::from(color0));
+        let mut color1 = Rgb565::from_f32(Rgb32F::from(color1));
+
+        if color0 == color1 {
+            if color1 == Rgb565::BLACK {
+                return Block::BLACK;
+            } else {
+                return Block {
+                    color0,
+                    color1: Rgb565::BLACK,
+                    texels: [0x00; 4],
+                };
+            }
+        } else if color0.bits() < color1.bits() {
+            swap(&mut color0, &mut color1);
+            for index in &mut cf.indices {
+                *index = 3 - *index;
+            }
+        }
+
         let mut texels = [0; 4];
         for y in 0..4 {
             for x in 0..4 {
@@ -198,8 +212,8 @@ impl Block {
         }
 
         Block {
-            color0: Rgb565::from_f32(Rgb32F::from(color0)),
-            color1: Rgb565::from_f32(Rgb32F::from(color1)),
+            color0,
+            color1,
             texels,
         }
     }
@@ -225,18 +239,12 @@ impl Block {
         match num_samples {
             0 => Self::TRANSPARENT,
             1..16 => {
-                let cf = cluster_fit::<Vec3, 3, 16>(
+                // Some samples are transparent.
+                let mut cf = cluster_fit::<Vec3, 3, 16>(
                     &samples[..num_samples],
                     |a: Vec3, b: Vec3| {
-                        let mut a = Rgb565::from_f32(a.into());
-                        let mut b = Rgb565::from_f32(b.into());
-
-                        if a == b {
-                            b = Rgb565::from_bits(!a.bits());
-                        }
-                        if a.bits() > b.bits() {
-                            core::mem::swap(&mut a, &mut b);
-                        }
+                        let a = Rgb565::from_f32(a.into());
+                        let b = Rgb565::from_f32(b.into());
 
                         (a.into_f32().into(), b.into_f32().into())
                     },
@@ -252,6 +260,16 @@ impl Block {
                 );
 
                 let (color0, color1) = cf.endpoints;
+                let mut color0 = Rgb565::from_f32(Rgb32F::from(color0));
+                let mut color1 = Rgb565::from_f32(Rgb32F::from(color1));
+
+                if color0.bits() > color1.bits() {
+                    swap(&mut color0, &mut color1);
+                    for index in &mut cf.indices {
+                        *index = 2 - *index;
+                    }
+                }
+
                 let mut texels = [0; 4];
                 for y in 0..4 {
                     for x in 0..4 {
@@ -266,24 +284,18 @@ impl Block {
                 }
 
                 Block {
-                    color0: Rgb565::from_f32(Rgb32F::from(color0)),
-                    color1: Rgb565::from_f32(Rgb32F::from(color1)),
+                    color0,
+                    color1,
                     texels,
                 }
             }
             16 => {
-                let cf = cluster_fit::<Vec3, 4, 16>(
+                // Solid case.
+                let mut cf = cluster_fit::<Vec3, 4, 16>(
                     &samples[..num_samples],
                     |a: Vec3, b: Vec3| {
-                        let mut a = Rgb565::from_f32(a.into());
-                        let mut b = Rgb565::from_f32(b.into());
-
-                        if a == b {
-                            b = Rgb565::from_bits(!a.bits());
-                        }
-                        if a.bits() < b.bits() {
-                            core::mem::swap(&mut a, &mut b);
-                        }
+                        let a = Rgb565::from_f32(a.into());
+                        let b = Rgb565::from_f32(b.into());
 
                         (a.into_f32().into(), b.into_f32().into())
                     },
@@ -299,6 +311,26 @@ impl Block {
                 );
 
                 let (color0, color1) = cf.endpoints;
+                let mut color0 = Rgb565::from_f32(Rgb32F::from(color0));
+                let mut color1 = Rgb565::from_f32(Rgb32F::from(color1));
+
+                if color0 == color1 {
+                    if color1 == Rgb565::BLACK {
+                        return Block::BLACK;
+                    } else {
+                        return Block {
+                            color0,
+                            color1: Rgb565::BLACK,
+                            texels: [0x00; 4],
+                        };
+                    }
+                } else if color0.bits() < color1.bits() {
+                    swap(&mut color0, &mut color1);
+                    for index in &mut cf.indices {
+                        *index = 3 - *index;
+                    }
+                }
+
                 let mut texels = [0; 4];
                 for y in 0..4 {
                     for x in 0..4 {
@@ -308,8 +340,8 @@ impl Block {
                 }
 
                 Block {
-                    color0: Rgb565::from_f32(Rgb32F::from(color0)),
-                    color1: Rgb565::from_f32(Rgb32F::from(color1)),
+                    color0,
+                    color1,
                     texels,
                 }
             }

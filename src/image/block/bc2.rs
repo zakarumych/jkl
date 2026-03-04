@@ -170,9 +170,12 @@ impl Block {
                 let mut b = Rgb565::from_f32(b.into());
 
                 if a == b {
-                    b = Rgb565::from_bits(!a.bits());
-                }
-                if a.bits() < b.bits() {
+                    if b == Rgb565::BLACK {
+                        a = Rgb565::WHITE;
+                    } else {
+                        b = Rgb565::BLACK;
+                    }
+                } else if a.bits() < b.bits() {
                     core::mem::swap(&mut a, &mut b);
                 }
 
@@ -223,9 +226,12 @@ impl Block {
                 let mut b = Rgb565::from_f32(b.into());
 
                 if a == b {
-                    b = Rgb565::from_bits(!a.bits());
-                }
-                if a.bits() < b.bits() {
+                    if b == Rgb565::BLACK {
+                        a = Rgb565::WHITE;
+                    } else {
+                        b = Rgb565::BLACK;
+                    }
+                } else if a.bits() < b.bits() {
                     core::mem::swap(&mut a, &mut b);
                 }
 

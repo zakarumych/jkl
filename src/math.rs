@@ -35,43 +35,47 @@ pub trait Zero {
     fn is_zero(&self) -> bool;
 }
 
+macro_rules! impl_zero_for_numeric {
+    ($($num:ty)*) => {
+        $(
+            impl Zero for $num {
+                #[inline(always)]
+                fn zero() -> Self {
+                    0
+                }
+
+                #[inline(always)]
+                fn is_zero(&self) -> bool {
+                    *self == 0
+                }
+            }
+        )*
+    };
+}
+
+impl_zero_for_numeric!(u8 u16 u32 u64 i8 i16 i32 i64 usize isize);
+
 impl Zero for f32 {
+    #[inline(always)]
     fn zero() -> Self {
         0.0
     }
 
+    #[inline(always)]
     fn is_zero(&self) -> bool {
         *self == 0.0
     }
 }
 
-impl Zero for u32 {
+impl Zero for f64 {
+    #[inline(always)]
     fn zero() -> Self {
-        0
+        0.0
     }
 
+    #[inline(always)]
     fn is_zero(&self) -> bool {
-        *self == 0
-    }
-}
-
-impl Zero for i32 {
-    fn zero() -> Self {
-        0
-    }
-
-    fn is_zero(&self) -> bool {
-        *self == 0
-    }
-}
-
-impl Zero for usize {
-    fn zero() -> Self {
-        0
-    }
-
-    fn is_zero(&self) -> bool {
-        *self == 0
+        *self == 0.0
     }
 }
 
@@ -82,43 +86,47 @@ pub trait One {
     fn is_one(&self) -> bool;
 }
 
+macro_rules! impl_one_for_numeric {
+    ($($num:ty)*) => {
+        $(
+            impl One for $num {
+                #[inline(always)]
+                fn one() -> Self {
+                    1
+                }
+
+                #[inline(always)]
+                fn is_one(&self) -> bool {
+                    *self == 1
+                }
+            }
+        )*
+    };
+}
+
+impl_one_for_numeric!(u8 u16 u32 u64 i8 i16 i32 i64 usize isize);
+
 impl One for f32 {
+    #[inline(always)]
     fn one() -> Self {
         1.0
     }
 
+    #[inline(always)]
     fn is_one(&self) -> bool {
         *self == 1.0
     }
 }
 
-impl One for u32 {
+impl One for f64 {
+    #[inline(always)]
     fn one() -> Self {
-        1
+        1.0
     }
 
+    #[inline(always)]
     fn is_one(&self) -> bool {
-        *self == 1
-    }
-}
-
-impl One for i32 {
-    fn one() -> Self {
-        1
-    }
-
-    fn is_one(&self) -> bool {
-        *self == 1
-    }
-}
-
-impl One for usize {
-    fn one() -> Self {
-        1
-    }
-
-    fn is_one(&self) -> bool {
-        *self == 1
+        *self == 1.0
     }
 }
 
@@ -157,6 +165,35 @@ macro_rules! impl_delta_for_numeric {
 }
 
 impl_delta_for_numeric!(u8 u16 u32 u64 i8 i16 i32 i64);
+
+impl<T, const N: usize> Delta for [T; N]
+where
+    T: Delta + Zero + Copy,
+{
+    #[inline(always)]
+    fn delta(self, base: Self) -> Self {
+        let mut delta = self;
+        for i in 0..N {
+            delta[i] = self[i].delta(base[i]);
+            if !delta[i].is_zero() {
+                break;
+            }
+        }
+        delta
+    }
+
+    #[inline(always)]
+    fn from_delta(base: Self, delta: Self) -> Self {
+        let mut value = delta;
+        for i in 0..N {
+            if !delta[i].is_zero() {
+                value[i] = T::from_delta(base[i], delta[i]);
+                break;
+            }
+        }
+        value
+    }
+}
 
 /// A 2D vector.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3075,6 +3112,95 @@ impl Vec4 {
     }
 }
 
+/// A region in 2D space defined by a points on a diagonal.
+#[derive(Clone, Copy)]
+pub struct Region2 {
+    /// The corner with the smallest component values.
+    pub min: Vec2,
+    /// The corner with the largest component values.
+    pub max: Vec2,
+}
+
+impl Region2 {
+    /// Builds the axis-aligned bounding box enclosing all `points`.
+    pub fn new(points: impl Iterator<Item = Vec2>) -> Self {
+        let mut min = Vec2([f32::INFINITY; 2]);
+        let mut max = Vec2([f32::NEG_INFINITY; 2]);
+
+        for point in points {
+            for i in 0..3 {
+                min.0[i] = min.0[i].min(point.0[i]);
+                max.0[i] = max.0[i].max(point.0[i]);
+            }
+        }
+
+        Region2 { min, max }
+    }
+
+    /// Returns the minimum corner.
+    pub fn min(&self) -> Vec2 {
+        self.min
+    }
+
+    /// Returns the maximum corner.
+    pub fn max(&self) -> Vec2 {
+        self.max
+    }
+
+    /// Returns `true` if any axis has min > max (degenerate region).
+    pub fn is_empty(&self) -> bool {
+        self.min.x() > self.max.x() || self.min.y() > self.max.y()
+    }
+
+    /// Returns `true` if min equals max (a single point).
+    pub fn is_singular(&self) -> bool {
+        self.min == self.max
+    }
+
+    /// Returns the center point of the region.
+    pub fn center(&self) -> Vec2 {
+        (self.min + self.max) * 0.5
+    }
+
+    /// Returns 4 diagonals of the region.
+    pub fn diagonals(&self) -> [(Vec2, Vec2); 4] {
+        [
+            (self.min, self.max),
+            (
+                Vec2([self.min.x(), self.min.y()]),
+                Vec2([self.max.x(), self.max.y()]),
+            ),
+            (
+                Vec2([self.min.x(), self.max.y()]),
+                Vec2([self.max.x(), self.min.y()]),
+            ),
+            (
+                Vec2([self.max.x(), self.min.y()]),
+                Vec2([self.min.x(), self.max.y()]),
+            ),
+        ]
+    }
+
+    /// Returns 2 normalized diagonal axes of the region.
+    pub fn diagonal_axes(&self) -> [Vec2; 2] {
+        [
+            Vec2([self.max.x() - self.min.x(), self.max.y() - self.min.y()]).norm(),
+            Vec2([self.max.x() - self.min.x(), self.min.y() - self.max.y()]).norm(),
+        ]
+    }
+
+    /// Returns `true` if the region is non-degenerate (min ≤ max on every axis).
+    pub fn is_real(&self) -> bool {
+        self.min.x() <= self.max.x() && self.min.y() <= self.max.y()
+    }
+
+    /// Returns the volume of the region, or `0.0` if degenerate.
+    pub fn volume(&self) -> f32 {
+        let diff = self.max - self.min;
+        diff.x().min(0.0) * diff.y().min(0.0)
+    }
+}
+
 /// A region in 3D space defined by a points on a diagonal.
 #[derive(Clone, Copy)]
 pub struct Region3 {
@@ -4358,9 +4484,162 @@ impl From<Vec4> for Rgba32F {
     }
 }
 
+pub trait Vector:
+    Zero
+    + Add<Output = Self>
+    + AddAssign<Self>
+    + Sub<Output = Self>
+    + SubAssign<Self>
+    + Mul<f32, Output = Self>
+    + Div<f32, Output = Self>
+    + PartialEq
+    + Copy
+{
+    /// The type used to represent the principal axis for ordering.
+    type PrincipalAxis: Copy;
+
+    fn distance(self, other: Self) -> f32;
+
+    fn distance_squared(self, other: Self) -> f32;
+
+    /// Computes the principal axis of a set of samples.
+    fn principal_axis(samples: &[Self]) -> Self::PrincipalAxis;
+
+    /// Projects this sample onto `axis`, returning a scalar for ordering.
+    fn project(self, axis: Self::PrincipalAxis) -> f32;
+
+    fn mean_squared_error(self, samples: &[Self]) -> f32 {
+        let mut error = 0.0;
+        let mut count = 0;
+        for &sample in samples {
+            error += Self::distance_squared(self, sample);
+            count += 1;
+        }
+        error / count.max(1) as f32
+    }
+
+    fn total_squared_error(self, samples: &[Self]) -> f32 {
+        let mut error = 0.0;
+        for &sample in samples {
+            error += Self::distance_squared(self, sample);
+        }
+        error
+    }
+
+    fn centroid(samples: &[Self]) -> Self {
+        let mut sum = Self::zero();
+        let mut count = 0;
+
+        for &s in samples {
+            sum += s;
+            count += 1;
+        }
+
+        sum * (1.0 / count as f32)
+    }
+}
+
+impl Vector for f32 {
+    type PrincipalAxis = ();
+
+    #[inline(always)]
+    fn distance(self, other: Self) -> f32 {
+        (self - other).abs()
+    }
+
+    #[inline(always)]
+    fn distance_squared(self, other: Self) -> f32 {
+        let diff = self - other;
+        diff * diff
+    }
+
+    #[inline(always)]
+    fn principal_axis(_samples: &[Self]) -> Self::PrincipalAxis {
+        ()
+    }
+
+    #[inline(always)]
+    fn project(self, _axis: Self::PrincipalAxis) -> f32 {
+        self
+    }
+}
+
+impl Vector for Vec2 {
+    type PrincipalAxis = Vec2;
+
+    #[inline(always)]
+    fn distance(self, other: Self) -> f32 {
+        (self - other).length()
+    }
+
+    #[inline(always)]
+    fn distance_squared(self, other: Self) -> f32 {
+        (self - other).length_squared()
+    }
+
+    #[inline(always)]
+    fn principal_axis(samples: &[Self]) -> Vec2 {
+        max_variance_diagonal_axis2(samples)
+    }
+
+    #[inline(always)]
+    fn project(self, axis: Vec2) -> f32 {
+        self.dot(axis)
+    }
+}
+
+impl Vector for Vec3 {
+    type PrincipalAxis = Vec3;
+
+    #[inline(always)]
+    fn distance(self, other: Self) -> f32 {
+        (self - other).length()
+    }
+
+    #[inline(always)]
+    fn distance_squared(self, other: Self) -> f32 {
+        (self - other).length_squared()
+    }
+
+    #[inline(always)]
+    fn principal_axis(samples: &[Self]) -> Vec3 {
+        max_variance_diagonal_axis3(samples)
+    }
+
+    #[inline(always)]
+    fn project(self, axis: Vec3) -> f32 {
+        self.dot(axis)
+    }
+}
+
 /// Returns the bounding-box diagonal axis along which the given samples
 /// have the greatest variance.
-pub fn max_variance_diagonal_axis(samples: &[Vec3]) -> Vec3 {
+pub fn max_variance_diagonal_axis2(samples: &[Vec2]) -> Vec2 {
+    let region = Region2::new(samples.iter().copied());
+    let center = region.center();
+    let diagonals = region.diagonal_axes();
+
+    let mut best_diagonal = Vec2::ZERO;
+    let mut best_var = -1.0f32;
+
+    for &diagonal in &diagonals {
+        let mut var = 0.0f32;
+        for &v in samples {
+            let t = (v - center).dot(diagonal);
+            var += t * t;
+        }
+        if var > best_var {
+            best_var = var;
+            best_diagonal = diagonal;
+        }
+    }
+
+    best_diagonal
+}
+
+/// Returns the bounding-box diagonal axis along which the given samples
+/// have the greatest variance.
+pub fn max_variance_diagonal_axis3(samples: &[Vec3]) -> Vec3 {
     let region = Region3::new(samples.iter().copied());
     let center = region.center();
     let diagonals = region.diagonal_axes();
@@ -4368,7 +4647,7 @@ pub fn max_variance_diagonal_axis(samples: &[Vec3]) -> Vec3 {
     let mut best_diagonal = Vec3::ZERO;
     let mut best_var = -1.0f32;
 
-    for &diagonal in &diagonals[0..] {
+    for &diagonal in &diagonals {
         let mut var = 0.0f32;
         for &v in samples {
             let t = (v - center).dot(diagonal);
@@ -4385,18 +4664,68 @@ pub fn max_variance_diagonal_axis(samples: &[Vec3]) -> Vec3 {
 
 /// Estimates the principal component axis of a set of 3D points via
 /// power iteration on the covariance matrix.
-pub fn pca_axis(v: &[Vec3]) -> Vec3 {
+pub fn pca_axis2(samples: &[Vec2]) -> Vec2 {
     #![allow(clippy::needless_range_loop)]
-    let n = v.len() as f32;
+    let n = samples.len() as f32;
+    let mut mean = Vec2::ZERO;
+    for &p in samples {
+        mean += p;
+    }
+    mean /= n;
+
+    let mut cov = [[0.0; 2]; 2];
+    for &p in samples {
+        let d = p - mean;
+        for i in 0..2 {
+            for j in 0..2 {
+                cov[i][j] += d.0[i] * d.0[j];
+            }
+        }
+    }
+    for i in 0..2 {
+        for j in 0..2 {
+            cov[i][j] /= n;
+        }
+    }
+
+    let diagonal = max_variance_diagonal_axis2(samples);
+
+    // Power iteration to find the principal component
+    let mut axis = diagonal;
+    for _ in 0..10 {
+        let mut next_axis = Vec2::ZERO;
+        for i in 0..2 {
+            for j in 0..2 {
+                next_axis.0[i] += cov[i][j] * axis.0[j];
+            }
+        }
+
+        let len = next_axis.length();
+        if len > 1.0e-6 {
+            next_axis /= len;
+        } else {
+            next_axis = diagonal;
+        }
+        axis = next_axis;
+    }
+
+    axis
+}
+
+/// Estimates the principal component axis of a set of 3D points via
+/// power iteration on the covariance matrix.
+pub fn pca_axis3(samples: &[Vec3]) -> Vec3 {
+    #![allow(clippy::needless_range_loop)]
+    let n = samples.len() as f32;
     let mut mean = Vec3::ZERO;
-    for p in v {
-        mean += *p;
+    for &p in samples {
+        mean += p;
     }
     mean /= n;
 
     let mut cov = [[0.0; 3]; 3];
-    for p in v {
-        let d = *p - mean;
+    for &p in samples {
+        let d = p - mean;
         for i in 0..3 {
             for j in 0..3 {
                 cov[i][j] += d.0[i] * d.0[j];
@@ -4409,7 +4738,7 @@ pub fn pca_axis(v: &[Vec3]) -> Vec3 {
         }
     }
 
-    let diagonal = max_variance_diagonal_axis(v);
+    let diagonal = max_variance_diagonal_axis3(samples);
 
     // Power iteration to find the principal component
     let mut axis = diagonal;

@@ -45,19 +45,30 @@ where
             },
             (
                 Token::Reference {
-                    length: me,
-                    distance: me_d,
+                    length: length_me,
+                    distance: distance_me,
                 },
                 Token::Reference {
-                    length: base,
-                    distance: base_d,
+                    length: length_base,
+                    distance: distance_base,
                 },
-            ) => Token::Reference {
-                // Keep reference-length deltas in valid reference domain (>= 2),
-                // because length == 1 is reserved for literal tag in `VarCode`.
-                length: me - base + 2,
-                distance: if me == base { me_d - base_d } else { me_d },
-            },
+            ) => {
+                if length_me == length_base {
+                    Token::Reference {
+                        // Keep reference-length deltas in valid reference domain (>= 2),
+                        // because length == 1 is reserved for literal tag in `VarCode`.
+                        length: 2,
+                        distance: distance_me - distance_base,
+                    }
+                } else {
+                    Token::Reference {
+                        // Keep reference-length deltas in valid reference domain (>= 2),
+                        // because length == 1 is reserved for literal tag in `VarCode`.
+                        length: (length_me - length_base) + 2,
+                        distance: distance_me,
+                    }
+                }
+            }
             (me, Token::Reference { .. }) => me,
             (me, Token::Literal { .. }) => me,
         }
@@ -75,22 +86,28 @@ where
             (Token::Reference { .. }, Token::Literal { symbol }) => Token::Literal { symbol },
             (
                 Token::Reference {
-                    length: length_a,
-                    distance: distance_a,
+                    length: length_base,
+                    distance: distance_base,
                 },
                 Token::Reference {
-                    length: length_b,
-                    distance: distance_b,
+                    length: length_delta,
+                    distance: distance_delta,
                 },
-            ) => Token::Reference {
-                // Inverse of `delta`: `length_b` stores `(me - base + 2)`.
-                length: length_a + (length_b - 2),
-                distance: if length_b == 2 {
-                    distance_a + distance_b
+            ) => {
+                if length_delta == 2 {
+                    Token::Reference {
+                        // Inverse of `delta`: `length_delta` stores `(me - base + 2)`.
+                        length: length_base,
+                        distance: distance_base + distance_delta,
+                    }
                 } else {
-                    distance_b
-                },
-            },
+                    Token::Reference {
+                        // Inverse of `delta`: `length_delta` stores `(me - base + 2)`.
+                        length: length_base + (length_delta - 2),
+                        distance: distance_delta,
+                    }
+                }
+            }
         }
     }
 }

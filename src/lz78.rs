@@ -12,16 +12,50 @@ use std::{
 use crate::{
     bits::{ReadBits, WriteBits},
     encode::VarCode,
+    math::Delta,
     vle,
 };
 
 /// An LZ78 token: a dictionary prefix index paired with a trailing literal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token<T> {
     /// Zero-based index into the dictionary. `0` means no prefix (standalone literal).
     pub prefix: usize,
     /// The literal symbol that follows the prefix string.
     pub literal: T,
+}
+
+impl<T> Delta for Token<T>
+where
+    T: Delta,
+{
+    fn delta(self, base: Self) -> Self {
+        if self.prefix == base.prefix {
+            Token {
+                prefix: 0,
+                literal: self.literal.delta(base.literal),
+            }
+        } else {
+            Token {
+                prefix: self.prefix - base.prefix,
+                literal: self.literal,
+            }
+        }
+    }
+
+    fn from_delta(base: Self, delta: Self) -> Self {
+        if delta.prefix == 0 {
+            Token {
+                prefix: base.prefix,
+                literal: T::from_delta(base.literal, delta.literal),
+            }
+        } else {
+            Token {
+                prefix: base.prefix + delta.prefix,
+                literal: delta.literal,
+            }
+        }
+    }
 }
 
 impl<T> VarCode for Token<T>

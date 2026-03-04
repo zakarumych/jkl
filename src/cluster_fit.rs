@@ -4,9 +4,7 @@
 //! to find optimal palette endpoints with minimum total error. Used internally
 //! by the BC1–BC5 block texture encoders.
 
-use std::ops::{Add, AddAssign, Mul, Sub};
-
-use crate::math::{pca_axis, Region3, Vec3, Zero};
+use crate::math::{Region2, Region3, Vec2, Vec3, Vector};
 
 /// Result of a cluster-fit quantization pass.
 ///
@@ -25,40 +23,18 @@ pub struct ClusterFit<T, const N: usize> {
 ///
 /// Implementors must support basic arithmetic, projection onto a
 /// principal axis, and a fallback heuristic for initial endpoint selection.
-pub trait Sample:
-    Zero
-    + Copy
-    + Add<Output = Self>
-    + AddAssign
-    + Sub<Output = Self>
-    + Mul<f32, Output = Self>
-    + PartialEq
-{
-    /// The type used to represent the principal axis for ordering.
-    type Axis: Copy;
-
-    /// Computes the principal axis of a set of samples.
-    fn principal_axis(samples: &[Self]) -> Self::Axis;
-    /// Projects this sample onto `axis`, returning a scalar for ordering.
-    fn project(self, axis: Self::Axis) -> f32;
+pub trait Sample: Vector {
     /// Returns a pair of endpoints derived from the bounding extents of the samples.
-    fn fallback_endpoints(samples: &[Self]) -> (Self, Self);
+    fn fallback_endpoints(samples: impl ExactSizeIterator<Item = Self> + Clone) -> (Self, Self);
 }
 
 impl Sample for f32 {
-    type Axis = ();
-
-    fn principal_axis(_samples: &[Self]) -> Self::Axis {}
-
-    fn project(self, _axis: Self::Axis) -> f32 {
-        self
-    }
-
-    fn fallback_endpoints(samples: &[Self]) -> (Self, Self) {
+    #[inline]
+    fn fallback_endpoints(samples: impl ExactSizeIterator<Item = Self> + Clone) -> (Self, Self) {
         let mut min = f32::MAX;
         let mut max = f32::MIN;
 
-        for &s in samples {
+        for s in samples {
             if s < min {
                 min = s;
             }
@@ -71,19 +47,18 @@ impl Sample for f32 {
     }
 }
 
+impl Sample for Vec2 {
+    #[inline(always)]
+    fn fallback_endpoints(samples: impl ExactSizeIterator<Item = Self> + Clone) -> (Self, Self) {
+        let region = Region2::new(samples);
+        (region.min, region.max)
+    }
+}
+
 impl Sample for Vec3 {
-    type Axis = Vec3;
-
-    fn principal_axis(samples: &[Self]) -> Self::Axis {
-        pca_axis(samples)
-    }
-
-    fn project(self, axis: Self::Axis) -> f32 {
-        axis.dot(self)
-    }
-
-    fn fallback_endpoints(samples: &[Self]) -> (Self, Self) {
-        let region = Region3::new(samples.iter().copied());
+    #[inline(always)]
+    fn fallback_endpoints(samples: impl ExactSizeIterator<Item = Self> + Clone) -> (Self, Self) {
+        let region = Region3::new(samples);
         (region.min, region.max)
     }
 }
@@ -121,7 +96,7 @@ where
     order[..samples.len()].sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
     let order = order;
 
-    let mut best_endpoints = T::fallback_endpoints(samples);
+    let mut best_endpoints = T::fallback_endpoints(samples.iter().copied());
     best_endpoints = remap_endpoints(best_endpoints.0, best_endpoints.1);
     let mut best_indices = [0; N];
     let mut best_error = 0.0f32;

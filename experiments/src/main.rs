@@ -1,23 +1,21 @@
 use std::{array, io, path::PathBuf, usize};
 
 use egui::{
-    emath::TSTransform, load::SizedTexture, output, CentralPanel, Color32, Pos2, Stroke,
-    TextureHandle, TextureOptions, Ui, Vec2,
+    emath::TSTransform, load::SizedTexture, CentralPanel, Color32, Pos2, Stroke, TextureHandle,
+    TextureOptions, Ui, Vec2,
 };
 use egui_snarl::{
     ui::{PinInfo, SnarlViewer, SnarlWidget},
     InPin, OutPin, Snarl,
 };
+use image::Rgb;
 use jkl::{
-    bc1,
     bits::WriteBits,
     encode::{FixedCode, VarCode},
-    image::{ImageMut, ImageRef},
-    lz77,
-    math::{interleave16_2, Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3},
+    image::{block::bc1, Image2DMut, Image2DRef, ImageMut, ImageRef},
+    jackal, lz77,
+    math::{interleave16_2, Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3, Vector},
     max_rects::MaximalRectangles,
-    reference_map::ReferenceMap,
-    rle::{rle_with_cfg, RleCfg},
     vle::{self, Vle},
     zigzaq::ZigZag,
 };
@@ -307,16 +305,10 @@ impl SnarlViewer<JackalNode> for JackalViewer {
                 snarl.insert_node(pos, JackalNode::Atlas(AtlasNode::new()));
             }
 
-            let r = ui.button("Add Reference Map Node");
-            let r = r.on_hover_text("Add an Reference Map node");
+            let r = ui.button("Add Palette Node");
+            let r = r.on_hover_text("Add an Palette node");
             if r.clicked() {
-                snarl.insert_node(pos, JackalNode::ReferenceMap(ReferenceMapNode::new()));
-            }
-
-            let r = ui.button("Add Block Copy Node");
-            let r = r.on_hover_text("Add a Block Copy node");
-            if r.clicked() {
-                snarl.insert_node(pos, JackalNode::BlockCopyNode(BlockCopyNode::new()));
+                snarl.insert_node(pos, JackalNode::Palette(PaletteNode::new()));
             }
         });
     }
@@ -541,8 +533,7 @@ enum JackalNode {
     LZ78RansCalculator(LZ78RansCalculatorNode),
     RleRansCalculator(RleRansCalculatorNode),
     Atlas(AtlasNode),
-    ReferenceMap(ReferenceMapNode),
-    BlockCopyNode(BlockCopyNode),
+    Palette(PaletteNode),
 }
 
 impl JackalNode {
@@ -560,8 +551,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.title(),
             JackalNode::RleRansCalculator(node) => node.title(),
             JackalNode::Atlas(node) => node.title(),
-            JackalNode::ReferenceMap(node) => node.title(),
-            JackalNode::BlockCopyNode(node) => node.title(),
+            JackalNode::Palette(node) => node.title(),
         }
     }
 
@@ -579,8 +569,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.inputs(),
             JackalNode::RleRansCalculator(node) => node.inputs(),
             JackalNode::Atlas(node) => node.inputs(),
-            JackalNode::ReferenceMap(node) => node.inputs(),
-            JackalNode::BlockCopyNode(node) => node.inputs(),
+            JackalNode::Palette(node) => node.inputs(),
         }
     }
 
@@ -602,8 +591,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.set_input_ty(input, ty),
             JackalNode::RleRansCalculator(node) => node.set_input_ty(input, ty),
             JackalNode::Atlas(node) => node.set_input_ty(input, ty),
-            JackalNode::ReferenceMap(node) => node.set_input_ty(input, ty),
-            JackalNode::BlockCopyNode(node) => node.set_input_ty(input, ty),
+            JackalNode::Palette(node) => node.set_input_ty(input, ty),
         }
     }
 
@@ -624,8 +612,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.input_ty(input),
             JackalNode::RleRansCalculator(node) => node.input_ty(input),
             JackalNode::Atlas(node) => node.input_ty(input),
-            JackalNode::ReferenceMap(node) => node.input_ty(input),
-            JackalNode::BlockCopyNode(node) => node.input_ty(input),
+            JackalNode::Palette(node) => node.input_ty(input),
         }
     }
 
@@ -646,8 +633,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.input_ui(input, ui),
             JackalNode::RleRansCalculator(node) => node.input_ui(input, ui),
             JackalNode::Atlas(node) => node.input_ui(input, ui),
-            JackalNode::ReferenceMap(node) => node.input_ui(input, ui),
-            JackalNode::BlockCopyNode(node) => node.input_ui(input, ui),
+            JackalNode::Palette(node) => node.input_ui(input, ui),
         }
     }
 
@@ -665,8 +651,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.outputs(),
             JackalNode::RleRansCalculator(node) => node.outputs(),
             JackalNode::Atlas(node) => node.outputs(),
-            JackalNode::ReferenceMap(node) => node.outputs(),
-            JackalNode::BlockCopyNode(node) => node.outputs(),
+            JackalNode::Palette(node) => node.outputs(),
         }
     }
 
@@ -687,8 +672,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.output_ty(output),
             JackalNode::RleRansCalculator(node) => node.output_ty(output),
             JackalNode::Atlas(node) => node.output_ty(output),
-            JackalNode::ReferenceMap(node) => node.output_ty(output),
-            JackalNode::BlockCopyNode(node) => node.output_ty(output),
+            JackalNode::Palette(node) => node.output_ty(output),
         }
     }
 
@@ -709,8 +693,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.output_ui(output, ui),
             JackalNode::RleRansCalculator(node) => node.output_ui(output, ui),
             JackalNode::Atlas(node) => node.output_ui(output, ui),
-            JackalNode::ReferenceMap(node) => node.output_ui(output, ui),
-            JackalNode::BlockCopyNode(node) => node.output_ui(output, ui),
+            JackalNode::Palette(node) => node.output_ui(output, ui),
         }
     }
 
@@ -728,8 +711,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.has_body(),
             JackalNode::RleRansCalculator(node) => node.has_body(),
             JackalNode::Atlas(node) => node.has_body(),
-            JackalNode::ReferenceMap(node) => node.has_body(),
-            JackalNode::BlockCopyNode(node) => node.has_body(),
+            JackalNode::Palette(node) => node.has_body(),
         }
     }
 
@@ -747,8 +729,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.body_ui(ui),
             JackalNode::RleRansCalculator(node) => node.body_ui(ui),
             JackalNode::Atlas(node) => node.body_ui(ui),
-            JackalNode::ReferenceMap(node) => node.body_ui(ui),
-            JackalNode::BlockCopyNode(node) => node.body_ui(ui),
+            JackalNode::Palette(node) => node.body_ui(ui),
         }
     }
 
@@ -769,8 +750,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.get_output(output),
             JackalNode::RleRansCalculator(node) => node.get_output(output),
             JackalNode::Atlas(node) => node.get_output(output),
-            JackalNode::ReferenceMap(node) => node.get_output(output),
-            JackalNode::BlockCopyNode(node) => node.get_output(output),
+            JackalNode::Palette(node) => node.get_output(output),
         }
     }
 
@@ -791,8 +771,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.set_input(input, data),
             JackalNode::RleRansCalculator(node) => node.set_input(input, data),
             JackalNode::Atlas(node) => node.set_input(input, data),
-            JackalNode::ReferenceMap(node) => node.set_input(input, data),
-            JackalNode::BlockCopyNode(node) => node.set_input(input, data),
+            JackalNode::Palette(node) => node.set_input(input, data),
         }
     }
 
@@ -810,8 +789,7 @@ impl JackalNode {
             JackalNode::LZ78RansCalculator(node) => node.prepare(ctx),
             JackalNode::RleRansCalculator(node) => node.prepare(ctx),
             JackalNode::Atlas(node) => node.prepare(ctx),
-            JackalNode::ReferenceMap(node) => node.prepare(ctx),
-            JackalNode::BlockCopyNode(node) => node.prepare(ctx),
+            JackalNode::Palette(node) => node.prepare(ctx),
         }
     }
 }
@@ -1361,12 +1339,12 @@ impl<T> Image<T>
 where
     T: Copy,
 {
-    fn as_ref(&self) -> ImageRef<'_, T> {
-        ImageRef::new(self.width, self.height, &self.pixels)
+    fn as_ref(&self) -> Image2DRef<'_, T> {
+        Image2DRef::new(self.width, self.height, &self.pixels)
     }
 
-    fn as_mut(&mut self) -> ImageMut<'_, T> {
-        ImageMut::new(self.width, self.height, &mut self.pixels)
+    fn as_mut(&mut self) -> Image2DMut<'_, T> {
+        Image2DMut::new(self.width, self.height, &mut self.pixels)
     }
 
     fn solid(width: usize, height: usize, fill: T) -> Self {
@@ -3441,7 +3419,15 @@ impl LZ77RansCalculatorNode {
 
                 let mut write_size = WriteSize::new();
                 let mut write_bits = WriteBits::new(&mut write_size);
-                ctx.write_ord_by(&mut write_bits, lzbc1_ord).unwrap();
+                ctx.write_with_delta(
+                    &mut write_bits,
+                    lz77::Token::Literal {
+                        symbol: bc1::Block::BLACK,
+                    },
+                    lzbc1_ord,
+                    lzbc1_delta,
+                )
+                .unwrap();
                 write_bits.finish().unwrap();
                 self.map_sizes[0] += write_size.size as usize * 8;
 
@@ -5000,157 +4986,147 @@ impl<'de> serde::Deserialize<'de> for RleRansCalculatorNode {
     }
 }
 
-/// Builds reference map
-struct ReferenceMapNode {
-    size: (usize, usize),
-    input: Option<Image<Rgb32F>>,
-    map: ReferenceMap<Rgb32F>,
+struct PaletteNode {
+    input: Option<ImageValue>,
+    output: Option<ImageValue>,
+    size: usize,
     body: ImageWidget,
-    batch_size: usize,
-    learning_rate: f32,
 }
 
-impl ReferenceMapNode {
+impl PaletteNode {
     fn new() -> Self {
-        ReferenceMapNode::with_size((0, 0))
-    }
-
-    fn with_size(size: (usize, usize)) -> Self {
-        let mut map = ReferenceMap::new(size.0, size.1, Rgb32F::BLACK);
-        map.random_initialize(|| {
-            Rgb32F::new(
-                rand::random_range(0.0..=1.0),
-                rand::random_range(0.0..=1.0),
-                rand::random_range(0.0..=1.0),
-            )
-        });
-
-        ReferenceMapNode {
-            size,
+        Self {
             input: None,
-            map,
+            output: None,
+            size: 16,
             body: ImageWidget::new(),
-            batch_size: 16,
-            learning_rate: 0.01,
         }
     }
 
     fn prepare(&mut self, ctx: &egui::Context) {
-        self.body.make_texture(ctx, || egui::ColorImage {
-            size: [self.size.0, self.size.1],
-            source_size: egui::vec2(self.size.0 as f32, self.size.1 as f32),
-            pixels: self
-                .map
-                .as_ref()
-                .pixels()
-                .iter()
-                .map(|p| {
-                    egui::Color32::from_rgb(
-                        (p.r() * 255.0) as u8,
-                        (p.g() * 255.0) as u8,
-                        (p.b() * 255.0) as u8,
-                    )
-                })
-                .collect(),
-        })
+        match &self.output {
+            Some(output) => self.body.make_texture(ctx, || output.to_egui()),
+            None => self.body.unmake_texture(),
+        }
     }
 
     fn title(&self) -> String {
-        "Reference Map".to_owned()
+        "Palette".to_owned()
     }
 
     fn inputs(&self) -> usize {
-        3
+        1
     }
 
     fn set_input_ty(&mut self, input: usize, ty: JackalType) -> bool {
-        match input {
-            0 | 1 => match ty {
-                JackalType::Uint => true,
-                _ => false,
-            },
-            2 => match ty {
-                JackalType::Null => {
-                    self.input = None;
-                    true
-                }
-                JackalType::Image(PixelType::Rgb8U) => {
-                    self.input = None;
-                    true
-                }
-                _ => false,
-            },
-            _ => unreachable!(),
+        assert_eq!(input, 0);
+        match ty {
+            JackalType::Null => {
+                self.input = None;
+                true
+            }
+            JackalType::Image(_) => {
+                self.input = None;
+                true
+            }
+            _ => false,
         }
     }
 
     fn input_ty(&self, input: usize) -> JackalType {
-        match input {
-            0 | 1 => JackalType::Uint,
-            2 => match &self.input {
-                None => JackalType::Null,
-                Some(_) => JackalType::Image(PixelType::Rgb8U),
-            },
-            _ => unreachable!(),
+        assert_eq!(input, 0);
+        match &self.input {
+            None => JackalType::Null,
+            Some(image) => JackalType::Image(image.pixel_ty()),
         }
     }
 
-    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
-        let rebuild = match input {
-            0 => ui
-                .add(
-                    egui::DragValue::new(&mut self.size.0)
-                        .range(1..=8192)
-                        .clamp_existing_to_range(true),
-                )
-                .changed(),
-            1 => ui
-                .add(
-                    egui::DragValue::new(&mut self.size.1)
-                        .range(1..=8192)
-                        .clamp_existing_to_range(true),
-                )
-                .changed(),
-            2 => false,
-            _ => unreachable!(),
-        };
-
-        if rebuild {
-            self.rebuild();
-        }
+    fn input_ui(&mut self, input: usize, _ui: &mut Ui) {
+        assert_eq!(input, 0);
+        // No additional UI for input
     }
 
     fn set_input(&mut self, input: usize, value: JackalValue) {
-        match input {
-            0 => match value {
-                JackalValue::Uint(value) => {
-                    self.size.0 = value;
-                }
-                _ => unreachable!(),
-            },
-            1 => match value {
-                JackalValue::Uint(value) => {
-                    self.size.1 = value;
-                }
-                _ => unreachable!(),
-            },
-            2 => match value {
-                JackalValue::Null => {
-                    self.input = None;
-                }
-                JackalValue::Image(ImageValue::Rgb8U(image)) => {
-                    self.input = Some(Image::new(
-                        image.width,
-                        image.height,
-                        image.pixels.into_iter().map(Rgb8U::into_f32).collect(),
-                    ));
-                }
-                _ => unreachable!(),
-            },
+        assert_eq!(input, 0);
+
+        self.output = None;
+        self.body.unmake_texture();
+
+        match value {
+            JackalValue::Null => return,
+            JackalValue::Image(image) => self.input = Some(image),
             _ => unreachable!(),
-        }
+        };
 
         self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
+        self.body.unmake_texture();
+
+        let Some(input) = &self.input else {
+            return;
+        };
+
+        match input {
+            ImageValue::Rgb8U(image) => {
+                let palette = jkl::palette::build_palette(
+                    image.pixels.iter().copied().map(rgb8u_to_vec3),
+                    self.size,
+                );
+
+                let mut output = image.clone();
+
+                for pixel in &mut output.pixels {
+                    fit_into_clusters(pixel, &palette, rgb8u_to_vec3, vec3_to_rgb8u);
+                }
+
+                self.output = Some(ImageValue::Rgb8U(output));
+            }
+            ImageValue::BC1(image) => {
+                let palette: Vec<Vec3> = jkl::palette::build_palette(
+                    image
+                        .pixels
+                        .iter()
+                        .flat_map(|b| [rgb565_to_vec3(b.color0), rgb565_to_vec3(b.color1)]),
+                    self.size,
+                );
+
+                let mut output = image.clone();
+
+                for pixel in &mut output.pixels {
+                    let mode4 = pixel.color0.bits() > pixel.color1.bits();
+
+                    fit_into_clusters(&mut pixel.color0, &palette, rgb565_to_vec3, vec3_to_rgb565);
+                    fit_into_clusters(&mut pixel.color1, &palette, rgb565_to_vec3, vec3_to_rgb565);
+
+                    if mode4 {
+                        if pixel.color0 == pixel.color1 {
+                            if pixel.color1 == Rgb565::BLACK {
+                                *pixel = bc1::Block::BLACK;
+                            } else {
+                                *pixel = bc1::Block {
+                                    color0: pixel.color0,
+                                    color1: Rgb565::BLACK,
+                                    texels: [0x00; 4],
+                                };
+                            }
+                        } else {
+                            if pixel.color0.bits() < pixel.color1.bits() {
+                                std::mem::swap(&mut pixel.color0, &mut pixel.color1);
+                            }
+                        }
+                    } else {
+                        if pixel.color0.bits() > pixel.color1.bits() {
+                            std::mem::swap(&mut pixel.color0, &mut pixel.color1);
+                        }
+                    }
+                }
+
+                self.output = Some(ImageValue::BC1(output));
+            }
+            _ => unimplemented!(),
+        }
     }
 
     fn outputs(&self) -> usize {
@@ -5159,17 +5135,30 @@ impl ReferenceMapNode {
 
     fn output_ty(&self, output: usize) -> JackalType {
         assert_eq!(output, 0);
-        JackalType::Image(PixelType::Rgb8U)
+        match &self.output {
+            Some(output) => output.ty(),
+            None => JackalType::Null,
+        }
     }
 
     fn output_ui(&mut self, output: usize, ui: &mut Ui) {
         assert_eq!(output, 0);
-        ui.label("Rgb8U image");
+        match &self.output {
+            Some(output) => {
+                ui.label(format!("{} image", output.pixel_name()));
+            }
+            None => {
+                ui.colored_label(Color32::RED, "No image");
+            }
+        }
     }
 
     fn get_output(&self, output: usize) -> JackalValue {
         assert_eq!(output, 0);
-        JackalValue::Null
+        match &self.output {
+            Some(output) => JackalValue::Image(output.clone()),
+            None => JackalValue::Null,
+        }
     }
 
     fn has_body(&self) -> bool {
@@ -5178,398 +5167,42 @@ impl ReferenceMapNode {
 
     fn body_ui(&mut self, ui: &mut Ui) {
         ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::DragValue::new(&mut self.batch_size)
-                        .range(1..=1 << 20)
-                        .clamp_existing_to_range(true),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut self.learning_rate)
-                        .range(0.01..=10.0)
-                        .speed(0.01)
-                        .clamp_existing_to_range(true),
-                );
+            let r = ui.add(
+                egui::DragValue::new(&mut self.size)
+                    .range(1..=usize::MAX)
+                    .speed(1),
+            );
 
-                let r = ui.small_button("train");
-                if r.clicked() {
-                    self.train();
-                }
-
-                let r = ui.small_button("reset");
-                if r.clicked() {
-                    self.rebuild();
-                }
-            });
+            if (r.changed() && !r.dragged()) || r.drag_stopped() {
+                self.rebuild();
+            }
 
             self.body.show(ui);
         });
     }
-
-    fn rebuild(&mut self) {
-        self.body.unmake_texture();
-        self.map = ReferenceMap::new(self.size.0, self.size.1, Rgb32F::BLACK);
-
-        // match &self.input {
-        //     None => {
-        self.map.random_initialize(|| {
-            Rgb32F::new(
-                rand::random_range(0.0..=1.0),
-                rand::random_range(0.0..=1.0),
-                rand::random_range(0.0..=1.0),
-            )
-        });
-        //     }
-        //     Some(input) => {
-        //         let block_size = 8;
-
-        //         self.map
-        //             .as_mut()
-        //             .initialize_patches(input.as_ref(), block_size);
-        //     }
-        // };
-    }
-
-    fn train(&mut self) {
-        let Some(input) = &self.input else {
-            return;
-        };
-
-        self.body.unmake_texture();
-        let block_size = 8;
-        let batch_size = self.batch_size;
-
-        self.map.train2(
-            input.as_ref(),
-            block_size,
-            batch_size,
-            |a, b| (Rgb32F::distance(a, b) + 1.0).log2(),
-            |a, b, e| {
-                let e = self.learning_rate / (1.0 + e).powi(1);
-                Rgb32F::lerp(a, b, e)
-            },
-            // |a, b, e| {
-            //     let e = self.learning_rate * e / block_size as f32 / block_size as f32;
-            //     Rgb32F::lerp(a, b, e)
-            // },
-        );
-    }
 }
 
-impl serde::Serialize for ReferenceMapNode {
+impl serde::Serialize for PaletteNode {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        (self.size.0 as usize, self.size.1 as usize).serialize(serializer)
+        self.size.serialize(serializer)
     }
 }
 
-impl<'de> serde::Deserialize<'de> for ReferenceMapNode {
+impl<'de> serde::Deserialize<'de> for PaletteNode {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let size = <(usize, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
-        Ok(ReferenceMapNode::with_size((size.0, size.1)))
-    }
-}
-
-/// Finds simlar patches in earlier encoded image part
-/// writes reference to the patch and residual.
-struct BlockCopyNode {
-    input: Option<Image<Rgb8U>>,
-    output: Option<Image<Rgb8U>>,
-    ref_size: usize,
-    block_size: usize,
-    window_size: usize,
-    body: ImageWidget,
-}
-
-impl BlockCopyNode {
-    fn new() -> Self {
-        BlockCopyNode {
+        let size = <usize as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        Ok(PaletteNode {
             input: None,
             output: None,
-            ref_size: 0,
-            block_size: 8,
-            window_size: 8,
+            size,
             body: ImageWidget::new(),
-        }
-    }
-
-    fn prepare(&mut self, ctx: &egui::Context) {
-        let Some(output) = &self.output else {
-            return;
-        };
-
-        self.body.make_texture(ctx, || output.to_egui())
-    }
-
-    fn title(&self) -> String {
-        "Block Copy".to_owned()
-    }
-
-    fn inputs(&self) -> usize {
-        3
-    }
-
-    fn set_input_ty(&mut self, input: usize, ty: JackalType) -> bool {
-        match input {
-            0 | 1 => match ty {
-                JackalType::Uint => true,
-                _ => false,
-            },
-            2 => match ty {
-                JackalType::Null => {
-                    self.input = None;
-                    true
-                }
-                JackalType::Image(PixelType::Rgb8U) => {
-                    self.input = None;
-                    true
-                }
-                _ => false,
-            },
-            _ => unreachable!(),
-        }
-    }
-
-    fn input_ty(&self, input: usize) -> JackalType {
-        match input {
-            0 | 1 => JackalType::Uint,
-            2 => match &self.input {
-                None => JackalType::Null,
-                Some(_) => JackalType::Image(PixelType::Rgb8U),
-            },
-            _ => unreachable!(),
-        }
-    }
-
-    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
-        let rebuild = match input {
-            0 => ui
-                .add(
-                    egui::DragValue::new(&mut self.block_size)
-                        .range(1..=8192)
-                        .clamp_existing_to_range(true),
-                )
-                .changed(),
-            1 => ui
-                .add(
-                    egui::DragValue::new(&mut self.window_size)
-                        .range(1..=8192)
-                        .clamp_existing_to_range(true),
-                )
-                .changed(),
-            2 => false,
-            _ => unreachable!(),
-        };
-
-        if rebuild {
-            self.rebuild();
-        }
-    }
-
-    fn set_input(&mut self, input: usize, value: JackalValue) {
-        match input {
-            0 => match value {
-                JackalValue::Uint(value) => {
-                    self.block_size = value;
-                }
-                _ => unreachable!(),
-            },
-            1 => match value {
-                JackalValue::Uint(value) => {
-                    self.window_size = value;
-                }
-                _ => unreachable!(),
-            },
-            2 => match value {
-                JackalValue::Null => {
-                    self.input = None;
-                }
-                JackalValue::Image(ImageValue::Rgb8U(image)) => {
-                    self.input = Some(image);
-                }
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        }
-
-        self.rebuild();
-    }
-
-    fn outputs(&self) -> usize {
-        2
-    }
-
-    fn output_ty(&self, output: usize) -> JackalType {
-        match output {
-            0 => JackalType::Uint,
-            1 => JackalType::Image(PixelType::Rgb8U),
-            _ => unreachable!(),
-        }
-    }
-
-    fn output_ui(&mut self, output: usize, ui: &mut Ui) {
-        match output {
-            0 => {
-                let human_readable = human_readable_bits(self.ref_size);
-                let r = ui.label(human_readable);
-                r.on_hover_ui(|ui| {
-                    ui.label(format!("{} bit", self.ref_size));
-                });
-            }
-            1 => {
-                ui.label("Rgb8U image");
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn get_output(&self, output: usize) -> JackalValue {
-        match output {
-            0 => JackalValue::Uint(self.ref_size as usize),
-            1 => match &self.output {
-                None => JackalValue::Null,
-                Some(image) => JackalValue::Image(ImageValue::Rgb8U(image.clone())),
-            },
-            _ => unreachable!(),
-        }
-    }
-
-    fn has_body(&self) -> bool {
-        true
-    }
-
-    fn body_ui(&mut self, ui: &mut Ui) {
-        self.body.show(ui);
-    }
-
-    fn rebuild(&mut self) {
-        self.body.unmake_texture();
-
-        let Some(input) = &self.input else {
-            return;
-        };
-
-        let mut output = match &mut self.output {
-            Some(output) if output.width == input.width && output.height == input.height => {
-                output.as_mut()
-            }
-            _ => {
-                self.output = None;
-                let image = Image::solid(input.width, input.height, Rgb8U::BLACK);
-                self.output.get_or_insert(image).as_mut()
-            }
-        };
-
-        let mut write_size = WriteSize::new();
-        let mut write_bits = WriteBits::new(&mut write_size);
-
-        for y in (0..input.height).step_by(self.block_size) {
-            for x in (0..input.width).step_by(self.block_size) {
-                if x == 0 && y == 0 {
-                    // skip first block
-                    continue;
-                }
-
-                let bw = usize::min(self.block_size, input.width - x);
-                let bh = usize::min(self.block_size, input.height - y);
-
-                let from_x = x.saturating_sub(self.window_size);
-                let to_x = (x + bw + self.window_size).min(input.width);
-                let from_y = y.saturating_sub(self.window_size);
-
-                let block = input.as_ref().get_range(x, y, bw, bh);
-
-                let (best_error1, best_match1) = if y > 0 {
-                    let to_y = y + bh - 1;
-
-                    let (error, (mx, my)) = input
-                        .as_ref()
-                        .get_range(from_x, from_y, to_x - from_x, to_y - from_y)
-                        .find_best_match(1, 1, block, Rgb8U::distance);
-
-                    (error, (mx + from_x, my + from_y))
-                } else {
-                    (f32::INFINITY, (0, 0))
-                };
-
-                let (best_error2, best_match2) = if x > 0 {
-                    let to_x = x + bw - 1;
-                    let from_y = y;
-                    let to_y = y + bh;
-
-                    let (error, (mx, my)) = input
-                        .as_ref()
-                        .get_range(from_x, from_y, to_x - from_x, to_y - from_y)
-                        .find_best_match(1, 1, block, Rgb8U::distance);
-
-                    (error, (mx + from_x, my + from_y))
-                } else {
-                    (f32::INFINITY, (0, 0))
-                };
-
-                assert!(best_error1.is_finite() || best_error2.is_finite());
-
-                let out_block = output.get_range_mut(x, y, bw, bh);
-
-                if best_error1 < best_error2 {
-                    input.as_ref().residual(
-                        best_match1.0,
-                        best_match1.1,
-                        block,
-                        out_block,
-                        Rgb8U::wrapping_sub,
-                    );
-
-                    vle::encode(
-                        (x as isize - best_match1.0 as isize).zigzag(),
-                        &mut write_bits,
-                    )
-                    .unwrap();
-                    vle::encode(y - best_match1.1, &mut write_bits).unwrap();
-                } else {
-                    input.as_ref().residual(
-                        best_match2.0,
-                        best_match2.1,
-                        block,
-                        out_block,
-                        Rgb8U::wrapping_sub,
-                    );
-
-                    vle::encode(
-                        (x as isize - best_match2.0 as isize).zigzag(),
-                        &mut write_bits,
-                    )
-                    .unwrap();
-                    vle::encode(y - best_match2.1, &mut write_bits).unwrap();
-                }
-            }
-        }
-
-        self.ref_size = write_size.size as usize * 8;
-    }
-}
-
-impl serde::Serialize for BlockCopyNode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        <() as serde::Serialize>::serialize(&(), serializer)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for BlockCopyNode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        <() as serde::Deserialize<'de>>::deserialize(deserializer)?;
-        Ok(BlockCopyNode::new())
+        })
     }
 }
 
@@ -5826,4 +5459,44 @@ fn lzbc1_delta(a: lz77::Token<bc1::Block>, b: lz77::Token<bc1::Block>) -> lz77::
             }
         }
     }
+}
+
+fn rgb8u_to_vec3(p: Rgb8U) -> Vec3 {
+    p.into_f32().into()
+}
+
+fn vec3_to_rgb8u(v: Vec3) -> Rgb8U {
+    Rgb8U::from_f32(Rgb32F::from(v))
+}
+
+fn rgb565_to_vec3(p: Rgb565) -> Vec3 {
+    p.into_f32().into()
+}
+
+fn vec3_to_rgb565(v: Vec3) -> Rgb565 {
+    Rgb565::from_f32(Rgb32F::from(v))
+}
+
+fn fit_into_clusters<T, IntoVec, FromVec>(
+    sample: &mut T,
+    centroids: &[Vec3],
+    into_vec: IntoVec,
+    from_vec: FromVec,
+) where
+    T: Copy,
+    IntoVec: Fn(T) -> Vec3,
+    FromVec: Fn(Vec3) -> T,
+{
+    let mut best_distance = f32::INFINITY;
+    let mut best_cluster = 0;
+
+    for (i, centroid) in centroids.iter().enumerate() {
+        let distance = centroid.distance_squared(into_vec(*sample));
+        if distance < best_distance {
+            best_distance = distance;
+            best_cluster = i;
+        }
+    }
+
+    *sample = from_vec(centroids[best_cluster]);
 }

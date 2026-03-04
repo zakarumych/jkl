@@ -136,9 +136,12 @@ impl Block {
                 let mut b = R8U::from_f32(R32F::new(b));
 
                 if a == b {
-                    b = R8U::from_bits(!a.bits());
-                }
-                if a.bits() < b.bits() {
+                    if b == R8U::BLACK {
+                        a = R8U::WHITE;
+                    } else {
+                        b = R8U::BLACK;
+                    }
+                } else if a.bits() < b.bits() {
                     core::mem::swap(&mut a, &mut b);
                 }
 
