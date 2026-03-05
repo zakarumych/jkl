@@ -4,7 +4,7 @@ use crate::math::Vector;
 
 struct Cluster<T> {
     centroid: T,
-    samples: SmallVec<[T; 16]>,
+    vectors: SmallVec<[T; 16]>,
 }
 
 impl<T> Cluster<T>
@@ -12,28 +12,58 @@ where
     T: Vector,
 {
     fn total_squared_error(&self) -> f32 {
-        self.centroid.total_squared_error(&self.samples)
+        self.centroid.total_squared_error(&self.vectors)
     }
 
     fn is_empty(&self) -> bool {
-        self.samples.is_empty()
+        self.vectors.is_empty()
     }
+}
+
+pub fn find_cluster<T, V>(sample: T, centroids: &[V], tv: impl Fn(T) -> V + Copy) -> usize
+where
+    V: Vector,
+{
+    let vector = tv(sample);
+
+    let mut min_error = f32::INFINITY;
+    let mut best_cluster = 0;
+
+    for (i, &centroid) in centroids.iter().enumerate() {
+        let error = centroid.distance_squared(vector);
+        if error < min_error {
+            min_error = error;
+            best_cluster = i;
+        }
+    }
+
+    best_cluster
 }
 
 /// Builds a palette from samples,
 /// clustering values into a predefined number of voronoi cells.
 /// Finds optimal palette to minimize total squared error across all samples.
-pub fn build_palette<T>(samples: impl Iterator<Item = T>, len: usize) -> Vec<T>
+pub fn build_palette<T, V>(
+    samples: impl Iterator<Item = T>,
+    len: usize,
+    tv: impl Fn(T) -> V + Copy,
+) -> Vec<V>
 where
-    T: Vector,
+    T: Copy,
+    V: Vector,
 {
     let all_samples = samples.collect::<SmallVec<[T; 16]>>();
+    let all_vectors = all_samples
+        .iter()
+        .copied()
+        .map(tv)
+        .collect::<SmallVec<[V; 16]>>();
 
-    let centroid = T::centroid(&all_samples);
+    let centroid = V::centroid(&all_vectors);
 
     let mut clusters = vec![Cluster {
         centroid,
-        samples: all_samples.clone(),
+        vectors: all_vectors,
     }];
 
     while clusters.len() < len {
@@ -66,10 +96,10 @@ where
             }
         }
 
-        let mut last_error = rebuild_clusters(&all_samples, &mut clusters);
+        let mut last_error = rebuild_clusters(&all_samples, &mut clusters, tv);
 
         for _ in 0..2 {
-            let error = rebuild_clusters(&all_samples, &mut clusters);
+            let error = rebuild_clusters(&all_samples, &mut clusters, tv);
             if error + 0.0001 >= last_error {
                 break;
             }
@@ -77,10 +107,10 @@ where
         }
     }
 
-    let mut last_error = rebuild_clusters(&all_samples, &mut clusters);
+    let mut last_error = rebuild_clusters(&all_samples, &mut clusters, tv);
 
     for _ in 0..10 {
-        let error = rebuild_clusters(&all_samples, &mut clusters);
+        let error = rebuild_clusters(&all_samples, &mut clusters, tv);
         if error + 0.0001 >= last_error {
             break;
         }
@@ -90,22 +120,29 @@ where
     clusters.into_iter().map(|c| c.centroid).collect()
 }
 
-fn rebuild_clusters<T>(samples: &[T], clusters: &mut Vec<Cluster<T>>) -> f32
+fn rebuild_clusters<T, V>(
+    samples: &[T],
+    clusters: &mut Vec<Cluster<V>>,
+    tv: impl Fn(T) -> V + Copy,
+) -> f32
 where
-    T: Vector,
+    T: Copy,
+    V: Vector,
 {
     for c in &mut *clusters {
-        c.samples.clear();
+        c.vectors.clear();
     }
 
     let mut total_error = 0.0f32;
 
     for &sample in samples {
+        let vector = tv(sample);
+
         let mut min_error = f32::INFINITY;
         let mut best_cluster = 0;
 
         for (i, cluster) in clusters.iter().enumerate() {
-            let error = cluster.centroid.distance_squared(sample);
+            let error = cluster.centroid.distance_squared(vector);
             if error < min_error {
                 min_error = error;
                 best_cluster = i;
@@ -114,42 +151,42 @@ where
 
         total_error += min_error;
 
-        clusters[best_cluster].samples.push(sample);
+        clusters[best_cluster].vectors.push(vector);
     }
 
     clusters.retain(|c| !c.is_empty());
 
     for c in &mut *clusters {
-        c.centroid = T::centroid(&c.samples);
+        c.centroid = V::centroid(&c.vectors);
     }
 
     total_error
 }
 
 /// Calculate the gain from splitting a cluster of samples along the principal axis.
-fn cluster_split<T>(cluster: &Cluster<T>) -> (Cluster<T>, Cluster<T>)
+fn cluster_split<V>(cluster: &Cluster<V>) -> (Cluster<V>, Cluster<V>)
 where
-    T: Vector,
+    V: Vector,
 {
-    let axis = T::principal_axis(&cluster.samples);
+    let axis = V::principal_axis(&cluster.vectors);
     let centroid_projection = cluster.centroid.project(axis);
 
     let (left, right) = cluster
-        .samples
+        .vectors
         .iter()
         .copied()
-        .partition::<SmallVec<[T; 16]>, _>(|s| s.project(axis) < centroid_projection);
+        .partition::<SmallVec<[V; 16]>, _>(|s| s.project(axis) < centroid_projection);
 
-    let left_centroid = T::centroid(&left);
-    let right_centroid = T::centroid(&right);
+    let left_centroid = V::centroid(&left);
+    let right_centroid = V::centroid(&right);
 
     let left = Cluster {
         centroid: left_centroid,
-        samples: left,
+        vectors: left,
     };
     let right = Cluster {
         centroid: right_centroid,
-        samples: right,
+        vectors: right,
     };
 
     (left, right)

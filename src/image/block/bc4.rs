@@ -80,22 +80,22 @@ impl Block {
         let palette = if self.color0.bits() > self.color1.bits() {
             [
                 color0,
+                color1,
                 R32F::lerp(color0, color1, 1.0 / 7.0),
                 R32F::lerp(color0, color1, 2.0 / 7.0),
                 R32F::lerp(color0, color1, 3.0 / 7.0),
                 R32F::lerp(color0, color1, 4.0 / 7.0),
                 R32F::lerp(color0, color1, 5.0 / 7.0),
                 R32F::lerp(color0, color1, 6.0 / 7.0),
-                color1,
             ]
         } else {
             [
                 color0,
+                color1,
                 R32F::lerp(color0, color1, 1.0 / 5.0),
                 R32F::lerp(color0, color1, 2.0 / 5.0),
                 R32F::lerp(color0, color1, 3.0 / 5.0),
                 R32F::lerp(color0, color1, 4.0 / 5.0),
-                color1,
                 R32F::BLACK,
                 R32F::WHITE,
             ]
@@ -166,7 +166,17 @@ impl Block {
         let mut texels = [0; 6];
         for y in 0..4 {
             for x in 0..4 {
-                let idx = (cf.indices[y * 4 + x] as u8) & 0b111;
+                let idx = match cf.indices[y * 4 + x] {
+                    0 => 0,
+                    1 => 2,
+                    2 => 3,
+                    3 => 4,
+                    4 => 5,
+                    5 => 6,
+                    6 => 7,
+                    7 => 1,
+                    _ => unreachable!(),
+                };
 
                 let start_bit = (y * 4 + x) * 3;
                 let start_byte = start_bit / 8;

@@ -90,23 +90,12 @@ impl Block {
         let texels = self.texels;
 
         // Check mode and build palette.
-        let palette = if self.color0.bits() > self.color1.bits() {
-            // Interpolate two intermediate colors.
-            [
-                color0,
-                Rgb32F::lerp(color0, color1, 1.0 / 3.0),
-                Rgb32F::lerp(color0, color1, 2.0 / 3.0),
-                color1,
-            ]
-        } else {
-            // Interpolate one intermediate color.
-            [
-                color0,
-                Rgb32F::lerp(color0, color1, 1.0 / 2.0),
-                color1,
-                Rgb32F::BLACK,
-            ]
-        };
+        let palette = [
+            color0,
+            color1,
+            Rgb32F::lerp(color0, color1, 1.0 / 3.0),
+            Rgb32F::lerp(color0, color1, 2.0 / 3.0),
+        ];
 
         let mut colors = [[Rgb32F::BLACK; 4]; 4];
 
@@ -114,7 +103,6 @@ impl Block {
         for i in 0..4 {
             for j in 0..4 {
                 let index = (texels[i] >> (2 * j)) & 0b11;
-
                 colors[i][j] = palette[index as usize];
             }
         }
@@ -135,9 +123,9 @@ impl Block {
         // Check mode and build palette.
         let palette = [
             color0,
+            color1,
             Rgb32F::lerp(color0, color1, 1.0 / 3.0),
             Rgb32F::lerp(color0, color1, 2.0 / 3.0),
-            color1,
         ];
 
         // Decode texels.
@@ -206,7 +194,13 @@ impl Block {
         let mut texels = [0; 4];
         for y in 0..4 {
             for x in 0..4 {
-                let idx = (cf.indices[y * 4 + x] as u8) & 0b11;
+                let idx = match cf.indices[y * 4 + x] {
+                    0 => 0,
+                    1 => 2,
+                    2 => 3,
+                    3 => 1,
+                    _ => unreachable!(),
+                };
                 texels[y] |= idx << (x * 2);
             }
         }
@@ -280,7 +274,13 @@ impl Block {
         let mut texels = [0; 4];
         for y in 0..4 {
             for x in 0..4 {
-                let idx = (cf.indices[y * 4 + x] as u8) & 0b11;
+                let idx = match cf.indices[y * 4 + x] {
+                    0 => 0,
+                    1 => 2,
+                    2 => 3,
+                    3 => 1,
+                    _ => unreachable!(),
+                };
                 texels[y] |= idx << (x * 2);
             }
         }

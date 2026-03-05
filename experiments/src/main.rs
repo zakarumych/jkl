@@ -16,6 +16,7 @@ use jkl::{
     jackal, lz77,
     math::{interleave16_2, Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3, Vector},
     max_rects::MaximalRectangles,
+    palette::find_cluster,
     vle::{self, Vle},
     zigzaq::ZigZag,
 };
@@ -5071,25 +5072,25 @@ impl PaletteNode {
         match input {
             ImageValue::Rgb8U(image) => {
                 let palette = jkl::palette::build_palette(
-                    image.pixels.iter().copied().map(rgb8u_to_vec3),
+                    image.pixels.iter().copied(),
                     self.size,
+                    rgb8u_to_vec3,
                 );
 
                 let mut output = image.clone();
 
                 for pixel in &mut output.pixels {
-                    fit_into_clusters(pixel, &palette, rgb8u_to_vec3, vec3_to_rgb8u);
+                    let idx = find_cluster(*pixel, &palette, rgb8u_to_vec3);
+                    *pixel = vec3_to_rgb8u(palette[idx]);
                 }
 
                 self.output = Some(ImageValue::Rgb8U(output));
             }
             ImageValue::BC1(image) => {
                 let palette: Vec<Vec3> = jkl::palette::build_palette(
-                    image
-                        .pixels
-                        .iter()
-                        .flat_map(|b| [rgb565_to_vec3(b.color0), rgb565_to_vec3(b.color1)]),
+                    image.pixels.iter().flat_map(|b| [b.color0, b.color1]),
                     self.size,
+                    rgb565_to_vec3,
                 );
 
                 let mut output = image.clone();
@@ -5097,8 +5098,10 @@ impl PaletteNode {
                 for pixel in &mut output.pixels {
                     let mode4 = pixel.color0.bits() > pixel.color1.bits();
 
-                    fit_into_clusters(&mut pixel.color0, &palette, rgb565_to_vec3, vec3_to_rgb565);
-                    fit_into_clusters(&mut pixel.color1, &palette, rgb565_to_vec3, vec3_to_rgb565);
+                    let idx0 = find_cluster(pixel.color0, &palette, rgb565_to_vec3);
+                    pixel.color0 = vec3_to_rgb565(palette[idx0]);
+                    let idx1 = find_cluster(pixel.color1, &palette, rgb565_to_vec3);
+                    pixel.color1 = vec3_to_rgb565(palette[idx1]);
 
                     if mode4 {
                         if pixel.color0 == pixel.color1 {
@@ -5475,28 +5478,4 @@ fn rgb565_to_vec3(p: Rgb565) -> Vec3 {
 
 fn vec3_to_rgb565(v: Vec3) -> Rgb565 {
     Rgb565::from_f32(Rgb32F::from(v))
-}
-
-fn fit_into_clusters<T, IntoVec, FromVec>(
-    sample: &mut T,
-    centroids: &[Vec3],
-    into_vec: IntoVec,
-    from_vec: FromVec,
-) where
-    T: Copy,
-    IntoVec: Fn(T) -> Vec3,
-    FromVec: Fn(Vec3) -> T,
-{
-    let mut best_distance = f32::INFINITY;
-    let mut best_cluster = 0;
-
-    for (i, centroid) in centroids.iter().enumerate() {
-        let distance = centroid.distance_squared(into_vec(*sample));
-        if distance < best_distance {
-            best_distance = distance;
-            best_cluster = i;
-        }
-    }
-
-    *sample = from_vec(centroids[best_cluster]);
 }
