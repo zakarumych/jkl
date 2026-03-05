@@ -15,7 +15,7 @@
 //! # Feature highlights
 //!
 //! * **GPU-oriented block texture codecs** - encode and decode BC1 through BC5
-//!   blocks with cluster-fit quality ([`bc1`], [`bc2`], [`bc3`], [`bc4`], [`bc5`], powered by [`cluster_fit`]).
+//!   blocks with cluster-fit quality ([`bc1`](image::block::bc1), [`bc2`](image::block::bc2), [`bc3`](image::block::bc3), [`bc4`](image::block::bc4), [`bc5`](image::block::bc5), powered by [`cluster_fit`]).
 //! * **Layered entropy coding** - stack [`lz77`] or [`rle`] with [`ans`] for
 //!   near-optimal compression ratios while keeping decompression blazingly fast
 //!   - simple enough for a GPU compute shader.
@@ -31,8 +31,8 @@
 //!
 //! | I want to …                              | Start here                                                                              |
 //! |-------------------------------------------|-----------------------------------------------------------------------------------------|
-//! | Compress a texture to BC1–BC5             | [`bc1::Block::encode`], [`bc2::Block::encode`], [`bc3::Block::encode`], [`bc4::Block::encode`], [`bc5::Block::encode`]                             |
-//! | Decompress a BC block                     | [`bc1::Block::decode`], [`bc2::Block::decode`], [`bc3::Block::decode`], [`bc4::Block::decode`], [`bc5::Block::decode`]                                      |
+//! | Compress a texture to BC1–BC5             | [`bc1::Block::encode`](image::block::bc1::Block::encode), [`bc2::Block::encode`](image::block::bc2::Block::encode), [`bc3::Block::encode`](image::block::bc3::Block::encode), [`bc4::Block::encode`](image::block::bc4::Block::encode), [`bc5::Block::encode`](image::block::bc5::Block::encode)                             |
+//! | Decompress a BC block                     | [`bc1::Block::decode`](image::block::bc1::Block::decode), [`bc2::Block::decode`](image::block::bc2::Block::decode), [`bc3::Block::decode`](image::block::bc3::Block::decode), [`bc4::Block::decode`](image::block::bc4::Block::decode), [`bc5::Block::decode`](image::block::bc5::Block::decode)                                      |
 //! | Write / read a complete Jackal Image file | [`jackal::image::write_image`], [`jackal::image::JackalReader`]                         |
 //! | Entropy-code a symbol stream              | Build an [`ans::Context`], then use [`ans::Encoder`] / [`ans::Decoder`]                 |
 //! | Run-length encode an iterator             | [`rle::rle`], [`rle::rle_power_of_two`], or [`rle::rle_with_cfg`]                       |
