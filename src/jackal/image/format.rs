@@ -3,10 +3,10 @@ use std::{hash::Hash, io};
 use smallvec::SmallVec;
 
 use crate::{
-    bits::{write_bits_scope, ReadBits},
+    bits::{ReadBits, write_bits_scope},
     encode::{FixedCode, VarCode},
-    image::{block::bc1, compress::Compressor, format::Format, Image2DMut, Image2DRef},
-    math::{Rgb565, Rgb8U},
+    image::{Image2DMut, Image2DRef, block::bc1, compress::Compressor, format::Format},
+    math::{Rgb8U, Rgb565},
     vle::Vle,
 };
 

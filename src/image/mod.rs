@@ -322,7 +322,7 @@ impl<'a, T> Image2DRef<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> + use<'a, T> {
         let Self {
             width,
             height,
@@ -338,7 +338,7 @@ impl<'a, T> Image2DRef<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> {
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> + use<'a, T> {
         let Self {
             width,
             height,
@@ -545,7 +545,7 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_rows(&self) -> impl Iterator<Item = &'_ [T]> {
+    pub fn iter_rows(&self) -> impl Iterator<Item = &'_ [T]> + use<'_, T> {
         let Self {
             width,
             height,
@@ -561,7 +561,7 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
+    pub fn iter_rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> + use<'_, T> {
         let Self {
             width,
             height,
@@ -577,7 +577,7 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn into_iter_rows(self) -> impl Iterator<Item = &'a mut [T]> {
+    pub fn into_iter_rows(self) -> impl Iterator<Item = &'a mut [T]> + use<'a, T> {
         let Self {
             width,
             height,
@@ -593,7 +593,7 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_pixels(&self) -> impl Iterator<Item = &T> {
+    pub fn iter_pixels(&self) -> impl Iterator<Item = &T> + use<'_, T> {
         let Self {
             width,
             height,
@@ -609,7 +609,7 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_pixels_mut(&mut self) -> impl Iterator<Item = &'_ mut T> {
+    pub fn iter_pixels_mut(&mut self) -> impl Iterator<Item = &'_ mut T> + use<'_, T> {
         let Self {
             width,
             height,
@@ -625,7 +625,7 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn into_iter_pixels(self) -> impl Iterator<Item = &'a mut T> {
+    pub fn into_iter_pixels(self) -> impl Iterator<Item = &'a mut T> + use<'a, T> {
         let Self {
             width,
             height,
@@ -1013,7 +1013,7 @@ impl<'a, T> Image3DRef<'a, T> {
     ///
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
-    pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'a, T>> {
+    pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'a, T>> + use<'a, T> {
         let Self {
             width,
             height,
@@ -1044,7 +1044,7 @@ impl<'a, T> Image3DRef<'a, T> {
     ///
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> + use<'a, T> {
         let Self {
             width,
             height,
@@ -1072,7 +1072,7 @@ impl<'a, T> Image3DRef<'a, T> {
     ///
     /// In case you want to iterate over pixels in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
-    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> {
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> + use<'a, T> {
         let Self {
             width,
             height,
@@ -1523,7 +1523,7 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
-    pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'_, T>> {
+    pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'_, T>> + use<'_, T> {
         let Self {
             width,
             height,
@@ -1551,7 +1551,9 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn iter_planes_mut(&mut self) -> impl DoubleEndedIterator<Item = Image2DMut<'_, T>> {
+    pub fn iter_planes_mut(
+        &mut self,
+    ) -> impl DoubleEndedIterator<Item = Image2DMut<'_, T>> + use<'_, T> {
         let Self {
             width,
             height,
@@ -1579,7 +1581,9 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn into_iter_planes(self) -> impl DoubleEndedIterator<Item = Image2DMut<'a, T>> {
+    pub fn into_iter_planes(
+        self,
+    ) -> impl DoubleEndedIterator<Item = Image2DMut<'a, T>> + use<'a, T> {
         let Self {
             width,
             height,
@@ -1609,7 +1613,7 @@ impl<'a, T> Image3DMut<'a, T> {
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &[T]> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &[T]> + use<'_, T> {
         let Self {
             width,
             height,
@@ -1634,7 +1638,7 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn iter_rows_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut [T]> {
+    pub fn iter_rows_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut [T]> + use<'_, T> {
         let Self {
             width,
             height,
@@ -1659,7 +1663,7 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = &'a mut [T]> {
+    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = &'a mut [T]> + use<'a, T> {
         let Self {
             width,
             height,
@@ -1686,7 +1690,7 @@ impl<'a, T> Image3DMut<'a, T> {
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
     /// In case you want to iterate over pixels in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
-    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &T> {
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &T> + use<'_, T> {
         let Self {
             width,
             height,
@@ -1711,7 +1715,7 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn iter_pixels_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
+    pub fn iter_pixels_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> + use<'_, T> {
         let Self {
             width,
             height,
@@ -1736,7 +1740,7 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn into_iter_pixels(self) -> impl DoubleEndedIterator<Item = &'a mut T> {
+    pub fn into_iter_pixels(self) -> impl DoubleEndedIterator<Item = &'a mut T> + use<'a, T> {
         let Self {
             width,
             height,

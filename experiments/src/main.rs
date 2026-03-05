@@ -1,24 +1,22 @@
 use std::{array, io, path::PathBuf, usize};
 
 use egui::{
-    emath::TSTransform, load::SizedTexture, CentralPanel, Color32, Pos2, Stroke, TextureHandle,
-    TextureOptions, Ui, Vec2,
+    CentralPanel, Color32, Pos2, Stroke, TextureHandle, TextureOptions, Ui, emath::TSTransform,
+    load::SizedTexture,
 };
 use egui_snarl::{
-    ui::{PinInfo, SnarlViewer, SnarlWidget},
     InPin, OutPin, Snarl,
+    ui::{PinInfo, SnarlViewer, SnarlWidget},
 };
-use image::Rgb;
 use jkl::{
     bits::WriteBits,
     encode::{FixedCode, VarCode},
-    image::{block::bc1, Image2DMut, Image2DRef, ImageMut, ImageRef},
-    jackal, lz77,
-    math::{interleave16_2, Rgb32F, Rgb565, Rgb8U, Rgba8U, Vec3, Vector},
+    image::block::bc1,
+    lz77,
+    math::{Rgb8U, Rgb32F, Rgb565, Rgba8U, Vec3, interleave16_2},
     max_rects::MaximalRectangles,
     palette::find_cluster,
-    vle::{self, Vle},
-    zigzaq::ZigZag,
+    vle::Vle,
 };
 
 fn main() {
@@ -352,7 +350,6 @@ impl PixelType {
 enum JackalType {
     Null,
     Uint,
-    Pixel(PixelType),
     Image(PixelType),
 }
 
@@ -361,9 +358,6 @@ impl JackalType {
         match *self {
             JackalType::Null => Color32::PLACEHOLDER,
             JackalType::Uint => Color32::RED,
-            JackalType::Pixel(PixelType::Rgb8U) => Color32::BLUE,
-            JackalType::Pixel(PixelType::Rgba8U) => Color32::GREEN,
-            JackalType::Pixel(PixelType::BC1) => Color32::YELLOW,
             JackalType::Image(PixelType::Rgb8U) => Color32::LIGHT_BLUE,
             JackalType::Image(PixelType::Rgba8U) => Color32::LIGHT_GREEN,
             JackalType::Image(PixelType::BC1) => Color32::LIGHT_YELLOW,
@@ -379,18 +373,6 @@ enum PixelValue {
 }
 
 impl PixelValue {
-    fn pixel_ty(&self) -> PixelType {
-        match *self {
-            PixelValue::Rgb8U(_) => PixelType::Rgb8U,
-            PixelValue::Rgba8U(_) => PixelType::Rgba8U,
-            PixelValue::BC1(_) => PixelType::BC1,
-        }
-    }
-
-    fn ty(&self) -> JackalType {
-        JackalType::Pixel(self.pixel_ty())
-    }
-
     fn hash(&self) -> usize {
         match self {
             PixelValue::Rgb8U(pixel) => {
@@ -415,14 +397,6 @@ impl PixelValue {
             PixelValue::Rgb8U(p) => p,
             PixelValue::Rgba8U(p) => p.rgb(),
             PixelValue::BC1(b) => b.color0.into_8u(),
-        }
-    }
-
-    pub fn rgba(&self) -> Rgba8U {
-        match *self {
-            PixelValue::Rgb8U(p) => p.into_opaque(),
-            PixelValue::Rgba8U(p) => p,
-            PixelValue::BC1(b) => b.color0.into_8u().into_opaque(),
         }
     }
 }
@@ -505,7 +479,6 @@ impl ImageValue {
 enum JackalValue {
     Null,
     Uint(usize),
-    Pixel(PixelValue),
     Image(ImageValue),
 }
 
@@ -514,7 +487,6 @@ impl JackalValue {
         match self {
             JackalValue::Null => JackalType::Null,
             JackalValue::Uint(_) => JackalType::Uint,
-            JackalValue::Pixel(pixel) => pixel.ty(),
             JackalValue::Image(image) => image.ty(),
         }
     }
@@ -802,29 +774,19 @@ struct SourceImageNode {
 }
 
 impl SourceImageNode {
-    fn new(file: PathBuf) -> Self {
-        let image = image::open(&file).map(convert_image);
+    // fn reload(&mut self) {
+    //     self.body.unmake_texture();
 
-        SourceImageNode {
-            file,
-            image,
-            body: ImageWidget::new(),
-        }
-    }
-
-    fn reload(&mut self) {
-        self.body.unmake_texture();
-
-        match image::open(&self.file) {
-            Ok(image) => {
-                self.image = Ok(convert_image(image));
-            }
-            Err(e) if self.image.is_err() => {
-                self.image = Err(e);
-            }
-            Err(_) => {}
-        }
-    }
+    //     match image::open(&self.file) {
+    //         Ok(image) => {
+    //             self.image = Ok(convert_image(image));
+    //         }
+    //         Err(e) if self.image.is_err() => {
+    //             self.image = Err(e);
+    //         }
+    //         Err(_) => {}
+    //     }
+    // }
 
     fn prepare(&mut self, ctx: &egui::Context) {
         match &self.image {
@@ -1306,9 +1268,9 @@ fn rgb_image_to_jkl(rgb: image::Rgb<u8>) -> Rgb8U {
     Rgb8U::new(rgb[0], rgb[1], rgb[2])
 }
 
-fn rgb565_to_egui(rgb: Rgb565) -> egui::Color32 {
-    rgb8u_to_egui(rgb.into_8u())
-}
+// fn rgb565_to_egui(rgb: Rgb565) -> egui::Color32 {
+//     rgb8u_to_egui(rgb.into_8u())
+// }
 
 fn convert_image(image: image::DynamicImage) -> ImageValue {
     match image {
@@ -1340,29 +1302,29 @@ impl<T> Image<T>
 where
     T: Copy,
 {
-    fn as_ref(&self) -> Image2DRef<'_, T> {
-        Image2DRef::new(self.width, self.height, &self.pixels)
-    }
+    // fn as_ref(&self) -> Image2DRef<'_, T> {
+    //     Image2DRef::new(self.width, self.height, &self.pixels)
+    // }
 
-    fn as_mut(&mut self) -> Image2DMut<'_, T> {
-        Image2DMut::new(self.width, self.height, &mut self.pixels)
-    }
+    // fn as_mut(&mut self) -> Image2DMut<'_, T> {
+    //     Image2DMut::new(self.width, self.height, &mut self.pixels)
+    // }
 
     fn solid(width: usize, height: usize, fill: T) -> Self {
         Image {
             width,
             height,
-            pixels: vec![fill; (width * height)],
+            pixels: vec![fill; width * height],
         }
     }
 
-    fn new(width: usize, height: usize, pixels: Vec<T>) -> Self {
-        Image {
-            width,
-            height,
-            pixels,
-        }
-    }
+    // fn new(width: usize, height: usize, pixels: Vec<T>) -> Self {
+    //     Image {
+    //         width,
+    //         height,
+    //         pixels,
+    //     }
+    // }
 
     fn get(&self, x: usize, y: usize) -> T {
         self.pixels[y * self.width + x]
@@ -1399,7 +1361,7 @@ impl Image<bc1::Block> {
             size: [self.width * 4, self.height * 4],
             source_size: egui::Vec2::new(self.width as f32 * 4.0, self.height as f32 * 4.0),
             pixels: {
-                let mut pixels = vec![egui::Color32::BLACK; (self.width * self.height * 16)];
+                let mut pixels = vec![egui::Color32::BLACK; self.width * self.height * 16];
 
                 for y in 0..self.height {
                     for x in 0..self.width {
@@ -1422,15 +1384,11 @@ impl Image<bc1::Block> {
 
 struct ImageWidget {
     texture: Option<TextureHandle>,
-    max_size: Vec2,
 }
 
 impl ImageWidget {
     fn new() -> Self {
-        ImageWidget {
-            texture: None,
-            max_size: Vec2::INFINITY,
-        }
+        ImageWidget { texture: None }
     }
 
     fn make_texture(&mut self, ctx: &egui::Context, image: impl FnOnce() -> egui::ColorImage) {
@@ -1710,10 +1668,6 @@ impl SizeOfNode {
                 assert_eq!(self.input, JackalType::Uint);
                 self.size = 64;
             }
-            JackalValue::Pixel(pixel) => {
-                assert_eq!(self.input, JackalType::Pixel(pixel.pixel_ty()));
-                self.size = pixel.pixel_ty().bit_size();
-            }
             JackalValue::Image(image) => {
                 assert_eq!(self.input, JackalType::Image(image.pixel_ty()));
                 self.size = image.pixel_ty().bit_size()
@@ -1868,7 +1822,7 @@ impl LZ77CalculatorNode {
         }
     }
 
-    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
+    fn input_ui(&mut self, input: usize, _ui: &mut Ui) {
         match input {
             0 => {}
             _ => unreachable!(),
@@ -2238,7 +2192,7 @@ impl LZ78CalculatorNode {
         }
     }
 
-    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
+    fn input_ui(&mut self, input: usize, _ui: &mut Ui) {
         match input {
             0 => {}
             _ => unreachable!(),
@@ -2560,7 +2514,7 @@ impl RansCalculatorNode {
         }
     }
 
-    fn input_ui(&mut self, input: usize, ui: &mut Ui) {
+    fn input_ui(&mut self, input: usize, _ui: &mut Ui) {
         match input {
             0 => {}
             _ => unreachable!(),

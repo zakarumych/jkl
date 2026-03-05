@@ -8,7 +8,6 @@ license.workspace = true
 jkl = { path = ".." }
 eframe = { workspace = true, features = ["persistence"] }
 image.workspace = true
-rand.workspace = true
 egui.workspace = true
 
 egui-snarl = { version = "0.9", features = ["serde"] }
