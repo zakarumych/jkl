@@ -1,0 +1,15 @@
+[workspace]
+members = ["jkl", "cli", "experiments"]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+hashbrown = "0.16"
+egui = "0.33"
+eframe = "0.33"
+image = "0.25.8"
+smallvec = "1.15"

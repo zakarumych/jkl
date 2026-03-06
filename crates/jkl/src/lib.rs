@@ -1,8 +1,10 @@
-#![doc(html_logo_url = "https://raw.githubusercontent.com/zakarumych/jkl/refs/heads/main/icon.svg")]
 #![doc(
-    html_favicon_url = "https://raw.githubusercontent.com/zakarumych/jkl/refs/heads/main/favicon.ico"
+    html_logo_url = "https://raw.githubusercontent.com/zakarumych/jkl/refs/heads/main/assets/icon.svg"
 )]
-#![doc = r#"<div align="center"><img src="https://raw.githubusercontent.com/zakarumych/jkl/main/logo.svg" alt="JKL logo" width="768" alt="JKL"></div>"#]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/zakarumych/jkl/refs/heads/main/assets/favicon.ico"
+)]
+#![doc = r#"<div align="center"><img src="https://raw.githubusercontent.com/zakarumych/jkl/main/assets/logo.svg" alt="JKL logo" width="768" alt="JKL"></div>"#]
 //!
 //! # JKL - blazingly fast compression and image processing toolkit
 //!

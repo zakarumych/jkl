@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-jkl = { path = ".." }
+jkl = { path = "../jkl" }
 eframe = { workspace = true, features = ["persistence"] }
 image.workspace = true
 egui.workspace = true
