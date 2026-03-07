@@ -1,8 +1,8 @@
-#include "lz77.h"
-
-#include "elias.h"
+#include "jkl/lz77.h"
 
 #include <string.h>
+
+#include "jkl/elias.h"
 
 static uint32_t jkl_lz77_window_get(const JklLz77Decoder *decoder, uint32_t index)
 {
@@ -36,6 +36,7 @@ int jkl_lz77_decode(
         jkl_lz77_window_push(decoder, decoder->pending_literal);
         return JKL_OK;
     }
+    assert(decoder->entry_distance < JKLI_LZ77_WINDOW_SIZE);
 
     if (decoder->entry_length > 0)
     {
@@ -53,14 +54,19 @@ int jkl_lz77_feed_token(
     JklLz77Decoder *decoder,
     JklLz77Token token)
 {
-    assert(token.v.reference.distance < JKLI_LZ77_WINDOW_SIZE);
     assert(decoder->entry_length == 0);
+    assert(decoder->entry_distance < JKLI_LZ77_WINDOW_SIZE);
 
     if (token.kind == JKL_LZ77_TOKEN_LITERAL)
     {
         decoder->pending_literal = token.v.literal;
         decoder->entry_distance = JKLI_LZ77_WINDOW_SIZE;
         return JKL_OK;
+    }
+
+    if (token.v.reference.distance >= JKLI_LZ77_WINDOW_SIZE)
+    {
+        return JKL_ERR_INVALID_DATA;
     }
 
     if (token.v.reference.length == 0)
@@ -76,8 +82,8 @@ int jkl_lz77_feed_token(
 
 int jkl_read_lz77_token(JklBitReader *reader, JklLz77Token *out_token)
 {
-    uint64_t length;
-    uint64_t distance;
+    uint32_t length;
+    uint32_t distance;
 
     JKL_RETURN_IF_ERROR(jkl_elias_delta_decode_nonzero(reader, &length));
 
@@ -93,13 +99,13 @@ int jkl_read_lz77_token(JklBitReader *reader, JklLz77Token *out_token)
     }
 
     JKL_RETURN_IF_ERROR(jkl_elias_delta_decode(reader, &distance));
-    if (distance > UINT32_MAX)
+    if (distance >= UINT32_MAX)
     {
         return JKL_ERR_TOO_LARGE;
     }
 
     out_token->kind = JKL_LZ77_TOKEN_REFERENCE;
-    out_token->v.reference.length = (uint32_t)length;
-    out_token->v.reference.distance = (uint32_t)distance;
+    out_token->v.reference.length = length;
+    out_token->v.reference.distance = distance;
     return JKL_OK;
 }

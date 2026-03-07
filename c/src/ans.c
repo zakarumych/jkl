@@ -1,9 +1,9 @@
-#include "ans.h"
+#include "jkl/ans.h"
 
 #include <stdlib.h>
 
-#include "bit_reader.h"
-#include "elias.h"
+#include "jkl/bits.h"
+#include "jkl/elias.h"
 
 static int jkl_checked_add_u64(uint64_t a, uint64_t b, uint64_t *out_value)
 {

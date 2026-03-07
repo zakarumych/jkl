@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "error.h"
-#include "bit_reader.h"
+#include "bits.h"
 
 #define JKLI_LZ77_WINDOW_SIZE 1024u
 

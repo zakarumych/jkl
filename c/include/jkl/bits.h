@@ -11,37 +11,37 @@
 extern "C"
 {
 #endif
-
-    typedef enum JklBitReaderSource
-    {
-        JKL_BIT_SOURCE_FILE = 0,
-        JKL_BIT_SOURCE_MEMORY = 1
-    } JklBitReaderSource;
-
     typedef struct JklBitReader
     {
-        JklBitReaderSource source;
+        /* Buffered bits */
         uint64_t buffer;
-        uint32_t buffer_len;
+
+        /* Number of bits currently in buffer */
+        uint8_t buffer_len;
+
+        enum
+        {
+            JKL_BIT_READER_FILE,
+            JKL_BIT_READER_MEMORY
+        } kind;
+
         union
         {
-            FILE *file;
+            FILE *fp;
             struct
             {
                 const uint8_t *data;
                 size_t size;
-                size_t pos;
-            } mem;
-        } src;
+            } memory;
+        } impl;
     } JklBitReader;
 
     int jkl_bit_reader_init_file(FILE *file, JklBitReader *out_reader);
     int jkl_bit_reader_init_memory(const uint8_t *data, size_t size, JklBitReader *out_reader);
 
     int jkl_bit_read_bit(JklBitReader *reader, int *out_bit);
+    int jkl_bit_read_until_set_bit(JklBitReader *reader, uint64_t *pos);
     int jkl_bit_read_bits(JklBitReader *reader, uint32_t bit_count, uint64_t *out_value);
-    int jkl_bit_discard_bits(JklBitReader *reader, uint32_t bit_count);
-
 #ifdef __cplusplus
 }
 #endif

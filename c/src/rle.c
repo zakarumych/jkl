@@ -1,6 +1,6 @@
-#include "rle.h"
+#include "jkl/rle.h"
 
-#include "elias.h"
+#include "jkl/elias.h"
 
 int jkl_read_rle_token(JklBitReader *reader, JklRleToken *out_token)
 {

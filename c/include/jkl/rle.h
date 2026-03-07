@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "error.h"
-#include "bit_reader.h"
+#include "bits.h"
 
 typedef struct JklRleToken
 {

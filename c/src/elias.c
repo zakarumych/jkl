@@ -1,4 +1,4 @@
-#include "elias.h"
+#include "jkl/elias.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -7,26 +7,16 @@ int jkl_elias_gamma_decode_(JklBitReader *reader, uint8_t bits, uint64_t *out_va
 {
     assert(bits != 0 && bits <= 64);
 
-    int bit = 0;
+    uint64_t msb_pos = 0;
     uint8_t msb = 0;
     uint64_t tail = 0;
 
-    for (;;)
+    JKL_RETURN_IF_ERROR(jkl_bit_read_until_set_bit(reader, &msb_pos));
+    if (msb_pos >= bits)
     {
-        JKL_RETURN_IF_ERROR(jkl_bit_read_bit(reader, &bit));
-
-        if (bit != 0)
-        {
-            break;
-        }
-
-        msb += 1;
-
-        if (msb >= bits)
-        {
-            return JKL_ERR_TOO_LARGE;
-        }
+        return JKL_ERR_TOO_LARGE;
     }
+    msb = (uint8_t)msb_pos;
 
     JKL_RETURN_IF_ERROR(jkl_bit_read_bits(reader, msb, &tail));
 
@@ -50,7 +40,6 @@ int jkl_elias_delta_decode_(JklBitReader *reader, uint8_t bits, uint64_t *out_va
 
     if (msb > bits)
     {
-        JKL_RETURN_IF_ERROR(jkl_bit_discard_bits(reader, msb));
         return JKL_ERR_TOO_LARGE;
     }
 

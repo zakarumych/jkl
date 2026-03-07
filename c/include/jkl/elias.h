@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "bit_reader.h"
+#include "bits.h"
 
 #ifdef __cplusplus
 extern "C"

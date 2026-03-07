@@ -1,14 +1,14 @@
-#include "jkli.h"
+#include "jkl/jkli.h"
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "ans.h"
-#include "bit_reader.h"
-#include "elias.h"
-#include "lz77.h"
-#include "rle.h"
+#include "jkl/ans.h"
+#include "jkl/bits.h"
+#include "jkl/elias.h"
+#include "jkl/lz77.h"
+#include "jkl/rle.h"
 
 #if !defined(_WIN32)
 #include <sys/types.h>

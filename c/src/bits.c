@@ -1,46 +1,48 @@
-#include "bit_reader.h"
+#include "jkl/bits.h"
 
 #include <assert.h>
 
-static int jkl_bit_reader_refill_bits(JklBitReader *reader, uint32_t need_bits)
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
+static uint8_t jkl_ctz64_nonzero(uint64_t value)
 {
-    uint32_t missing;
-    uint32_t max_bytes;
-    uint32_t want_bytes;
+    assert(value != 0);
 
-    if (need_bits <= reader->buffer_len)
+#if defined(_MSC_VER)
+    unsigned long index = 0;
+    _BitScanForward64(&index, value);
+    return (uint8_t)index;
+#elif defined(__GNUC__) || defined(__clang__)
+    return (uint8_t)__builtin_ctzll(value);
+#else
+    uint8_t c = 0;
+    while ((value & 1ULL) == 0)
     {
-        return JKL_OK;
+        value >>= 1;
+        c += 1;
     }
+    return c;
+#endif
+}
 
-    if (reader->buffer_len >= 64U)
-    {
-        return JKL_OK;
-    }
+static int jkl_bit_reader_refill_bits(JklBitReader *reader)
+{
+    FILE *fp = reader->impl.fp;
 
-    missing = need_bits - reader->buffer_len;
-    max_bytes = (64U - reader->buffer_len) / 8U;
-    want_bytes = (missing + 7U) / 8U;
+    assert(reader->buffer_len == 0);
+    reader->buffer = 0;
 
-    if (want_bytes > max_bytes)
-    {
-        want_bytes = max_bytes;
-    }
-
-    if (want_bytes == 0U)
-    {
-        return JKL_OK;
-    }
-
-    if (reader->source == JKL_BIT_SOURCE_FILE)
+    if (reader->kind == JKL_BIT_READER_FILE)
     {
         uint8_t temp[8];
-        size_t got = fread(temp, 1U, (size_t)want_bytes, reader->src.file);
+        size_t got = fread(temp, 1U, sizeof(reader->buffer), fp);
         size_t i;
 
         if (got == 0U)
         {
-            if (ferror(reader->src.file) != 0)
+            if (ferror(fp) != 0)
             {
                 return JKL_ERR_IO;
             }
@@ -52,50 +54,29 @@ static int jkl_bit_reader_refill_bits(JklBitReader *reader, uint32_t need_bits)
             reader->buffer |= ((uint64_t)temp[i]) << reader->buffer_len;
             reader->buffer_len += 8U;
         }
-
-        return JKL_OK;
     }
-
+    else
     {
-        uint32_t available = 0;
-        uint32_t to_take;
-        uint32_t i;
+        assert(reader->kind == JKL_BIT_READER_MEMORY);
 
-        if (reader->src.mem.pos < reader->src.mem.size)
-        {
-            size_t rem = reader->src.mem.size - reader->src.mem.pos;
-            if (rem > 0xFFFFFFFFu)
-            {
-                available = 0xFFFFFFFFu;
-            }
-            else
-            {
-                available = (uint32_t)rem;
-            }
-        }
+        const uint8_t *data = reader->impl.memory.data;
+        size_t size = reader->impl.memory.size;
 
-        if (available == 0U)
+        if (size == 0)
         {
             return JKL_ERR_EOF;
         }
 
-        to_take = want_bytes;
-        if (to_take > available)
+        while (reader->buffer_len < 64U && size > 0)
         {
-            to_take = available;
-        }
-
-        for (i = 0; i < to_take; ++i)
-        {
-            uint8_t b = reader->src.mem.data[reader->src.mem.pos++];
-            reader->buffer |= ((uint64_t)b) << reader->buffer_len;
+            reader->buffer |= ((uint64_t)(*data)) << reader->buffer_len;
             reader->buffer_len += 8U;
+            data += 1;
+            size -= 1;
         }
-    }
 
-    if (reader->buffer_len == 0U)
-    {
-        return JKL_ERR_EOF;
+        reader->impl.memory.data = data;
+        reader->impl.memory.size = size;
     }
 
     return JKL_OK;
@@ -103,10 +84,13 @@ static int jkl_bit_reader_refill_bits(JklBitReader *reader, uint32_t need_bits)
 
 int jkl_bit_reader_init_file(FILE *file, JklBitReader *out_reader)
 {
-    out_reader->source = JKL_BIT_SOURCE_FILE;
+    assert(file != NULL);
+    assert(out_reader != NULL);
+
+    out_reader->kind = JKL_BIT_READER_FILE;
+    out_reader->impl.fp = file;
     out_reader->buffer = 0;
     out_reader->buffer_len = 0;
-    out_reader->src.file = file;
     return JKL_OK;
 }
 
@@ -115,24 +99,46 @@ int jkl_bit_reader_init_memory(const uint8_t *data, size_t size, JklBitReader *o
     assert(data != NULL || size == 0);
     assert(out_reader != NULL);
 
-    out_reader->source = JKL_BIT_SOURCE_MEMORY;
+    out_reader->kind = JKL_BIT_READER_MEMORY;
+    out_reader->impl.memory.data = data;
+    out_reader->impl.memory.size = size;
     out_reader->buffer = 0;
     out_reader->buffer_len = 0;
-    out_reader->src.mem.data = data;
-    out_reader->src.mem.size = size;
-    out_reader->src.mem.pos = 0;
     return JKL_OK;
 }
 
 int jkl_bit_read_bit(JklBitReader *reader, int *out_bit)
 {
-    JKL_RETURN_IF_ERROR(jkl_bit_reader_refill_bits(reader, 1U));
+    if (reader->buffer_len == 0)
+    {
+        JKL_RETURN_IF_ERROR(jkl_bit_reader_refill_bits(reader));
+    }
+
     assert(reader->buffer_len > 0U);
 
     *out_bit = (int)(reader->buffer & 1ULL);
     reader->buffer >>= 1;
     reader->buffer_len -= 1U;
 
+    return JKL_OK;
+}
+
+int jkl_bit_read_until_set_bit(JklBitReader *reader, uint64_t *pos)
+{
+    uint64_t bit_pos = 0;
+
+    while (reader->buffer == 0)
+    {
+        bit_pos += reader->buffer_len;
+        reader->buffer_len = 0;
+        JKL_RETURN_IF_ERROR(jkl_bit_reader_refill_bits(reader));
+    }
+
+    uint8_t trailing_zeros = jkl_ctz64_nonzero(reader->buffer);
+    uint8_t consumed = (uint8_t)(trailing_zeros + 1u);
+    reader->buffer >>= consumed;
+    reader->buffer_len = (uint8_t)(reader->buffer_len - consumed);
+    *pos = bit_pos + trailing_zeros;
     return JKL_OK;
 }
 
@@ -146,18 +152,18 @@ int jkl_bit_read_bits(JklBitReader *reader, uint32_t bit_count, uint64_t *out_va
     while (written < bit_count)
     {
         uint32_t remain = bit_count - written;
-        uint32_t take;
+        uint8_t take;
         uint64_t chunk;
 
-        if (reader->buffer_len < remain)
+        if (reader->buffer_len == 0)
         {
-            JKL_RETURN_IF_ERROR(jkl_bit_reader_refill_bits(reader, remain));
+            JKL_RETURN_IF_ERROR(jkl_bit_reader_refill_bits(reader));
         }
 
         take = reader->buffer_len;
         if (take > remain)
         {
-            take = remain;
+            take = (uint8_t)remain;
         }
 
         if (take == 64U)
@@ -172,40 +178,10 @@ int jkl_bit_read_bits(JklBitReader *reader, uint32_t bit_count, uint64_t *out_va
         value |= chunk << written;
 
         reader->buffer >>= take;
-        reader->buffer_len -= take;
+        reader->buffer_len = (uint8_t)(reader->buffer_len - take);
         written += take;
     }
 
     *out_value = value;
-    return JKL_OK;
-}
-
-int jkl_bit_discard_bits(JklBitReader *reader, uint32_t bit_count)
-{
-    uint32_t discarded = 0;
-
-    assert(bit_count <= 64U);
-
-    while (discarded < bit_count)
-    {
-        uint32_t remain = bit_count - discarded;
-        uint32_t take;
-
-        if (reader->buffer_len < remain)
-        {
-            JKL_RETURN_IF_ERROR(jkl_bit_reader_refill_bits(reader, remain));
-        }
-
-        take = reader->buffer_len;
-        if (take > remain)
-        {
-            take = remain;
-        }
-
-        reader->buffer >>= take;
-        reader->buffer_len -= take;
-        discarded += take;
-    }
-
     return JKL_OK;
 }
