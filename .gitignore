@@ -1,3 +1,4 @@
 .vscode
 /crates/target
 /crates/Cargo.lock
+/c/build

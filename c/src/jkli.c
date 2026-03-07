@@ -260,7 +260,7 @@ static int jkl_read_extent_from_header(Extent *extent, const uint8_t raw_extent[
     return JKL_OK;
 }
 
-static size_t jkli_tile_count(const JkliFile *file)
+size_t jkli_tile_count(const JkliFile *file)
 {
     return jkl_tiles_count(file->tile_size, file->extent);
 }
@@ -706,7 +706,6 @@ static int jkl_decode_tile_lz77_ans_rgb8(
     for (i = 0; i < pixels; ++i)
     {
         uint32_t symbol;
-        JklLz77Token token;
         int err = jkl_lz77_decode(&lz, &symbol);
         if (err == JKL_ERR_NEED_TOKEN)
         {
@@ -714,15 +713,15 @@ static int jkl_decode_tile_lz77_ans_rgb8(
 
             for (;;)
             {
-                int err = jkl_ans_decode_lz77(&ans, &lz77_token);
-                if (err == JKL_OK)
+                int ans_err = jkl_ans_decode_lz77(&ans, &lz77_token);
+                if (ans_err == JKL_OK)
                 {
                     break;
                 }
 
-                if (err != JKL_ERR_NEED_TOKEN)
+                if (ans_err != JKL_ERR_NEED_TOKEN)
                 {
-                    return err;
+                    return ans_err;
                 }
 
                 {
@@ -778,15 +777,15 @@ static int jkl_decode_tile_rle_ans_rgb8(
 
             for (;;)
             {
-                int err = jkl_ans_decode_rle(&ans, &rle_token);
-                if (err == JKL_OK)
+                int ans_err = jkl_ans_decode_rle(&ans, &rle_token);
+                if (ans_err == JKL_OK)
                 {
                     break;
                 }
 
-                if (err != JKL_ERR_NEED_TOKEN)
+                if (ans_err != JKL_ERR_NEED_TOKEN)
                 {
-                    return err;
+                    return ans_err;
                 }
 
                 {
@@ -821,7 +820,6 @@ int jkli_decode_tile(
     Image2D output)
 {
     Tile tile;
-    uint64_t pixels;
 
     assert(output.format == file->format);
     assert(tile_index < jkli_tile_count(file));

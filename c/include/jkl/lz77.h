@@ -9,16 +9,20 @@
 
 #define JKLI_LZ77_WINDOW_SIZE 1024u
 
-typedef enum JklLz77TokenKind {
+typedef enum JklLz77TokenKind
+{
     JKL_LZ77_TOKEN_LITERAL = 0,
     JKL_LZ77_TOKEN_REFERENCE = 1
 } JklLz77TokenKind;
 
-typedef struct JklLz77Token {
+typedef struct JklLz77Token
+{
     JklLz77TokenKind kind;
-    union {
+    union
+    {
         uint32_t literal;
-        struct {
+        struct
+        {
             uint32_t length;
             uint32_t distance;
         } reference;
@@ -29,21 +33,25 @@ int jkl_read_lz77_token(JklBitReader *reader, JklLz77Token *out_token);
 
 static inline JklLz77Token jkl_lz77_token_delta(
     JklLz77Token me,
-    JklLz77Token base) {
+    JklLz77Token base)
+{
     uint64_t v;
     JklLz77Token out_delta;
 
-    if (me.kind == JKL_LZ77_TOKEN_LITERAL && base.kind == JKL_LZ77_TOKEN_LITERAL) {
+    if (me.kind == JKL_LZ77_TOKEN_LITERAL && base.kind == JKL_LZ77_TOKEN_LITERAL)
+    {
         assert(me.v.literal >= base.v.literal);
         out_delta.kind = JKL_LZ77_TOKEN_LITERAL;
         out_delta.v.literal = me.v.literal - base.v.literal;
         return out_delta;
     }
 
-    if (me.kind == JKL_LZ77_TOKEN_REFERENCE && base.kind == JKL_LZ77_TOKEN_REFERENCE) {
+    if (me.kind == JKL_LZ77_TOKEN_REFERENCE && base.kind == JKL_LZ77_TOKEN_REFERENCE)
+    {
         out_delta.kind = JKL_LZ77_TOKEN_REFERENCE;
 
-        if (me.v.reference.length == base.v.reference.length) {
+        if (me.v.reference.length == base.v.reference.length)
+        {
             assert(me.v.reference.distance >= base.v.reference.distance);
             out_delta.v.reference.length = 2;
             out_delta.v.reference.distance = me.v.reference.distance - base.v.reference.distance;
@@ -63,28 +71,33 @@ static inline JklLz77Token jkl_lz77_token_delta(
 
 static inline JklLz77Token jkl_lz77_token_from_delta(
     JklLz77Token base,
-    JklLz77Token delta) {
+    JklLz77Token delta)
+{
     uint64_t v;
     JklLz77Token out_value;
 
-    if (base.kind == JKL_LZ77_TOKEN_LITERAL && delta.kind == JKL_LZ77_TOKEN_LITERAL) {
+    if (base.kind == JKL_LZ77_TOKEN_LITERAL && delta.kind == JKL_LZ77_TOKEN_LITERAL)
+    {
         assert(delta.v.literal <= UINT32_MAX - base.v.literal);
         out_value.kind = JKL_LZ77_TOKEN_LITERAL;
         out_value.v.literal = base.v.literal + delta.v.literal;
         return out_value;
     }
 
-    if (base.kind == JKL_LZ77_TOKEN_LITERAL && delta.kind == JKL_LZ77_TOKEN_REFERENCE) {
+    if (base.kind == JKL_LZ77_TOKEN_LITERAL && delta.kind == JKL_LZ77_TOKEN_REFERENCE)
+    {
         return delta;
     }
 
-    if (base.kind == JKL_LZ77_TOKEN_REFERENCE && delta.kind == JKL_LZ77_TOKEN_LITERAL) {
+    if (base.kind == JKL_LZ77_TOKEN_REFERENCE && delta.kind == JKL_LZ77_TOKEN_LITERAL)
+    {
         return delta;
     }
 
     out_value.kind = JKL_LZ77_TOKEN_REFERENCE;
 
-    if (delta.v.reference.length == 2) {
+    if (delta.v.reference.length == 2)
+    {
         v = (uint64_t)base.v.reference.distance + (uint64_t)delta.v.reference.distance;
         assert(v <= UINT32_MAX);
         out_value.v.reference.length = base.v.reference.length;
@@ -100,7 +113,8 @@ static inline JklLz77Token jkl_lz77_token_from_delta(
     return out_value;
 }
 
-typedef struct JklLz77Decoder {
+typedef struct JklLz77Decoder
+{
     uint32_t window[JKLI_LZ77_WINDOW_SIZE];
     uint32_t head;
     uint32_t pending_literal;
@@ -120,7 +134,8 @@ int jkl_lz77_feed_token(
     JklLz77Decoder *decoder,
     JklLz77Token token);
 
-static inline JklLz77Token jkl_lz77_token_default(void) {
+static inline JklLz77Token jkl_lz77_token_default(void)
+{
     JklLz77Token out_token;
     out_token.kind = JKL_LZ77_TOKEN_LITERAL;
     out_token.v.literal = 0;
