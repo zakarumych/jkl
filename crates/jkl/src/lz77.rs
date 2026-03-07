@@ -19,7 +19,7 @@ pub enum Token<T> {
     /// A single uncompressed symbol.
     Literal { symbol: T },
     /// A back-reference copying `length` symbols from `distance` positions back in the window.
-    Reference { length: u32, distance: u32 },
+    Reference { length: usize, distance: usize },
 }
 
 impl<T> Default for Token<T>
@@ -147,7 +147,7 @@ where
 
     #[inline]
     fn var_read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
-        let length = vle::decode_non_zero::<u32, _>(reader)?;
+        let length = vle::decode_non_zero::<usize, _>(reader)?;
 
         match length {
             0 => unreachable!("decode_non_zero must never return 0"),
@@ -156,7 +156,7 @@ where
                 Ok(Token::Literal { symbol })
             }
             _ => {
-                let distance = vle::decode::<u32, _>(reader)?;
+                let distance = vle::decode::<usize, _>(reader)?;
                 Ok(Token::Reference { length, distance })
             }
         }
@@ -414,8 +414,8 @@ where
                 debug_assert!(u32::try_from(self.length).is_ok());
 
                 output.extend(Some(Token::Reference {
-                    distance: self.distance as u32,
-                    length: self.length as u32,
+                    distance: self.distance,
+                    length: self.length,
                 }));
             }
 
@@ -461,8 +461,8 @@ where
             debug_assert!(u32::try_from(self.length).is_ok());
 
             output.extend(Some(Token::Reference {
-                distance: self.distance as u32,
-                length: self.length as u32,
+                distance: self.distance,
+                length: self.length,
             }));
         } else {
             for i in 0..self.length {
@@ -541,13 +541,6 @@ where
 
                 match token {
                     Token::Reference { length, distance } => {
-                        let distance = usize::try_from(distance).map_err(|_| {
-                            DecodeError::InvalidDistance {
-                                distance: usize::MAX,
-                                window: self.window.len(),
-                            }
-                        })?;
-
                         if distance >= self.window.len() {
                             return Err(DecodeError::InvalidDistance {
                                 distance,

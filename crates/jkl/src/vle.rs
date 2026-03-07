@@ -139,7 +139,6 @@ where
         let v = v.next();
 
         // n = floor(log2(v))
-        
 
         T::BITS - v.leading_zeros() - 1
     } else {
@@ -286,14 +285,23 @@ where
 {
     let msb = decode_gamma::<u32, R>(reader)? - 1;
 
+    if msb > T::BITS {
+        // if msb > BITS, the value is larger than 2^BITS - 1, which is out of range for T.
+        return Err(io::Error::new(io::ErrorKind::InvalidData, TooLarge));
+    }
+
+    const {
+        assert!(T::BITS <= 64);
+    }
+
     let mut buffer = [0u8; 16];
     reader.read_all_bits(&mut buffer, 0, msb as usize)?;
 
     let tail = T::from_le_bytes(buffer);
 
-    if msb >= T::BITS {
+    if msb == T::BITS {
         // If msb == BITS and tail is not zero, the value is larger than 2^BITS - 1, which is out of range for T.
-        if msb > T::BITS || tail != T::ZERO {
+        if tail != T::ZERO {
             return Err(io::Error::new(io::ErrorKind::InvalidData, TooLarge));
         }
 
@@ -314,14 +322,17 @@ where
 {
     let msb = decode_gamma::<u32, R>(reader)? - 1;
 
+    if msb >= T::BITS {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, TooLarge));
+    }
+
+    const {
+        assert!(T::BITS <= 64);
+    }
     let mut buffer = [0u8; 16];
     reader.read_all_bits(&mut buffer, 0, msb as usize)?;
 
     let tail = T::from_le_bytes(buffer);
-
-    if msb >= T::BITS {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, TooLarge));
-    }
 
     Ok(T::pow2(msb) + tail)
 }
