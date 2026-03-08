@@ -1,12 +1,11 @@
 [package]
-name = "jkl-app"
+name = "jkl-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-jkl = { path = ".." }
-eframe = { workspace = true, features = ["persistence"] }
-image.workspace = true
-rand.workspace = true
+jkl = { path = "../jkl" }
+eframe = { workspace = true, features = ["persistence", "wgpu"] }
 egui.workspace = true
+bytemuck = { version = "1.20", features = ["extern_crate_std"] }

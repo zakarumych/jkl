@@ -62,11 +62,13 @@ use crate::{
     bits::read_bits_scope,
     encode::{FixedCode, VarCode},
     image::{
+        Extent, Image2DMut, ImageRef,
         compress::{AnsCompressor, LZ77Compressor, RleCompressor},
         format::Format,
         tiles::{Tile, TileSize},
-        Extent, Image2DMut, ImageRef,
     },
+    math::Rgb8U,
+    vle::Vle,
 };
 
 use self::{
@@ -276,6 +278,48 @@ pub struct JackalReader<R> {
     tile_size: TileSize,
     offsets: Offsets,
     read: R,
+    end: u64,
+}
+
+#[derive(Clone)]
+struct TilePayloadLayout {
+    payload_start: u64,
+    payload_len: usize,
+    offsets: Vec<u64>,
+}
+
+/// Concatenated compressed tile payloads with per-tile byte offsets.
+///
+/// `offsets` always has `tiles + 1` items.
+/// Tile `i` occupies byte range `offsets[i]..offsets[i + 1]` in `payload`.
+pub struct TilePayloadBlob {
+    pub payload: Vec<u8>,
+    pub offsets: Vec<u64>,
+}
+
+/// Compact ANS symbol tables for RGB8 GPU decompression.
+pub struct Rgb8AnsGpuContext {
+    pub ans_total: u32,
+    pub symbol_cumul: Vec<u32>,
+    pub symbol_freq: Vec<u32>,
+    /// Packed as 0x00RRGGBB.
+    pub symbol_rgb8: Vec<u32>,
+}
+
+impl TilePayloadBlob {
+    pub fn tiles(&self) -> usize {
+        self.offsets.len().saturating_sub(1)
+    }
+
+    pub fn tile_range(&self, tile_index: usize) -> std::ops::Range<usize> {
+        assert!(tile_index < self.tiles(), "Tile index out of bounds");
+
+        let start = usize::try_from(self.offsets[tile_index])
+            .expect("tile offset exceeds usize::MAX on this platform");
+        let end = usize::try_from(self.offsets[tile_index + 1])
+            .expect("tile offset exceeds usize::MAX on this platform");
+        start..end
+    }
 }
 
 enum AnyContext<T: Pixel> {
@@ -305,11 +349,81 @@ where
 }
 
 impl<R> JackalReader<R> {
+    fn tile_payload_layout(&self) -> io::Result<TilePayloadLayout> {
+        let file_offsets = self.offsets.slice();
+
+        if file_offsets.is_empty() {
+            return Ok(TilePayloadLayout {
+                payload_start: 0,
+                payload_len: 0,
+                offsets: vec![0],
+            });
+        }
+
+        let start = file_offsets[0];
+        if start > self.end {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                DecodeError::InvalidData,
+            ));
+        }
+
+        let mut rebased_offsets = Vec::with_capacity(file_offsets.len() + 1);
+        let mut prev = start;
+
+        for &offset in file_offsets {
+            // Tile offsets must be monotonic and lie inside file bounds.
+            if offset < prev || offset > self.end {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    DecodeError::InvalidData,
+                ));
+            }
+
+            rebased_offsets.push(offset - start);
+            prev = offset;
+        }
+
+        let payload_len_u64 = self.end - start;
+        let payload_len = usize::try_from(payload_len_u64)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
+
+        rebased_offsets.push(payload_len_u64);
+
+        Ok(TilePayloadLayout {
+            payload_start: start,
+            payload_len,
+            offsets: rebased_offsets,
+        })
+    }
+
+    /// Returns total payload size in bytes for all tiles.
+    ///
+    /// The value is cached inside the reader after first query.
+    pub fn tile_payload_len_bytes(&mut self) -> io::Result<usize>
+    where
+        R: io::Read + io::Seek,
+    {
+        if self.offsets.slice().is_empty() {
+            return Ok(0);
+        }
+        let start = self.offsets.slice()[0];
+
+        let payload_len_u64 = self.end - start;
+        let payload_len = usize::try_from(payload_len_u64)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
+
+        Ok(payload_len)
+    }
+
     /// Opens a JackalReader, reads the header and tile offsets from the stream.
     pub fn open(mut read: R) -> io::Result<Self>
     where
-        R: io::Read,
+        R: io::Read + io::Seek,
     {
+        let end = read.seek(io::SeekFrom::End(0))?;
+        read.seek(io::SeekFrom::Start(0))?;
+
         let header = JackalHeader::fix_read(&mut read)?;
 
         // Read tile offsets.
@@ -323,11 +437,16 @@ impl<R> JackalReader<R> {
             tile_size: header.tile_size(),
             offsets,
             read,
+            end,
         })
     }
 
     pub fn format(&self) -> Format {
         self.format
+    }
+
+    pub fn compression(&self) -> Compression {
+        self.compression
     }
 
     pub fn extent(&self) -> Extent {
@@ -375,6 +494,165 @@ impl<R> JackalReader<R> {
             offsets: self.offsets.slice(),
             read: &mut self.read,
         })
+    }
+
+    /// Reads compressed payload bytes for all tiles at once.
+    ///
+    /// Returned offsets are rebased to the returned payload slice and include
+    /// one extra sentinel offset at the end.
+    pub fn read_all_tile_payloads(&mut self) -> io::Result<TilePayloadBlob>
+    where
+        R: io::Read + io::Seek,
+    {
+        let restore_pos = self.read.stream_position()?;
+
+        let result = (|| {
+            let layout = self.tile_payload_layout()?;
+
+            let mut payload = vec![0; layout.payload_len];
+            if layout.payload_len > 0 {
+                self.read.seek(io::SeekFrom::Start(layout.payload_start))?;
+                self.read.read_exact(&mut payload)?;
+            }
+
+            Ok(TilePayloadBlob {
+                payload,
+                offsets: layout.offsets,
+            })
+        })();
+
+        self.read.seek(io::SeekFrom::Start(restore_pos))?;
+        result
+    }
+
+    /// Reads all tile payload bytes into caller-provided destination memory.
+    ///
+    /// This is intended for zero-copy staging into pre-mapped GPU buffers.
+    /// Returned offsets are rebased to `dst` and include an end sentinel.
+    pub fn read_all_tile_payloads_into(&mut self, dst: &mut [u8]) -> io::Result<Vec<u64>>
+    where
+        R: io::Read + io::Seek,
+    {
+        let restore_pos = self.read.stream_position()?;
+
+        let result = (|| {
+            let layout = self.tile_payload_layout()?;
+
+            if dst.len() < layout.payload_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Destination buffer is too small for tile payload",
+                ));
+            }
+
+            if layout.payload_len > 0 {
+                self.read.seek(io::SeekFrom::Start(layout.payload_start))?;
+                self.read.read_exact(&mut dst[..layout.payload_len])?;
+            }
+
+            Ok(layout.offsets)
+        })();
+
+        self.read.seek(io::SeekFrom::Start(restore_pos))?;
+        result
+    }
+
+    /// Reads RGB8 + ANS context and converts it into compact GPU symbol tables.
+    pub fn read_rgb8_ans_gpu_context(&mut self) -> io::Result<Rgb8AnsGpuContext>
+    where
+        R: io::Read + io::Seek,
+    {
+        if self.format != Format::RGB8 || self.compression != Compression::Ans {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Expected RGB8 image with ANS compression",
+            ));
+        }
+
+        let restore_pos = self.read.stream_position()?;
+
+        let result = (|| {
+            let context_pos = JackalHeader::SIZE + self.offsets.bytes_size();
+            let context_pos = u64::try_from(context_pos)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
+
+            self.read.seek(io::SeekFrom::Start(context_pos))?;
+
+            let context =
+                match AnyContext::<Rgb8U>::read_for_complression(self.compression, &mut self.read)?
+                {
+                    AnyContext::Ans(context) => context,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "Expected ANS context",
+                        ));
+                    }
+                };
+
+            let mut freqs = context.freqs().collect::<Vec<(Vle<u32>, u64)>>();
+            freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
+
+            let mut symbol_cumul = Vec::with_capacity(freqs.len());
+            let mut symbol_freq = Vec::with_capacity(freqs.len());
+            let mut symbol_rgb8 = Vec::with_capacity(freqs.len());
+
+            let mut cumul = 0u64;
+
+            for (symbol, freq) in freqs {
+                let cumul_u32 = u32::try_from(cumul).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge)
+                })?;
+                let freq_u32 = u32::try_from(freq).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge)
+                })?;
+
+                symbol_cumul.push(cumul_u32);
+                symbol_freq.push(freq_u32);
+
+                let rgb = Rgb8U::from_bits_interleaved(symbol.0);
+                let packed =
+                    (u32::from(rgb.r()) << 16) | (u32::from(rgb.g()) << 8) | u32::from(rgb.b());
+                symbol_rgb8.push(packed);
+
+                cumul = cumul.checked_add(freq).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge)
+                })?;
+            }
+
+            let ans_total = u32::try_from(cumul)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
+
+            Ok(Rgb8AnsGpuContext {
+                ans_total,
+                symbol_cumul,
+                symbol_freq,
+                symbol_rgb8,
+            })
+        })();
+
+        self.read.seek(io::SeekFrom::Start(restore_pos))?;
+        result
+    }
+}
+
+const RGB8U_RANS_WGSL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/shaders/rgb8u_rans.wgsl"
+));
+
+/// Returns a WGSL decompression kernel for selected image format and compression.
+///
+/// Currently available combination:
+/// - `Format::RGB8` + `Compression::Ans` (rANS)
+pub fn decompress_wgsl_kernel(format: Format, compression: Compression) -> &'static str {
+    match (format, compression) {
+        (Format::RGB8, Compression::Ans) => RGB8U_RANS_WGSL,
+        _ => {
+            unimplemented!(
+                "WGSL kernel is not implemented for format {format:?} and compression {compression:?}"
+            )
+        }
     }
 }
 
@@ -579,4 +857,10 @@ fn jkli_smoke_test_bc1() {
     }
 
     assert_eq!(decoded_blocks, blocks);
+}
+
+#[test]
+fn wgsl_kernel_exists_for_rgb8_ans() {
+    let kernel = decompress_wgsl_kernel(Format::RGB8, Compression::Ans);
+    assert!(!kernel.is_empty());
 }
