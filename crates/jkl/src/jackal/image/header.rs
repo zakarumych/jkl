@@ -1,6 +1,6 @@
 use crate::{
     encode::FixedCode,
-    image::{format::Format, tiles::TileSize, Dimensions, Extent},
+    image::{Dimensions, Extent, format::Format, tiles::TileSize},
 };
 
 use super::DecodeError;
@@ -31,7 +31,7 @@ impl FixedCode for MipLevels {
 
 const MAGIC_NUMBER: u32 = 0x494C4B4Au32; // "JKLI"
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Magic;
 
 impl FixedCode for Magic {
@@ -90,7 +90,7 @@ impl FixedCode for Compression {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct JackalFormat(Format);
 
 impl FixedCode for JackalFormat {
@@ -126,7 +126,7 @@ impl FixedCode for JackalFormat {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct JackalExtent(Extent);
 
 impl FixedCode for JackalExtent {
@@ -192,7 +192,7 @@ impl FixedCode for JackalExtent {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct JackalHeader {
     magic: Magic,
 

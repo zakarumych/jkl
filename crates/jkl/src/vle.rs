@@ -4,7 +4,7 @@
 //! compressing data with a skewed distribution. The [`Vle`] newtype provides a
 //! convenient [`VarCode`] implementation.
 
-use std::{error::Error, fmt, io, ops};
+use std::{error::Error, fmt, io, num::NonZero, ops};
 
 use crate::{
     bits::{ReadBits, WriteBits},
@@ -24,6 +24,11 @@ pub trait Unsigned:
     const MAX: Self;
     const ZERO: Self;
     const ONE: Self;
+
+    // A non-zero version of the type, used for functions that require non-zero values.
+    type NonZero: Into<Self>;
+
+    fn non_zero(self) -> Option<Self::NonZero>;
 
     fn next(self) -> Self;
 
@@ -45,26 +50,34 @@ macro_rules! impl_unsigned {
                 const ZERO: Self = 0;
                 const ONE: Self = 1;
 
+                type NonZero = NonZero<Self>;
+
+                #[inline(always)]
+                fn non_zero(self) -> Option<NonZero<$t>> {
+                    NonZero::new(self)
+                }
+
+                #[inline(always)]
                 fn next(self) -> Self {
                     self + 1
                 }
 
-                #[inline]
+                #[inline(always)]
                 fn leading_zeros(self) -> u32 {
                     self.leading_zeros()
                 }
 
-                #[inline]
+                #[inline(always)]
                 fn reverse_bits(self) -> Self {
                     self.reverse_bits()
                 }
 
-                #[inline]
+                #[inline(always)]
                 fn pow2(v: u32) -> Self {
                     1 << v
                 }
 
-                #[inline]
+                #[inline(always)]
                 fn to_le_bytes(self) -> [u8; 16] {
                     let le_bytes = self.to_le_bytes();
                     let mut buffer = [0u8; 16];
@@ -72,7 +85,7 @@ macro_rules! impl_unsigned {
                     buffer
                 }
 
-                #[inline]
+                #[inline(always)]
                 fn from_le_bytes(bytes: [u8; 16]) -> Self {
                     let mut le_bytes = [0u8; size_of::<Self>()];
                     le_bytes.copy_from_slice(&bytes[..size_of::<Self>()]);
@@ -155,10 +168,12 @@ where
 }
 
 /// Returns the number of bits required to Elias-delta-encode `v` (which must be non-zero).
-pub fn encode_non_zero_bit_len<T>(v: T) -> usize
+pub fn encode_non_zero_bit_len<T>(v: T::NonZero) -> usize
 where
     T: Unsigned,
 {
+    let v: T = v.into();
+
     // n = floor(log2(v))
     let msb = T::BITS - v.leading_zeros() - 1;
 
@@ -207,12 +222,13 @@ where
 /// Encode unsigned value `v`.
 ///
 /// Encodes `v` using Elias delta code.
-pub fn encode_non_zero<T, W>(v: T, writer: &mut WriteBits<W>) -> io::Result<()>
+pub fn encode_non_zero<T, W>(v: T::NonZero, writer: &mut WriteBits<W>) -> io::Result<()>
 where
     T: Unsigned,
     W: io::Write,
 {
-    assert_ne!(v, T::ZERO);
+    let v: T = v.into();
+    debug_assert_ne!(v, T::ZERO);
 
     // n = floor(log2(v))
     let msb = T::BITS - v.leading_zeros() - 1;
@@ -315,7 +331,7 @@ where
 ///
 /// Reads the value encoded by `encode` function.
 /// Returns an error if the encoded value is too large to fit in T.
-pub fn decode_non_zero<T, R>(reader: &mut ReadBits<R>) -> io::Result<T>
+pub fn decode_non_zero<T, R>(reader: &mut ReadBits<R>) -> io::Result<T::NonZero>
 where
     T: Unsigned,
     R: io::Read,
@@ -334,7 +350,9 @@ where
 
     let tail = T::from_le_bytes(buffer);
 
-    Ok(T::pow2(msb) + tail)
+    let value = T::pow2(msb) + tail;
+
+    Ok(value.non_zero().unwrap())
 }
 
 /// Newtype wrapper that implements [`VarCode`] via Elias delta encoding.

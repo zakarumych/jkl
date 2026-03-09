@@ -4,7 +4,7 @@
 //! into a sliding window. The [`Encoder`] builds tokens from an input stream and
 //! the [`Decoder`] reconstructs the original data.
 
-use std::{error::Error, fmt, io};
+use std::{error::Error, fmt, io, num::NonZero};
 
 use crate::{
     bits::{ReadBits, WriteBits},
@@ -19,7 +19,7 @@ pub enum Token<T> {
     /// A single uncompressed symbol.
     Literal { symbol: T },
     /// A back-reference copying `length` symbols from `distance` positions back in the window.
-    Reference { length: usize, distance: usize },
+    Reference { length_minus_2: u16, distance: u16 },
 }
 
 impl<T> Default for Token<T>
@@ -45,26 +45,26 @@ where
             },
             (
                 Token::Reference {
-                    length: length_me,
+                    length_minus_2: length_minus_2_me,
                     distance: distance_me,
                 },
                 Token::Reference {
-                    length: length_base,
+                    length_minus_2: length_minus_2_base,
                     distance: distance_base,
                 },
             ) => {
-                if length_me == length_base {
+                if length_minus_2_me == length_minus_2_base {
                     Token::Reference {
                         // Keep reference-length deltas in valid reference domain (>= 2),
                         // because length == 1 is reserved for literal tag in `VarCode`.
-                        length: 2,
+                        length_minus_2: 0,
                         distance: distance_me - distance_base,
                     }
                 } else {
                     Token::Reference {
                         // Keep reference-length deltas in valid reference domain (>= 2),
                         // because length == 1 is reserved for literal tag in `VarCode`.
-                        length: (length_me - length_base) + 2,
+                        length_minus_2: (length_minus_2_me - length_minus_2_base),
                         distance: distance_me,
                     }
                 }
@@ -80,30 +80,37 @@ where
             (Token::Literal { symbol: base }, Token::Literal { symbol: delta }) => Token::Literal {
                 symbol: T::from_delta(base, delta),
             },
-            (Token::Literal { .. }, Token::Reference { length, distance }) => {
-                Token::Reference { length, distance }
-            }
+            (
+                Token::Literal { .. },
+                Token::Reference {
+                    length_minus_2,
+                    distance,
+                },
+            ) => Token::Reference {
+                length_minus_2,
+                distance,
+            },
             (Token::Reference { .. }, Token::Literal { symbol }) => Token::Literal { symbol },
             (
                 Token::Reference {
-                    length: length_base,
+                    length_minus_2: length_minus_2_base,
                     distance: distance_base,
                 },
                 Token::Reference {
-                    length: length_delta,
+                    length_minus_2: length_minus_2_delta,
                     distance: distance_delta,
                 },
             ) => {
-                if length_delta == 2 {
+                if length_minus_2_delta == 0 {
                     Token::Reference {
                         // Inverse of `delta`: `length_delta` stores `(me - base + 2)`.
-                        length: length_base,
+                        length_minus_2: length_minus_2_base,
                         distance: distance_base + distance_delta,
                     }
                 } else {
                     Token::Reference {
                         // Inverse of `delta`: `length_delta` stores `(me - base + 2)`.
-                        length: length_base + (length_delta - 2),
+                        length_minus_2: length_minus_2_base + length_minus_2_delta,
                         distance: distance_delta,
                     }
                 }
@@ -119,9 +126,12 @@ where
     #[inline]
     fn var_bit_len(&self) -> usize {
         match *self {
-            Token::Reference { length, distance } => {
-                debug_assert!(length >= 2);
-                let length_bits = vle::encode_non_zero_bit_len(length);
+            Token::Reference {
+                length_minus_2,
+                distance,
+            } => {
+                let length = NonZero::new(u32::from(length_minus_2) + 2).unwrap();
+                let length_bits = vle::encode_non_zero_bit_len::<u32>(length);
                 let distance_bits = vle::encode_bit_len(distance);
                 length_bits + distance_bits
             }
@@ -132,13 +142,21 @@ where
     #[inline]
     fn var_write(&self, writer: &mut WriteBits<impl io::Write>) -> io::Result<()> {
         match *self {
-            Token::Reference { length, distance } => {
-                debug_assert!(length >= 2);
-                vle::encode_non_zero(length, writer)?;
+            Token::Reference {
+                length_minus_2,
+                distance,
+            } => {
+                let length = const { NonZero::new(2u16).unwrap() }
+                    .checked_add(length_minus_2)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "length overflow")
+                    })?;
+
+                vle::encode_non_zero::<u16, _>(length, writer)?;
                 vle::encode(distance, writer)?;
             }
             Token::Literal { ref symbol } => {
-                vle::encode_non_zero(1u8, writer)?;
+                vle::encode_non_zero::<u8, _>(const { NonZero::new(1).unwrap() }, writer)?;
                 symbol.var_write(&mut *writer)?;
             }
         }
@@ -147,17 +165,20 @@ where
 
     #[inline]
     fn var_read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
-        let length = vle::decode_non_zero::<usize, _>(reader)?;
+        let length = vle::decode_non_zero::<u16, _>(reader)?;
 
-        match length {
-            0 => unreachable!("decode_non_zero must never return 0"),
+        match length.get() {
+            0 => unreachable!(),
             1 => {
                 let symbol = T::var_read(&mut *reader)?;
                 Ok(Token::Literal { symbol })
             }
-            _ => {
-                let distance = vle::decode::<usize, _>(reader)?;
-                Ok(Token::Reference { length, distance })
+            2.. => {
+                let distance = vle::decode(reader)?;
+                Ok(Token::Reference {
+                    length_minus_2: length.get() - 2,
+                    distance,
+                })
             }
         }
     }
@@ -165,45 +186,55 @@ where
 
 struct Window<T> {
     buffer: Vec<T>,
-    head: usize,
+    head: u16,
 }
 
 impl<T> Window<T> {
-    fn new(init: T, length: usize) -> Self
+    fn new(init: T, length: u16) -> Self
     where
         T: Copy,
     {
         Window {
-            buffer: vec![init; length],
+            buffer: vec![init; usize::from(length)],
             head: 0,
         }
     }
 
     #[inline]
-    fn len(&self) -> usize {
-        self.buffer.len()
+    fn len(&self) -> u16 {
+        // buffer.len() is known to fit in u16
+        self.buffer.len() as u16
     }
 
     #[inline]
-    fn idx(&self, index: usize) -> usize {
-        assert!(index < self.buffer.len());
-        (self.head + self.buffer.len() - 1 - index) % self.buffer.len()
+    fn idx(&self, index: u16) -> u16 {
+        assert!(index < self.len());
+        let idx = (u32::from(self.head) + u32::from(self.len()) - 1 - u32::from(index))
+            % u32::from(self.len());
+
+        // Reminder of division by `u16` fits in `u16`.
+        idx as u16
+    }
+
+    #[inline(always)]
+    fn from_idx(&self, idx: u16) -> u16 {
+        self.idx(idx)
     }
 
     #[inline]
     fn push(&mut self, value: T) {
-        self.buffer[self.head] = value;
-        self.head = (self.head + 1) % self.buffer.len();
+        self.buffer[usize::from(self.head)] = value;
+        self.head = (self.head + 1) % self.len();
     }
 
     #[inline]
-    fn get(&self, index: usize) -> &T {
+    fn get(&self, index: u16) -> &T {
         let idx = self.idx(index);
-        &self.buffer[idx]
+        &self.buffer[usize::from(idx)]
     }
 
     #[inline]
-    fn find_elem(&self, offset: usize, elem: &T) -> Option<usize>
+    fn find_elem(&self, offset: u16, elem: &T) -> Option<u16>
     where
         T: PartialEq,
     {
@@ -211,19 +242,19 @@ impl<T> Window<T> {
 
         if offset < self.head {
             for i in (0..offset + 1).rev() {
-                if self.buffer[i] == *elem {
-                    return Some(self.idx(i));
+                if self.buffer[usize::from(i)] == *elem {
+                    return Some(self.from_idx(i));
                 }
             }
-            for i in (self.head..self.buffer.len()).rev() {
-                if self.buffer[i] == *elem {
-                    return Some(self.idx(i));
+            for i in (self.head..self.len()).rev() {
+                if self.buffer[usize::from(i)] == *elem {
+                    return Some(self.from_idx(i));
                 }
             }
         } else {
             for i in (self.head..offset + 1).rev() {
-                if self.buffer[i] == *elem {
-                    return Some(self.idx(i));
+                if self.buffer[usize::from(i)] == *elem {
+                    return Some(self.from_idx(i));
                 }
             }
         }
@@ -236,7 +267,7 @@ impl<T> Window<T> {
     // Only tries offsets larget than `distance`,
     // since it should be impossible to find a match of required length at smaller offset.
     #[inline]
-    fn find_extension(&self, distance: usize, length: usize, next: &T) -> Option<usize>
+    fn find_extension(&self, distance: u16, length: u16, next: &T) -> Option<u16>
     where
         T: PartialEq,
     {
@@ -247,7 +278,7 @@ impl<T> Window<T> {
         let m = if d < self.head {
             self.head - d
         } else {
-            (self.buffer.len() - d) + self.head
+            (self.len() - d) + self.head
         };
 
         if d < self.head {
@@ -266,28 +297,28 @@ impl<T> Window<T> {
                 for j in 0..l {
                     let pj = p + (j % n);
                     let dj = d + (j % m);
-                    if self.buffer[pj] != self.buffer[dj] {
+                    if self.buffer[usize::from(pj)] != self.buffer[usize::from(dj)] {
                         // Not a match, try next offset.
                         continue 'a;
                     }
                 }
 
                 let pl = p + (length % n);
-                if self.buffer[pl] != *next {
+                if self.buffer[usize::from(pl)] != *next {
                     // Not a match, try next offset.
                     continue 'a;
                 }
 
                 // Found a match of required length, return offset.
-                return Some(self.idx(p));
+                return Some(self.from_idx(p));
             }
 
             // Consider offsets after current one
             // In right part of the window.
-            'a: for p in (self.head..self.buffer.len()).rev() {
+            'a: for p in (self.head..self.len()).rev() {
                 // How many symbols there are until the end of the window,
                 // i.e. when it starts repeating until at least `length` symbols are matched.
-                let n = (self.buffer.len() - p) + self.head;
+                let n = (self.len() - p) + self.head;
 
                 // How many symbols must match before it is guaranteed that `length` symbols are matched
                 // Two repeating sequences match endlessly if they match on the sum of their repeating lengths.
@@ -295,16 +326,16 @@ impl<T> Window<T> {
 
                 // Check if there's match of required length.
                 for j in 0..l {
-                    let pj = (p + (j % n)) % self.buffer.len();
-                    let dj = (d + (j % m)) % self.buffer.len();
-                    if self.buffer[pj] != self.buffer[dj] {
+                    let pj = (p + (j % n)) % self.len();
+                    let dj = (d + (j % m)) % self.len();
+                    if self.buffer[usize::from(pj)] != self.buffer[usize::from(dj)] {
                         // Not a match, try next offset.
                         continue 'a;
                     }
                 }
 
-                let pl = (p + (length % n)) % self.buffer.len();
-                if self.buffer[pl] != *next {
+                let pl = (p + (length % n)) % self.len();
+                if self.buffer[usize::from(pl)] != *next {
                     // Not a match, try next offset.
                     continue 'a;
                 }
@@ -320,7 +351,7 @@ impl<T> Window<T> {
             'a: for p in (self.head..d).rev() {
                 // How many symbols there are until the end of the window,
                 // i.e. when it starts repeating until at least `length` symbols are matched.
-                let n = (self.buffer.len() - p) + self.head;
+                let n = (self.len() - p) + self.head;
 
                 // How many symbols must match before it is guaranteed that `length` symbols are matched
                 // Two repeating sequences match endlessly if they match on the sum of their repeating lengths.
@@ -328,22 +359,22 @@ impl<T> Window<T> {
 
                 // Check if there's match of required length.
                 for j in 0..l {
-                    let pj: usize = (p + (j % n)) % self.buffer.len();
-                    let dj = (d + (j % m)) % self.buffer.len();
-                    if self.buffer[pj] != self.buffer[dj] {
+                    let pj = (p + (j % n)) % self.len();
+                    let dj = (d + (j % m)) % self.len();
+                    if self.buffer[usize::from(pj)] != self.buffer[usize::from(dj)] {
                         // Not a match, try next offset.
                         continue 'a;
                     }
                 }
 
-                let pl = (p + (length % n)) % self.buffer.len();
-                if self.buffer[pl] != *next {
+                let pl = (p + (length % n)) % self.len();
+                if self.buffer[usize::from(pl)] != *next {
                     // Not a match, try next offset.
                     continue 'a;
                 }
 
                 // Found a match of required length, return offset.
-                return Some(self.idx(p));
+                return Some(self.from_idx(p));
             }
 
             None
@@ -352,15 +383,15 @@ impl<T> Window<T> {
 }
 
 #[inline]
-fn distance_index(distance: usize, index: usize) -> usize {
+fn distance_index(distance: u16, index: u16) -> u16 {
     distance - (index % (distance + 1))
 }
 
 /// LZ77 encoder that compresses a symbol stream into [`Token`]s using a sliding window.
 pub struct Encoder<T> {
     window: Window<T>,
-    distance: usize,
-    length: usize,
+    distance: u16,
+    length: u16,
 }
 
 impl<T> Encoder<T>
@@ -369,11 +400,9 @@ where
 {
     /// Creates a new encoder with a sliding window of `length` entries, initialized to `init`.
     #[inline]
-    pub fn new(init: T, length: u32) -> Self {
-        debug_assert!(usize::try_from(length).is_ok());
-
+    pub fn new(init: T, length: u16) -> Self {
         Encoder {
-            window: Window::new(init, length as usize),
+            window: Window::new(init, length),
             distance: 0,
             length: 0,
         }
@@ -383,9 +412,7 @@ where
     #[inline]
     pub fn encode(&mut self, symbol: T, output: &mut impl Extend<Token<T>>) {
         if self.length > 0 {
-            let max = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
-
-            if self.length < max {
+            if self.length < u16::MAX {
                 // If longer match is possible to represent.
 
                 if *self.window.get(distance_index(self.distance, self.length)) == symbol {
@@ -410,12 +437,12 @@ where
             let should_emit_reference = self.length >= 2;
 
             if should_emit_reference {
-                debug_assert!(u32::try_from(self.distance).is_ok());
-                debug_assert!(u32::try_from(self.length).is_ok());
+                debug_assert!(u16::try_from(self.distance).is_ok());
+                debug_assert!(u16::try_from(self.length).is_ok());
 
                 output.extend(Some(Token::Reference {
                     distance: self.distance,
-                    length: self.length,
+                    length_minus_2: self.length - 2,
                 }));
             }
 
@@ -457,12 +484,12 @@ where
         let should_emit_reference = self.length >= 2;
 
         if should_emit_reference {
-            debug_assert!(u32::try_from(self.distance).is_ok());
-            debug_assert!(u32::try_from(self.length).is_ok());
+            debug_assert!(u16::try_from(self.distance).is_ok());
+            debug_assert!(u16::try_from(self.length).is_ok());
 
             output.extend(Some(Token::Reference {
                 distance: self.distance,
-                length: self.length,
+                length_minus_2: self.length - 2,
             }));
         } else {
             for i in 0..self.length {
@@ -475,8 +502,8 @@ where
 }
 
 struct Entry {
-    distance: usize,
-    length: usize,
+    distance: u16,
+    length: u16,
 }
 
 /// LZ77 decoder that reconstructs the original symbol stream from [`Token`]s.
@@ -493,7 +520,7 @@ pub enum DecodeError {
     Incomplete,
 
     /// Signals that a reference token has invalid distance, i.e. distance is greater than or equal to the window size.
-    InvalidDistance { distance: usize, window: usize },
+    InvalidDistance { distance: u16, window: u16 },
 }
 
 impl fmt::Display for DecodeError {
@@ -518,11 +545,9 @@ where
 {
     /// Creates a new decoder with a sliding window of `length` entries, initialized to `init`.
     #[inline]
-    pub fn new(init: T, length: u32) -> Self {
-        debug_assert!(usize::try_from(length).is_ok());
-
+    pub fn new(init: T, length: u16) -> Self {
         Decoder {
-            window: Window::new(init, length as usize),
+            window: Window::new(init, length),
             entry: None,
         }
     }
@@ -540,7 +565,10 @@ where
                 };
 
                 match token {
-                    Token::Reference { length, distance } => {
+                    Token::Reference {
+                        length_minus_2,
+                        distance,
+                    } => {
                         if distance >= self.window.len() {
                             return Err(DecodeError::InvalidDistance {
                                 distance,
@@ -548,16 +576,15 @@ where
                             });
                         }
 
-                        debug_assert!(length > 0);
+                        let length = length_minus_2 + 2;
+
                         let first = *self.window.get(distance);
                         self.window.push(first);
 
-                        if length > 1 {
-                            self.entry = Some(Entry {
-                                distance,
-                                length: length as usize - 1,
-                            });
-                        }
+                        self.entry = Some(Entry {
+                            distance,
+                            length: length - 1,
+                        });
 
                         Ok(Some(first))
                     }
@@ -601,14 +628,8 @@ where
             match token {
                 Token::Reference {
                     distance,
-                    mut length,
+                    length_minus_2,
                 } => {
-                    let distance =
-                        usize::try_from(distance).map_err(|_| DecodeError::InvalidDistance {
-                            distance: usize::MAX,
-                            window: self.window.len(),
-                        })?;
-
                     if distance >= self.window.len() {
                         return Err(DecodeError::InvalidDistance {
                             distance,
@@ -616,6 +637,7 @@ where
                         });
                     }
 
+                    let mut length = length_minus_2 + 2;
                     while length > 0 {
                         debug_assert!(length > 0);
                         let first = *self.window.get(distance);

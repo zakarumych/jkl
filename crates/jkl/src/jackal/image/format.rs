@@ -77,8 +77,6 @@ impl Pixel for Rgb8U {
             &mut tokens,
         )?;
 
-        dbg!(tokens.len());
-
         let mut offsets = WriteOffsets::new(tokens.len(), &mut write)?;
 
         write_bits_scope(&mut write, |write_bits| context.var_write(write_bits))?;

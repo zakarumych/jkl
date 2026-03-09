@@ -5,7 +5,7 @@ use crate::{
     encode::VarCode,
     lz77,
     math::Delta,
-    rle::{rle, Rle},
+    rle::{Rle, rle},
 };
 
 /// Trait for types viable as symbols for compression.
@@ -52,7 +52,7 @@ pub trait Compressor {
 
 #[derive(Clone, Copy, Debug)]
 pub struct LZ77Compressor {
-    pub window_size: u32,
+    pub window_size: u16,
 }
 
 impl LZ77Compressor {

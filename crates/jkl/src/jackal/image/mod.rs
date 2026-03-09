@@ -56,7 +56,7 @@
 //! such as invalid magic numbers, unsupported formats, and platform-specific limitations.
 //!
 
-use std::{convert::Infallible, fmt, io};
+use std::{convert::Infallible, fmt, io, num::NonZero};
 
 use crate::{
     bits::read_bits_scope,
@@ -299,7 +299,6 @@ pub struct TilePayloadBlob {
 
 /// Compact ANS symbol tables for RGB8 GPU decompression.
 pub struct Rgb8AnsGpuContext {
-    pub ans_total: u32,
     pub symbol_cumul: Vec<u32>,
     pub symbol_freq: Vec<u32>,
     /// Packed as 0x00RRGGBB.
@@ -590,14 +589,14 @@ impl<R> JackalReader<R> {
                     }
                 };
 
-            let mut freqs = context.freqs().collect::<Vec<(Vle<u32>, u64)>>();
+            let mut freqs = context.freqs().collect::<Vec<_>>();
             freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
 
             let mut symbol_cumul = Vec::with_capacity(freqs.len());
             let mut symbol_freq = Vec::with_capacity(freqs.len());
             let mut symbol_rgb8 = Vec::with_capacity(freqs.len());
 
-            let mut cumul = 0u64;
+            let mut cumul = 0u32;
 
             for (symbol, freq) in freqs {
                 let cumul_u32 = u32::try_from(cumul).map_err(|_| {
@@ -615,16 +614,12 @@ impl<R> JackalReader<R> {
                     (u32::from(rgb.r()) << 16) | (u32::from(rgb.g()) << 8) | u32::from(rgb.b());
                 symbol_rgb8.push(packed);
 
-                cumul = cumul.checked_add(freq).ok_or_else(|| {
+                cumul = cumul.checked_add(freq.get()).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge)
                 })?;
             }
 
-            let ans_total = u32::try_from(cumul)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
-
             Ok(Rgb8AnsGpuContext {
-                ans_total,
                 symbol_cumul,
                 symbol_freq,
                 symbol_rgb8,

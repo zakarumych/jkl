@@ -61,21 +61,18 @@ where
     T: VarCode,
 {
     fn var_bit_len(&self) -> usize {
-        self.value.var_bit_len() + vle::encode_non_zero_bit_len(self.count.get())
+        self.value.var_bit_len() + vle::encode_non_zero_bit_len::<usize>(self.count)
     }
 
     fn var_write(&self, writer: &mut WriteBits<impl std::io::Write>) -> std::io::Result<()> {
         self.value.var_write(writer)?;
-        vle::encode_non_zero(self.count.get(), writer)
+        vle::encode_non_zero::<usize, _>(self.count, writer)
     }
 
     fn var_read(reader: &mut ReadBits<impl std::io::Read>) -> std::io::Result<Self> {
         let value = T::var_read(reader)?;
 
         let count = vle::decode_non_zero::<usize, _>(reader)?;
-
-        let count = NonZero::new(count).expect("vle::decode_non_zero should never return zero");
-
         Ok(Rle { value, count })
     }
 }

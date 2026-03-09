@@ -58,7 +58,6 @@ struct PendingDecode {
     symbol_freq: Vec<u32>,
     symbol_rgb8: Vec<u32>,
     tile_meta: Vec<u32>,
-    ans_total: u32,
 }
 
 struct PreviewPipeline {
@@ -213,7 +212,6 @@ impl Jackal {
             symbol_freq: ctx.symbol_freq,
             symbol_rgb8: ctx.symbol_rgb8,
             tile_meta,
-            ans_total: ctx.ans_total,
         });
         shared.last_error = None;
 
@@ -504,15 +502,14 @@ impl ComputePipeline {
     }
 }
 
-fn encode_params(p: &PendingDecode) -> [u8; 32] {
-    let mut out = [0u8; 32];
+fn encode_params(p: &PendingDecode) -> [u8; 16] {
+    let mut out = [0u8; 16];
     let tile_count = u32::try_from(p.tile_word_offsets.len().saturating_sub(1)).unwrap_or(0);
 
     out[0..4].copy_from_slice(&tile_count.to_le_bytes());
     out[4..8].copy_from_slice(&p.width.to_le_bytes());
     out[8..12].copy_from_slice(&p.height.to_le_bytes());
-    out[12..16].copy_from_slice(&p.ans_total.to_le_bytes());
-    out[16..20].copy_from_slice(&(u32::try_from(p.symbol_cumul.len()).unwrap_or(0)).to_le_bytes());
+    out[12..16].copy_from_slice(&(u32::try_from(p.symbol_cumul.len()).unwrap_or(0)).to_le_bytes());
 
     out
 }

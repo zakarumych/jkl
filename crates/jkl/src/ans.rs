@@ -4,9 +4,9 @@
 //! that compresses symbols into a stream of `u32` tokens, and a [`Decoder`] that
 //! reconstructs the original symbols from that token stream in reverse order.
 
-use std::{cmp, error::Error, fmt, hash::Hash, io};
+use std::{cmp, error::Error, fmt, hash::Hash, io, num::NonZero};
 
-use hashbrown::HashMap;
+use hashbrown::{HashMap, hash_map::Entry};
 
 use crate::{
     bits::{ReadBits, WriteBits},
@@ -23,24 +23,23 @@ use crate::{
 /// encoders and decoders.
 #[derive(Clone, Debug)]
 pub struct Context<T> {
-    freqs: HashMap<T, u64>,
-    cumul: HashMap<T, u64>,
-    map: Vec<(u64, T)>,
-    total: u64,
+    freqs: HashMap<T, NonZero<u32>>,
+    cumul: HashMap<T, u32>,
+    map: Vec<(u32, T)>,
 }
 
 impl<T> Context<T> {
     /// Builds a context from sorted (symbol, frequency) pairs and an optional
     /// pre-built frequency map.
     fn build(
-        freqs_sorted: impl IntoIterator<Item = (T, u64)>,
-        freqs: Option<HashMap<T, u64>>,
+        freqs_sorted: impl IntoIterator<Item = (T, NonZero<u32>)>,
+        freqs: Option<HashMap<T, NonZero<u32>>>,
     ) -> Self
     where
         T: Eq + Hash + Copy,
     {
-        let mut cumul = HashMap::<T, u64>::new();
-        let mut accum = 0u64;
+        let mut cumul = HashMap::<T, u32>::new();
+        let mut accum = 0u32;
         let build_freqs = freqs.is_none();
         let mut freqs = freqs.unwrap_or_default();
 
@@ -52,37 +51,32 @@ impl<T> Context<T> {
             }
 
             cumul.insert(symbol, accum);
-            accum += count;
+
+            if 0xFFFF_FFFF - accum <= count.get() {
+                panic!("Total frequency overflow");
+            }
+
+            accum += count.get();
         }
 
         if freqs.len() == 1 {
             // Fix degenerate case.
             let (_, count) = freqs.iter_mut().next().unwrap();
-            *count = 1;
-            accum = 2;
+            *count = const { NonZero::new(0xFFFF_FFFF).unwrap() };
         }
-
-        if accum >= 0x8000_0000 {
-            panic!("Too many symbols");
-        }
-
-        assert!(accum < 0x8000_0000);
 
         let mut map = cumul.iter().map(|(s, c)| (*c, *s)).collect::<Vec<_>>();
         map.sort_unstable_by_key(|(c, _)| *c);
 
-        Context {
-            freqs,
-            cumul,
-            map,
-            total: accum,
-        }
+        Context { freqs, cumul, map }
     }
 
     /// Build context from sorted frequencies.
     ///
     /// Frequency sequence is sorted by symbols.
-    pub fn from_sorted_frequencies(freqs_sorted: impl IntoIterator<Item = (T, u64)>) -> Self
+    pub fn from_sorted_frequencies(
+        freqs_sorted: impl IntoIterator<Item = (T, NonZero<u32>)>,
+    ) -> Self
     where
         T: Eq + Hash + Copy,
     {
@@ -90,7 +84,7 @@ impl<T> Context<T> {
     }
 
     /// Build context from frequency map.
-    pub fn from_frequency_map(freqs: HashMap<T, u64>) -> Self
+    pub fn from_frequency_map(freqs: HashMap<T, NonZero<u32>>) -> Self
     where
         T: Ord + Hash + Copy,
     {
@@ -100,7 +94,7 @@ impl<T> Context<T> {
     /// Build context from frequency map.
     /// Uses provided order for symbols.
     pub fn from_frequency_map_ord_by(
-        freqs: HashMap<T, u64>,
+        freqs: HashMap<T, NonZero<u32>>,
         ord: impl Fn(T, T) -> cmp::Ordering,
     ) -> Self
     where
@@ -129,17 +123,39 @@ impl<T> Context<T> {
     where
         T: Eq + Hash + Copy,
     {
-        let mut freqs = HashMap::<T, u64>::new();
+        let mut total = 0u32;
+        let mut freqs = HashMap::<T, NonZero<u32>>::new();
 
         input.into_iter().for_each(|symbol| {
-            *freqs.entry(symbol).or_default() += 1;
+            total += 1;
+            match freqs.entry(symbol) {
+                Entry::Occupied(mut entry) => {
+                    let freq = entry.get_mut();
+                    *freq = freq.checked_add(1).expect("frequency overflow");
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(const { NonZero::new(1).unwrap() });
+                }
+            }
         });
+
+        assert!(total > 0, "Context cannot be built from empty input");
+
+        let ratio = 0xFFFF_FFFF / total;
+
+        for freq in freqs.values_mut() {
+            // ratio > 0
+            // freq < total
+            // total * ratio < 0xFFFF_FFFF
+            // freq * ratio < 0xFFFF_FFFF
+            *freq = NonZero::new(freq.get() * ratio).unwrap();
+        }
 
         Self::from_frequency_map_ord_by(freqs, ord)
     }
 
     /// Returns an iterator over all `(symbol, frequency)` pairs in this context.
-    pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, u64)> + '_
+    pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, NonZero<u32>)> + '_
     where
         T: Copy,
     {
@@ -162,7 +178,7 @@ impl<T> Context<T> {
             // Encode frequencies.
             let mut last = T::default();
             for (symbol, count) in &freqs {
-                bit_len += vle::encode_bit_len(*count);
+                bit_len += vle::encode_non_zero_bit_len::<u32>(*count);
 
                 let d = symbol.delta(last);
                 last = *symbol;
@@ -188,7 +204,7 @@ impl<T> Context<T> {
             // Encode frequencies.
             let mut last = T::default();
             for (symbol, count) in &freqs {
-                vle::encode(*count, writer)?;
+                vle::encode_non_zero::<u32, _>(*count, writer)?;
 
                 let d = symbol.delta(last);
                 last = *symbol;
@@ -223,7 +239,7 @@ impl<T> Context<T> {
             // Encode frequencies.
             let mut last = init;
             for (symbol, count) in &freqs {
-                vle::encode(*count, writer)?;
+                vle::encode_non_zero::<u32, _>(*count, writer)?;
 
                 let d = delta(last, *symbol);
                 last = *symbol;
@@ -245,11 +261,11 @@ impl<T> Context<T> {
         let len = { vle::decode::<usize, _>(reader)? };
 
         // Read symbols and build frequency map.
-        let mut freqs_sorted = Vec::<(T, u64)>::with_capacity(len);
+        let mut freqs_sorted = Vec::<(T, NonZero<u32>)>::with_capacity(len);
 
         let mut last = T::default();
         for _ in 0..len {
-            let count = vle::decode::<u64, _>(reader)?;
+            let count = vle::decode_non_zero::<u32, _>(reader)?;
 
             let d = T::var_read(reader)?;
             let symbol = T::from_delta(last, d);
@@ -280,11 +296,11 @@ impl<T> Context<T> {
         let len = { vle::decode::<usize, _>(reader)? };
 
         // Read symbols and build frequency map.
-        let mut freqs_sorted = Vec::<(T, u64)>::with_capacity(len);
+        let mut freqs_sorted = Vec::<(T, NonZero<u32>)>::with_capacity(len);
 
         let mut last = init;
         for _ in 0..len {
-            let count = vle::decode::<u64, _>(reader)?;
+            let count = vle::decode_non_zero::<u32, _>(reader)?;
 
             let d = U::var_read(reader)?;
             let symbol = from_delta(last, d);
@@ -332,13 +348,7 @@ where
     /// Prepare Ans encoder.
     pub fn new(ctx: &'a Context<T>) -> Self {
         Encoder {
-            // Starting state value is as large as maximum ctx.total.
-            // It guarantees that any symbol will grow the state.
-            // After first symbol state is guaranteed to be at least 0x8000_0000
-            // This works in favor of decoder,
-            // where it knows that state below 0x8000_0000 means that more bits need to be read.
-            // And if there are none, decoding finished.
-            state: 0x7FFF_FFFF,
+            state: 0xFFFF_FFFF,
             ctx,
         }
     }
@@ -350,41 +360,27 @@ where
 
         let mut emit = None;
 
-        // Checks that new state is guaranteed to be flushable.
-        // And guards against overflow in new state calculation.
-        if 0x8000_0000_0000_0000 / self.ctx.total <= self.state / freq {
+        fn make_new_state(state: u64, freq: NonZero<u32>, cumul: u32) -> u64 {
+            let freq = NonZero::from(freq);
+            let cumul = u64::from(cumul);
+
+            (state / freq) * 0x1_0000_0000 + state % freq + cumul
+        }
+
+        if self.state >= u64::from(freq.get()) * 0x1_0000_0000 {
             let lo_state = self.state & 0xFFFF_FFFF;
             let hi_state = self.state >> 32;
 
             emit = Some(lo_state as u32);
 
-            // Calculate new state.
-            let new_state = (hi_state / freq) * self.ctx.total + hi_state % freq + cumul;
+            let new_state = make_new_state(hi_state, freq, cumul);
 
-            debug_assert!(new_state >= 0x8000_0000);
-            debug_assert!(new_state < 0x8000_0000_0000_0000);
-
+            debug_assert!(new_state >= 0x1_0000_0000);
             self.state = new_state;
         } else {
-            // Calculate new state.
-            let mut new_state = (self.state / freq) * self.ctx.total + self.state % freq + cumul;
+            let new_state = make_new_state(self.state, freq, cumul);
 
-            debug_assert!(freq < self.ctx.total);
-            debug_assert!(new_state > self.state);
-
-            // If it's too big, emit some bits and reduce it.
-            if new_state >= 0x8000_0000_0000_0000 {
-                let lo_state = self.state & 0xFFFF_FFFF;
-                let hi_state = self.state >> 32;
-
-                emit = Some(lo_state as u32);
-
-                new_state = (hi_state / freq) * self.ctx.total + hi_state % freq + cumul;
-
-                debug_assert!(new_state >= 0x8000_0000);
-                debug_assert!(new_state < 0x8000_0000_0000_0000);
-            }
-
+            debug_assert!(new_state >= 0x1_0000_0000);
             self.state = new_state;
         }
 
@@ -400,7 +396,7 @@ where
     /// decoder needs to begin decoding.
     pub fn finish(self) -> [u32; 2] {
         debug_assert!(self.state >= 0x0000_0000_8000_0000);
-        debug_assert!(self.state < 0x8000_0000_0000_0000);
+        debug_assert!(self.state < 0xFFFF_FFE0_0000_0000);
 
         let hi_state = self.state >> 32;
         let lo_state = self.state & 0xFFFF_FFFF;
@@ -450,18 +446,18 @@ where
     ///
     /// Returns `None` when the token stream is exhausted.
     pub fn decode(&mut self, mut tokens: impl Iterator<Item = u32>) -> Option<T> {
-        if self.state < 0x8000_0000 {
+        if self.state <= 0xFFFF_FFFF {
             let token = tokens.next()?;
             self.state = (self.state << 32) | u64::from(token);
         }
 
-        if unlikely(self.state < 0x8000_0000) {
+        if unlikely(self.state <= 0xFFFF_FFFF) {
             // Only occurs on first symbol.
             let token = tokens.next()?;
             self.state = (self.state << 32) | u64::from(token);
         }
 
-        let c = self.state % self.ctx.total;
+        let c = (self.state & 0xFFFF_FFFF) as u32;
 
         let index = match self.ctx.map.binary_search_by_key(&c, |(start, _)| *start) {
             Ok(index) => index,
@@ -470,9 +466,9 @@ where
 
         let symbol = self.ctx.map[index].1;
 
-        let new_state = (self.state / self.ctx.total) * self.ctx.freqs[&symbol]
-            + (self.state % self.ctx.total)
-            - self.ctx.cumul[&symbol];
+        let new_state = (self.state >> 32) * u64::from(self.ctx.freqs[&symbol].get())
+            + (self.state & 0xFFFF_FFFF)
+            - u64::from(self.ctx.cumul[&symbol]);
 
         self.state = new_state;
 
@@ -485,7 +481,7 @@ where
         mut tokens: impl Iterator<Item = u32>,
         extend: &mut impl Extend<T>,
     ) {
-        if self.state < 0x8000_0000 {
+        if self.state <= 0xFFFF_FFFF {
             let Some(token) = tokens.next() else {
                 return;
             };
@@ -493,14 +489,14 @@ where
         }
 
         loop {
-            if self.state < 0x8000_0000 {
+            if self.state <= 0xFFFF_FFFF {
                 let Some(token) = tokens.next() else {
                     return;
                 };
                 self.state = (self.state << 32) | u64::from(token);
             }
 
-            let c = self.state % self.ctx.total;
+            let c = (self.state & 0xFFFF_FFFF) as u32;
 
             let index = match self.ctx.map.binary_search_by_key(&c, |(start, _)| *start) {
                 Ok(index) => index,
@@ -509,9 +505,9 @@ where
 
             let symbol = self.ctx.map[index].1;
 
-            let new_state = (self.state / self.ctx.total) * self.ctx.freqs[&symbol]
-                + (self.state % self.ctx.total)
-                - self.ctx.cumul[&symbol];
+            let new_state = (self.state >> 32) * u64::from(self.ctx.freqs[&symbol].get())
+                + (self.state & 0xFFFF_FFFF) as u64
+                - u64::from(self.ctx.cumul[&symbol]);
 
             self.state = new_state;
 
@@ -524,7 +520,7 @@ where
     /// Returns `Err(DecodeError::Incomplete)` if the internal state does not
     /// match the encoder's initial state, which typically indicates corrupted data.
     pub fn finish(&self) -> Result<(), DecodeError> {
-        if self.state == 0x7FFF_FFFF {
+        if self.state == 0xFFFF_FFFF {
             Ok(())
         } else {
             Err(DecodeError::Incomplete)

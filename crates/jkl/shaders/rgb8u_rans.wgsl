@@ -21,11 +21,7 @@ struct Params {
     tile_count: u32,
     output_width: u32,
     output_height: u32,
-    ans_total: u32,
     symbol_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 };
 
 @group(0) @binding(0)
@@ -51,9 +47,6 @@ var out_image: texture_storage_2d<rgba8unorm, write>;
 
 @group(0) @binding(9)
 var<uniform> params: Params;
-
-const RANS_L: u32 = 0x80000000u;
-const RANS_L_U64: u64 = u64(RANS_L);
 
 fn unpack_rgb8(packed: u32) -> vec3<u32> {
     let r = (packed >> 16u) & 0xFFu;
@@ -83,7 +76,7 @@ fn find_symbol_index(bucket: u32) -> u32 {
 }
 
 fn renorm_state(state: ptr<function, u64>, cursor: ptr<function, u32>, end: u32) {
-    if (*state < RANS_L_U64 && *cursor < end) {
+    if (*state <= u64(0xFFFFFFFFu) && *cursor < end) {
         // For streams produced from 32-bit token chunks.
         *state = ((*state) << 32u) | u64(payload_words[*cursor]);
         *cursor = *cursor + 1u;
@@ -120,13 +113,12 @@ fn decompress_rgb8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     for (var i = 0u; i < pixel_count; i = i + 1u) {
         renorm_state(&state, &cursor, end);
-        if (state == u64(0u) || params.ans_total == 0u || params.symbol_count == 0u) {
+        if (state == u64(0u) || params.symbol_count == 0u) {
             break;
         }
 
-        let ans_total_u64 = u64(params.ans_total);
-        let bucket = u32(state % ans_total_u64);
-        let q = state / ans_total_u64;
+        let bucket = u32(state);
+        let q = state >> 32u;
         let symbol_index = find_symbol_index(bucket);
 
         let freq = symbol_freq[symbol_index];
