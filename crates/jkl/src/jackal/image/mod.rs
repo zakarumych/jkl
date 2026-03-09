@@ -56,7 +56,7 @@
 //! such as invalid magic numbers, unsupported formats, and platform-specific limitations.
 //!
 
-use std::{convert::Infallible, fmt, io, num::NonZero};
+use std::{convert::Infallible, fmt, io};
 
 use crate::{
     bits::read_bits_scope,
@@ -68,7 +68,6 @@ use crate::{
         tiles::{Tile, TileSize},
     },
     math::Rgb8U,
-    vle::Vle,
 };
 
 use self::{

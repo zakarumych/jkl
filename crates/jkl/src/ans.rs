@@ -127,6 +127,10 @@ impl<T> Context<T> {
         let mut freqs = HashMap::<T, NonZero<u32>>::new();
 
         input.into_iter().for_each(|symbol| {
+            if total == 0xFFFF_FFFF {
+                panic!("Total frequency overflow");
+            }
+
             total += 1;
             match freqs.entry(symbol) {
                 Entry::Occupied(mut entry) => {
@@ -139,16 +143,23 @@ impl<T> Context<T> {
             }
         });
 
-        assert!(total > 0, "Context cannot be built from empty input");
+        assert!(
+            !freqs.is_empty(),
+            "Context cannot be built from empty input"
+        );
 
-        let ratio = 0xFFFF_FFFF / total;
-
-        for freq in freqs.values_mut() {
-            // ratio > 0
-            // freq < total
-            // total * ratio < 0xFFFF_FFFF
-            // freq * ratio < 0xFFFF_FFFF
-            *freq = NonZero::new(freq.get() * ratio).unwrap();
+        if freqs.len() == 1 {
+            // Fix degenerate case.
+            let (_, count) = freqs.iter_mut().next().unwrap();
+            *count = const { NonZero::new(0xFFFF_FFFF).unwrap() };
+        } else {
+            for freq in freqs.values_mut() {
+                // freq < total
+                // total < 2^32
+                // normalized_freq is in [1..2^32-1]
+                let normalized_freq = (u64::from(freq.get()) << 32) / u64::from(total);
+                *freq = NonZero::new(normalized_freq as u32).unwrap();
+            }
         }
 
         Self::from_frequency_map_ord_by(freqs, ord)
