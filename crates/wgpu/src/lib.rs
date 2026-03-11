@@ -3,28 +3,55 @@ use std::io;
 use jkl::{
     image::format::Format,
     jackal::image::{Compression, JackalReader},
-    math::Rgb8U,
+    math::{Rgb8U, Rgb565},
+    vle::Vle,
 };
 use wgpu::util::DeviceExt;
 
-const RGB8U_RANS_WGSL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/shaders/rgb8u_rans.wgsl"
-));
+const RANS_WGSL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/rans.wgsl"));
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct RawEntry32 {
-    sym: u32,
+    symbol: u32,
     freq: u32,
     cumul: u32,
     pad: u32,
 }
 
+impl RawEntry32 {
+    fn from_entry<T>(entry: jkl::ans::Entry<T>, f: impl FnOnce(T) -> u32) -> Self {
+        RawEntry32 {
+            symbol: f(entry.symbol),
+            freq: entry.freq.get(),
+            cumul: entry.cumul,
+            pad: 0,
+        }
+    }
+
+    fn from_u8(entry: jkl::ans::Entry<u8>) -> Self {
+        Self::from_entry(entry, |bits| u32::from(bits))
+    }
+
+    fn from_u32(entry: jkl::ans::Entry<u32>) -> Self {
+        Self::from_entry(entry, |bits| bits)
+    }
+
+    fn from_rgb8_vle(entry: jkl::ans::Entry<Vle<u32>>) -> Self {
+        Self::from_entry(entry, |vle| Rgb8U::from_bits_interleaved(vle.0).bits())
+    }
+
+    fn from_rgb565_vle(entry: jkl::ans::Entry<Vle<u16>>) -> Self {
+        Self::from_entry(entry, |vle| {
+            u32::from(Rgb565::from_bits_interleaved(vle.0).bits())
+        })
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct RawEntry64 {
-    sym: u64,
+    symbol: u64,
     freq: u32,
     cumul: u32,
 }
@@ -42,6 +69,7 @@ struct RawTile {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
     symbol_count: u32,
+    symbol2_count: u32,
     tile_count: u32,
     width: u32,
     height: u32,
@@ -49,7 +77,7 @@ struct Params {
 }
 
 pub struct Uploader {
-    rgb8u_ans_compute_pipeline: ComputePipeline,
+    compute_pipeline: ComputePipeline,
 }
 
 impl Uploader {
@@ -58,7 +86,7 @@ impl Uploader {
     /// handle if desired.
     pub fn new(device: &wgpu::Device) -> Self {
         Uploader {
-            rgb8u_ans_compute_pipeline: ComputePipeline::new_rgb8_ans(device),
+            compute_pipeline: ComputePipeline::new(device),
         }
     }
 
@@ -74,12 +102,16 @@ impl Uploader {
     where
         R: io::Read + io::Seek,
     {
-        if reader.format() != Format::RGB8 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unsupported format",
-            ));
+        match reader.format() {
+            Format::RGB8 | Format::RGBA8 | Format::BC1 => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unsupported format",
+                ));
+            }
         }
+
         if reader.compression() != Compression::Ans {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -94,6 +126,7 @@ impl Uploader {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "dimension too large"))?;
 
         let payload_len = reader.payload_len();
+        dbg!(payload_len);
 
         usize::try_from(payload_len)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "payload too large"))?;
@@ -118,10 +151,13 @@ impl Uploader {
             for tile_index in 0..reader.tiles() {
                 let tile = reader.tile(tile_index);
                 let tile_len = reader.tile_payload_len(tile_index) as usize;
+
                 reader
                     .copy_tile_payload_into(tile_index, &mut mapped[last_offset..][..tile_len])?;
+
                 offsets.push(last_offset as u32);
                 last_offset += tile_len;
+
                 tiles.push(RawTile {
                     x: u32::try_from(tile.rect.x).unwrap_or(0),
                     y: u32::try_from(tile.rect.y).unwrap_or(0),
@@ -138,50 +174,29 @@ impl Uploader {
             contents: bytemuck::cast_slice(&offsets[..]),
             usage: wgpu::BufferUsages::STORAGE,
         });
+        dbg!(offsets[..].len());
 
         let tiles_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("jkl-wgpu-tiles"),
             contents: bytemuck::cast_slice(&tiles[..]),
             usage: wgpu::BufferUsages::STORAGE,
         });
+        dbg!(tiles[..].len());
 
         match (reader.format(), reader.compression()) {
             (Format::RGB8, Compression::Ans) => {
-                let ans_rgb8u_context =
+                let ans_context =
                     jkl::bits::read_bits_scope(reader.context_reader()?, |context_reader| {
                         jkl::ans::Context::<jkl::vle::Vle<u32>>::read(context_reader)
                     })?;
 
-                let table = ans_rgb8u_context.table();
-
-                let symbol_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("jkl-wgpu-symbol-table"),
-                    size: payload_len,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                    mapped_at_creation: true,
-                });
-
-                {
-                    let mut mapped = symbol_buf.slice(..).get_mapped_range_mut();
-                    let mut offset = 0;
-
-                    for entry in table {
-                        let rgb = Rgb8U::from_bits_interleaved(entry.symbol.0);
-
-                        let raw_entry = RawEntry32 {
-                            sym: rgb.bits(),
-                            cumul: entry.cumul,
-                            freq: entry.freq.get(),
-                            pad: 0,
-                        };
-
-                        let raw_bytes = bytemuck::bytes_of(&raw_entry);
-                        mapped[offset..][..raw_bytes.len()].copy_from_slice(raw_bytes);
-                        offset += raw_bytes.len();
-                    }
-                };
-
-                symbol_buf.unmap();
+                let table = ans_context.table();
+                let symbol_buf = create_buffer_from_iter(
+                    device,
+                    "jkl-wgpu-symbol-table",
+                    table.iter().copied().map(RawEntry32::from_rgb8_vle),
+                );
+                dbg!(table[..].len());
 
                 let byte_stride = (width.checked_mul(4).unwrap_or(0) + 255) & !255;
                 let output_buffer_size = byte_stride as u64 * height as u64;
@@ -191,68 +206,6 @@ impl Uploader {
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 });
-
-                let tile_count = u32::try_from(tiles.len()).unwrap_or(0);
-                let symbol_count = u32::try_from(table.len()).unwrap_or(0);
-                let params = Params {
-                    tile_count,
-                    width,
-                    stride: byte_stride / 4,
-                    height,
-                    symbol_count,
-                };
-
-                let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("jkl-wgpu-params"),
-                    contents: bytemuck::bytes_of(&params),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
-                });
-
-                let compute = &self.rgb8u_ans_compute_pipeline;
-                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("jkl-wgpu-decode-bg"),
-                    layout: &compute.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: payload_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: offsets_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: tiles_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: symbol_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: out_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: params_buf.as_entire_binding(),
-                        },
-                    ],
-                });
-
-                {
-                    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("jkl-wgpu-decode-pass"),
-                        timestamp_writes: None,
-                    });
-                    cpass.set_pipeline(&compute.pipeline);
-                    cpass.set_bind_group(0, &bind_group, &[]);
-
-                    let groups_x = tile_count.div_ceil(64);
-                    if groups_x > 0 {
-                        cpass.dispatch_workgroups(groups_x, 1, 1);
-                    }
-                }
 
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("jkl-wgpu-output-texture"),
@@ -268,6 +221,23 @@ impl Uploader {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
+
+                DecompressDispatch {
+                    width,
+                    height,
+                    byte_stride,
+                    symbol_count: table.len(),
+                    symbol2_count: 0,
+                    tiles: &tiles,
+                    pipeline: &self.compute_pipeline.rgb8,
+                    bind_group_layout: &self.compute_pipeline.bind_group_layout,
+                    payload_buf: &payload_buf,
+                    offsets_buf: &offsets_buf,
+                    tiles_buf: &tiles_buf,
+                    symbol_buf: &symbol_buf,
+                    out_buf: &out_buf,
+                }
+                .run(device, encoder);
 
                 encoder.copy_buffer_to_texture(
                     wgpu::TexelCopyBufferInfo {
@@ -291,14 +261,93 @@ impl Uploader {
                     },
                 );
 
-                let total_cpu_gpu_transfer = payload_len as usize
-                    + offsets.len() * std::mem::size_of::<u32>()
-                    + tiles.len() * std::mem::size_of::<RawTile>()
-                    + table.len() * std::mem::size_of::<RawEntry32>()
-                    + bytemuck::bytes_of(&params).len();
+                Ok(texture)
+            }
+            (Format::BC1, Compression::Ans) => {
+                let (colors_context, indices_context) =
+                    jkl::bits::read_bits_scope(reader.context_reader()?, |context_reader| {
+                        let colors = jkl::ans::Context::<jkl::vle::Vle<u16>>::read(context_reader)?;
+                        let indices = jkl::ans::Context::<u8>::read(context_reader)?;
 
-                dbg!(total_cpu_gpu_transfer);
-                dbg!(width * height * 3);
+                        Ok((colors, indices))
+                    })?;
+
+                let colors_table = colors_context.table();
+                let indices_table = indices_context.table();
+                let symbol_buf = create_buffer_from_iter(
+                    device,
+                    "jkl-wgpu-symbol-table",
+                    colors_table
+                        .iter()
+                        .copied()
+                        .map(RawEntry32::from_rgb565_vle)
+                        .chain(indices_table.iter().copied().map(RawEntry32::from_u8)),
+                );
+                dbg!(colors_table[..].len());
+                dbg!(indices_table[..].len());
+
+                let byte_stride = (width.checked_mul(16).unwrap_or(0) + 255) & !255;
+                let output_buffer_size = byte_stride as u64 * height as u64;
+                let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("jkl-wgpu-output"),
+                    size: output_buffer_size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("jkl-wgpu-output-texture"),
+                    size: wgpu::Extent3d {
+                        width: width * 4,
+                        height: height * 4,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Bc1RgbaUnorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+
+                DecompressDispatch {
+                    width,
+                    height,
+                    byte_stride,
+                    symbol_count: colors_table.len(),
+                    symbol2_count: indices_table.len(),
+                    tiles: &tiles,
+                    pipeline: &self.compute_pipeline.bc1,
+                    bind_group_layout: &self.compute_pipeline.bind_group_layout,
+                    payload_buf: &payload_buf,
+                    offsets_buf: &offsets_buf,
+                    tiles_buf: &tiles_buf,
+                    symbol_buf: &symbol_buf,
+                    out_buf: &out_buf,
+                }
+                .run(device, encoder);
+
+                encoder.copy_buffer_to_texture(
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &out_buf,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(byte_stride),
+                            rows_per_image: Some(height),
+                        },
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: width * 4,
+                        height: height * 4,
+                        depth_or_array_layers: 1,
+                    },
+                );
 
                 Ok(texture)
             }
@@ -309,19 +358,21 @@ impl Uploader {
 
 #[derive(Clone)]
 struct ComputePipeline {
-    pipeline: wgpu::ComputePipeline,
+    rgb8: wgpu::ComputePipeline,
+    rgba8: wgpu::ComputePipeline,
+    bc1: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl ComputePipeline {
-    fn new_rgb8_ans(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("jkl-wgpu-rgb8-rans-decompress-shader"),
-            source: wgpu::ShaderSource::Wgsl(RGB8U_RANS_WGSL.into()),
+            label: Some("jkl-wgpu-rans-decompress-shader"),
+            source: wgpu::ShaderSource::Wgsl(RANS_WGSL.into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("jkl-wgpu-rgb8-rans-bgl"),
+            label: Some("jkl-wgpu-rans-bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -387,12 +438,12 @@ impl ComputePipeline {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("jkl-wgpu-rgb8-rans-pl"),
+            label: Some("jkl-wgpu-rans-pl"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let rgb8 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("jkl-wgpu-rgb8-rans-pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
@@ -401,9 +452,154 @@ impl ComputePipeline {
             cache: None,
         });
 
-        Self {
-            pipeline,
+        let rgba8 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("jkl-wgpu-rgba8-rans-pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("decompress_rgba8_rans"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let bc1 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("jkl-wgpu-bc1-rans-pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("decompress_bc1_rans"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        ComputePipeline {
+            rgb8,
+            rgba8,
+            bc1,
             bind_group_layout,
+        }
+    }
+}
+
+fn write_buffer_from_iter<T>(buffer: &wgpu::Buffer, iter: impl IntoIterator<Item = T>) -> usize
+where
+    T: bytemuck::NoUninit,
+{
+    let mut mapped = buffer.slice(..).get_mapped_range_mut();
+    let mut offset = 0;
+
+    for item in iter {
+        let raw_bytes = bytemuck::bytes_of(&item);
+        mapped[offset..][..raw_bytes.len()].copy_from_slice(raw_bytes);
+        offset += raw_bytes.len();
+    }
+
+    offset
+}
+
+fn create_buffer_from_iter<T>(
+    device: &wgpu::Device,
+    label: &str,
+    iter: impl Iterator<Item = T>,
+) -> wgpu::Buffer
+where
+    T: bytemuck::NoUninit,
+{
+    let (lower, upper) = iter.size_hint();
+    assert_eq!(Some(lower), upper);
+
+    let size = u64::try_from(lower * std::mem::size_of::<T>()).expect("size exceedes u64");
+
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: true,
+    });
+
+    write_buffer_from_iter(&buffer, iter);
+    buffer.unmap();
+
+    buffer
+}
+
+struct DecompressDispatch<'a> {
+    width: u32,
+    height: u32,
+    byte_stride: u32,
+    symbol_count: usize,
+    symbol2_count: usize,
+    tiles: &'a [RawTile],
+    pipeline: &'a wgpu::ComputePipeline,
+    bind_group_layout: &'a wgpu::BindGroupLayout,
+    payload_buf: &'a wgpu::Buffer,
+    offsets_buf: &'a wgpu::Buffer,
+    tiles_buf: &'a wgpu::Buffer,
+    symbol_buf: &'a wgpu::Buffer,
+    out_buf: &'a wgpu::Buffer,
+}
+
+impl DecompressDispatch<'_> {
+    fn run(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        let tile_count = u32::try_from(self.tiles.len()).unwrap_or(0);
+        let symbol_count = u32::try_from(self.symbol_count).unwrap_or(0);
+        let symbol2_count = u32::try_from(self.symbol2_count).unwrap_or(0);
+        let params = Params {
+            symbol_count,
+            symbol2_count,
+            tile_count,
+            width: self.width,
+            stride: self.byte_stride / 4,
+            height: self.height,
+        };
+
+        let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("jkl-wgpu-params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("jkl-wgpu-decode-bg"),
+            layout: self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.payload_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.offsets_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.tiles_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.symbol_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: params_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("jkl-wgpu-decode-pass"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(self.pipeline);
+            cpass.set_bind_group(0, &bind_group, &[]);
+
+            let groups_x = tile_count.div_ceil(64);
+            if groups_x > 0 {
+                cpass.dispatch_workgroups(groups_x, 1, 1);
+            }
         }
     }
 }
