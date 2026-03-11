@@ -36,6 +36,34 @@ pub enum Format {
 }
 
 impl Format {
+    pub const fn tile_width_granularity(&self) -> u16 {
+        match self {
+            Format::R8 => 4,
+            Format::RG8 => 2,
+            Format::RGB8 | Format::RGBA8 => 1,
+            Format::BC1
+            | Format::BC2
+            | Format::BC3
+            | Format::BC4
+            | Format::BC5
+            | Format::BC6
+            | Format::BC7 => 4,
+        }
+    }
+
+    pub const fn tile_height_granularity(&self) -> u16 {
+        match self {
+            Format::R8 | Format::RG8 | Format::RGB8 | Format::RGBA8 => 1,
+            Format::BC1
+            | Format::BC2
+            | Format::BC3
+            | Format::BC4
+            | Format::BC5
+            | Format::BC6
+            | Format::BC7 => 4,
+        }
+    }
+
     /// Returns width of a block in pixels for the format.
     pub const fn block_width(&self) -> u16 {
         match self {

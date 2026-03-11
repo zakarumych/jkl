@@ -25,7 +25,7 @@ fn main() {
 
             wgpu::DeviceDescriptor {
                 label: Some("egui wgpu device"),
-                required_features: wgpu::Features::SHADER_INT64,
+                required_features: wgpu::Features::SHADER_INT64 | wgpu::Features::TEXTURE_COMPRESSION_BC,
                 required_limits: wgpu::Limits {
                     max_texture_dimension_2d: 8192,
                     ..base_limits

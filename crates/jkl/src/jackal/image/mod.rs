@@ -165,16 +165,13 @@ where
             size_cost,
         } => TileSize::find_optimal(
             extent,
-            T::FORMAT.block_width(),
-            T::FORMAT.block_height(),
+            T::FORMAT.tile_width_granularity(),
+            T::FORMAT.tile_height_granularity(),
             flat_cost,
             size_cost,
         ),
         TileOptions::Size(size) => size,
     };
-
-    assert!(tile_size.width.is_multiple_of(T::FORMAT.block_width()));
-    assert!(tile_size.height.is_multiple_of(T::FORMAT.block_height()));
 
     let tiles_iter = tile_size.iter_tiles(extent).map(|tile| {
         input

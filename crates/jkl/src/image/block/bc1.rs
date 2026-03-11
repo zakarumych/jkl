@@ -1,6 +1,6 @@
 //! BC1 (DXT1) block texture compression.
 //!
-//! BC1 compresses RGB texels into 8-byte blocks. Each block stores two [`Rgb565`]
+//! BC1 compresses RGB indices into 8-byte blocks. Each block stores two [`Rgb565`]
 //! endpoint colors and a 4×4 grid of 2-bit indices into a 4-entry interpolated palette.
 
 use std::{convert::Infallible, mem::swap};
@@ -10,20 +10,20 @@ use crate::{
     math::{Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F},
 };
 
-/// A block of 4x4 texels compressed with BC1.
+/// A block of 4x4 indices compressed with BC1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
     pub color0: Rgb565,
     pub color1: Rgb565,
-    pub texels: [u8; 4],
+    pub indices: [u8; 4],
 }
 
 impl_fixedcode_struct!(
     Block {
         color0: Rgb565,
         color1: Rgb565,
-        texels: [u8; 4],
+        indices: [u8; 4],
     } | Infallible
 );
 
@@ -31,29 +31,30 @@ impl Block {
     pub const BLACK: Block = Block {
         color0: Rgb565::BLACK,
         color1: Rgb565::BLACK,
-        texels: [0x00; 4],
+        indices: [0x00; 4],
     };
 
     pub const WHITE: Block = Block {
         color0: Rgb565::WHITE,
         color1: Rgb565::WHITE,
-        texels: [0x00; 4],
+        indices: [0x00; 4],
     };
 
     pub const TRANSPARENT: Block = Block {
         color0: Rgb565::BLACK,
         color1: Rgb565::BLACK,
-        texels: [0xFF; 4],
+        indices: [0xFF; 4],
     };
 
     /// Returns the raw 8-byte representation of this block.
     pub fn bytes(&self) -> [u8; 8] {
         let color0 = self.color0.bytes();
         let color1 = self.color1.bytes();
-        let texels = self.texels;
+        let indices = self.indices;
 
         [
-            color0[0], color0[1], color1[0], color1[1], texels[0], texels[1], texels[2], texels[3],
+            color0[0], color0[1], color1[0], color1[1], indices[0], indices[1], indices[2],
+            indices[3],
         ]
     }
 
@@ -61,12 +62,12 @@ impl Block {
     pub fn from_bytes(bytes: [u8; 8]) -> Block {
         let color0 = Rgb565::from_bytes([bytes[0], bytes[1]]);
         let color1 = Rgb565::from_bytes([bytes[2], bytes[3]]);
-        let texels = [bytes[4], bytes[5], bytes[6], bytes[7]];
+        let indices = [bytes[4], bytes[5], bytes[6], bytes[7]];
 
         Block {
             color0,
             color1,
-            texels,
+            indices,
         }
     }
 
@@ -78,7 +79,7 @@ impl Block {
 
         // Prepare local variables.
         let mut colors = [[Rgb32F::BLACK; 4]; 4];
-        let texels = self.texels;
+        let indices = self.indices;
 
         // Check mode and build palette.
         let palette = if self.color0.bits() > self.color1.bits() {
@@ -99,10 +100,10 @@ impl Block {
             ]
         };
 
-        // Decode texels.
+        // Decode indices.
         for y in 0..4 {
             for x in 0..4 {
-                let index = (texels[y] >> (2 * x)) & 0b11;
+                let index = (indices[y] >> (2 * x)) & 0b11;
 
                 colors[y][x] = palette[index as usize];
             }
@@ -119,7 +120,7 @@ impl Block {
 
         // Prepare local variables.
         let mut colors = [[Rgba32F::TRANSPARENT; 4]; 4];
-        let texels = self.texels;
+        let indices = self.indices;
 
         // Check mode and build palette.
         let palette = if self.color0.bits() > self.color1.bits() {
@@ -140,10 +141,10 @@ impl Block {
             ]
         };
 
-        // Decode texels.
+        // Decode indices.
         for y in 0..4 {
             for x in 0..4 {
-                let index = (texels[y] >> (2 * x)) & 0b11;
+                let index = (indices[y] >> (2 * x)) & 0b11;
 
                 colors[y][x] = palette[index as usize];
             }
@@ -190,7 +191,7 @@ impl Block {
             return Block {
                 color0,
                 color1: Rgb565::BLACK,
-                texels: [0x00; 4],
+                indices: [0x00; 4],
             };
         } else if color0.bits() < color1.bits() {
             swap(&mut color0, &mut color1);
@@ -199,7 +200,7 @@ impl Block {
             }
         }
 
-        let mut texels = [0; 4];
+        let mut indices = [0; 4];
         for y in 0..4 {
             for x in 0..4 {
                 let idx = match cf.indices[y * 4 + x] {
@@ -209,18 +210,18 @@ impl Block {
                     3 => 1,
                     _ => unreachable!(),
                 };
-                texels[y] |= idx << (x * 2);
+                indices[y] |= idx << (x * 2);
             }
         }
 
         Block {
             color0,
             color1,
-            texels,
+            indices,
         }
     }
 
-    /// Encode block into BC1 setting texels to TRANSPARENT if alpha <= threshold.
+    /// Encode block into BC1 setting indices to TRANSPARENT if alpha <= threshold.
     pub fn encode_with_alpha(colors: [[Rgba32F; 4]; 4], threshold: f32) -> Self {
         #![allow(clippy::needless_range_loop)]
         let mut samples = [Vec3::ZERO; 16];
@@ -272,12 +273,12 @@ impl Block {
                     }
                 }
 
-                let mut texels = [0; 4];
+                let mut indices = [0; 4];
                 for y in 0..4 {
                     for x in 0..4 {
                         let c = colors[y][x];
                         if c.a() < threshold {
-                            texels[y] |= 0b11 << (x * 2);
+                            indices[y] |= 0b11 << (x * 2);
                         } else {
                             let idx = match cf.indices[y * 4 + x] {
                                 0 => 0,
@@ -285,7 +286,7 @@ impl Block {
                                 2 => 1,
                                 _ => unreachable!(),
                             };
-                            texels[y] |= idx << (x * 2);
+                            indices[y] |= idx << (x * 2);
                         }
                     }
                 }
@@ -293,7 +294,7 @@ impl Block {
                 Block {
                     color0,
                     color1,
-                    texels,
+                    indices,
                 }
             }
             16 => {
@@ -325,7 +326,7 @@ impl Block {
                     return Block {
                         color0,
                         color1: Rgb565::BLACK,
-                        texels: [0x00; 4],
+                        indices: [0x00; 4],
                     };
                 } else if color0.bits() < color1.bits() {
                     swap(&mut color0, &mut color1);
@@ -334,7 +335,7 @@ impl Block {
                     }
                 }
 
-                let mut texels = [0; 4];
+                let mut indices = [0; 4];
                 for y in 0..4 {
                     for x in 0..4 {
                         let idx = match cf.indices[y * 4 + x] {
@@ -344,14 +345,14 @@ impl Block {
                             3 => 1,
                             _ => unreachable!(),
                         };
-                        texels[y] |= idx << (x * 2);
+                        indices[y] |= idx << (x * 2);
                     }
                 }
 
                 Block {
                     color0,
                     color1,
-                    texels,
+                    indices,
                 }
             }
             _ => unreachable!(),

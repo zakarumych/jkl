@@ -39,16 +39,16 @@ impl TileSize {
     /// and the GPU executes threads in warps of 32 or 64 threads, so the number of tiles is rounded up to the nearest multiple of 64.
     pub fn find_optimal(
         extent: Extent,
-        block_width: u16,
-        block_height: u16,
+        width_granulatity: u16,
+        height_granulatity: u16,
         flat_cost: f32,
         size_cost: f32,
     ) -> Self {
-        assert!(block_width > 0);
-        assert!(block_height > 0);
+        assert!(width_granulatity > 0);
+        assert!(height_granulatity > 0);
 
-        assert!(block_width <= 256);
-        assert!(block_height <= 256);
+        assert!(width_granulatity <= 256);
+        assert!(height_granulatity <= 256);
 
         // The max tile size to consider is either enough to cover the entire extent,
         // or 16384 rounded to next multiple of block size, which is the maximum tile size.
@@ -56,16 +56,16 @@ impl TileSize {
         let max_tile_width = extent
             .width()
             .min(16384)
-            .next_multiple_of(usize::from(block_width));
+            .next_multiple_of(usize::from(width_granulatity));
         let max_tile_height = extent
             .height()
             .min(16384)
-            .next_multiple_of(usize::from(block_height));
+            .next_multiple_of(usize::from(height_granulatity));
 
         let min_tile_width =
-            (16usize.next_multiple_of(usize::from(block_width))).min(max_tile_width);
+            (16usize.next_multiple_of(usize::from(width_granulatity))).min(max_tile_width);
         let min_tile_height =
-            (16usize.next_multiple_of(usize::from(block_height))).min(max_tile_height);
+            (16usize.next_multiple_of(usize::from(height_granulatity))).min(max_tile_height);
 
         let mut min_cost = f32::INFINITY;
         let mut best_width = min_tile_width;
@@ -81,7 +81,7 @@ impl TileSize {
         ];
 
         for y_factor in FACTORS {
-            let tile_height = (usize::from(block_height) * y_factor).min(max_tile_height);
+            let tile_height = (usize::from(height_granulatity) * y_factor).min(max_tile_height);
 
             // Skip tiny factors for tiny blocks.
             if tile_height < min_tile_height {
@@ -89,7 +89,7 @@ impl TileSize {
             }
 
             for x_factor in FACTORS {
-                let tile_width = (usize::from(block_width) * x_factor).min(max_tile_width);
+                let tile_width = (usize::from(width_granulatity) * x_factor).min(max_tile_width);
 
                 // Skip tiny factors for tiny blocks.
                 if tile_width < min_tile_width {
@@ -131,8 +131,8 @@ impl TileSize {
         debug_assert!(best_width <= max_tile_width);
         debug_assert!(best_height <= max_tile_height);
 
-        debug_assert!(best_width.is_multiple_of(usize::from(block_width)));
-        debug_assert!(best_height.is_multiple_of(usize::from(block_height)));
+        debug_assert!(best_width.is_multiple_of(usize::from(width_granulatity)));
+        debug_assert!(best_height.is_multiple_of(usize::from(height_granulatity)));
 
         debug_assert!(best_width <= 65535);
         debug_assert!(best_height <= 65535);

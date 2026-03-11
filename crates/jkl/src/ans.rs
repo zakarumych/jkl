@@ -41,8 +41,100 @@ pub struct Context<T> {
     map: Option<HashMap<T, (NonZero<u32>, u32)>>,
 }
 
+fn normalize_table<T>(table: &mut [Entry<T>], total: u32)
+where
+    T: Copy,
+{
+    if table.len() == 1 {
+        // Fix degenerate case.
+        let symbol = &mut table[0];
+        *symbol = Entry {
+            symbol: symbol.symbol,
+            freq: const { NonZero::new(0xFFFF_FFFF).unwrap() },
+            cumul: 0,
+        };
+
+        return;
+    }
+
+    if total.is_power_of_two() {
+        let mut largest_freq = 1;
+        let mut largest_freq_index = table.len();
+
+        for (i, entry) in table.iter_mut().enumerate() {
+            let new_freq = (u64::from(entry.freq.get()) << 32) / u64::from(total);
+
+            // If new_freq is 1, total must be at least 0x8000_0001,
+            // but it's a power of two and the largest power of two possible for u32 is 0x8000_0000.
+            debug_assert!(new_freq > 1);
+
+            // Given that freq is non-zero and less than total
+            // following must hold for normalized frequency.
+            // new_freq is larger than 0, because it was multiplied by 0x1_0000_0000 before division which is larger than total.
+            // new_freq is not greater than 0xFFFF_FFFF, because freq is less than total, so result is less than 0x1_0000_0000, i.e. not greater than 0xFFFF_FFFF.
+            debug_assert!(new_freq > 0);
+            debug_assert!(new_freq <= 0xFFFF_FFFF);
+
+            if new_freq > largest_freq {
+                largest_freq = new_freq;
+                largest_freq_index = i;
+            }
+
+            *entry = Entry {
+                symbol: entry.symbol,
+                freq: NonZero::new(new_freq as u32).unwrap(),
+                cumul: 0,
+            };
+        }
+
+        // All new_freq are at least 2,
+        // so it will be assigned at the very first entry
+        // and possibly reassigned later.
+        debug_assert!(largest_freq_index < table.len());
+
+        let mut accum = 0;
+        for (i, entry) in table.iter_mut().enumerate() {
+            if i == largest_freq_index {
+                // All freq's are > 1 when total is power of two.
+                debug_assert!(entry.freq.get() > 1);
+
+                entry.freq = NonZero::new(entry.freq.get() - 1).unwrap();
+            }
+
+            // all freqs could add up to 0x1_0000_0000, but we reduced largest one by 1,
+            // so now they add up to 0xFFFF_FFFF
+            debug_assert!(0xFFFF_FFFF - accum >= entry.freq.get());
+
+            entry.cumul = accum;
+            accum += entry.freq.get();
+        }
+    } else {
+        let mut accum = 0;
+        for entry in table.iter_mut() {
+            let new_freq = (u64::from(entry.freq.get()) << 32) / u64::from(total);
+
+            // Given that freq is non-zero and less than total
+            // following must hold for normalized frequency.
+            // new_freq is larger than 0, because it was multiplied by 0x1_0000_0000 before division which is larger than total.
+            // new_freq is not greater than 0xFFFF_FFFF, because freq is less than total, so result is less than 0x1_0000_0000, i.e. not greater than 0xFFFF_FFFF.
+            debug_assert!(new_freq > 0);
+            debug_assert!(new_freq <= 0xFFFF_FFFF);
+
+            debug_assert!(0xFFFF_FFFF - accum >= entry.freq.get());
+
+            *entry = Entry {
+                symbol: entry.symbol,
+                freq: NonZero::new(new_freq as u32).unwrap(),
+                cumul: accum,
+            };
+
+            accum += entry.freq.get();
+        }
+    }
+}
+
 impl<T> Context<T> {
-    /// Builds a context from sorted (symbol, frequency) pairs and an optional
+    /// Builds a context from sorted (symbol, frequency) pairs.
     pub fn from_frequencies(freqs_sorted: impl IntoIterator<Item = (T, NonZero<u32>)>) -> Self
     where
         T: Eq + Hash + Copy,
@@ -64,15 +156,7 @@ impl<T> Context<T> {
             accum += count.get();
         }
 
-        if table.len() == 1 {
-            // Fix degenerate case.
-            let symbol = &mut table[0];
-            *symbol = Entry {
-                symbol: symbol.symbol,
-                freq: const { NonZero::new(0xFFFF_FFFF).unwrap() },
-                cumul: 0,
-            };
-        }
+        normalize_table(&mut table, accum);
 
         Context { table, map: None }
     }
@@ -133,6 +217,8 @@ impl<T> Context<T> {
             entry.cumul = accum;
             accum += entry.freq.get();
         }
+
+        normalize_table(&mut table, accum);
 
         Context { table, map: None }
     }
@@ -354,6 +440,12 @@ impl<T> Context<T> {
             map.insert(entry.symbol, (entry.freq, entry.cumul));
         }
         self.map = Some(map);
+    }
+
+    pub fn print_frequencies(&self) {
+        for (i, entry) in self.table.iter().enumerate() {
+            println!("{}: {}", i, entry.freq);
+        }
     }
 }
 

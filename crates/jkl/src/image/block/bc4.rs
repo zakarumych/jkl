@@ -1,6 +1,6 @@
 //! BC4 (RGTC1) single-channel block texture compression.
 //!
-//! BC4 compresses single-channel texels into 8-byte blocks. Each block stores two
+//! BC4 compresses single-channel indices into 8-byte blocks. Each block stores two
 //! [`R8U`] endpoint values and a 4×4 grid of 3-bit indices into an 8-entry
 //! interpolated palette.
 
@@ -8,23 +8,23 @@ use std::{convert::Infallible, mem::swap};
 
 use crate::{
     cluster_fit::cluster_fit,
-    math::{R32F, R8U},
+    math::{R8U, R32F},
 };
 
-/// A block of 4x4 texels compressed with BC4.
+/// A block of 4x4 indices compressed with BC4.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Block {
     pub color0: R8U,
     pub color1: R8U,
-    pub texels: [u8; 6],
+    pub indices: [u8; 6],
 }
 
 impl_fixedcode_struct!(
     Block {
         color0: R8U,
         color1: R8U,
-        texels: [u8; 6],
+        indices: [u8; 6],
     } | Infallible
 );
 
@@ -32,23 +32,23 @@ impl Block {
     pub const BLACK: Block = Block {
         color0: R8U::WHITE,
         color1: R8U::BLACK,
-        texels: [0xFF; 6],
+        indices: [0xFF; 6],
     };
 
     pub const WHITE: Block = Block {
         color0: R8U::WHITE,
         color1: R8U::BLACK,
-        texels: [0x00; 6],
+        indices: [0x00; 6],
     };
 
     /// Returns the raw 8-byte representation of this block.
     pub fn bytes(&self) -> [u8; 8] {
         let color0 = self.color0.bits();
         let color1 = self.color1.bits();
-        let texels = self.texels;
+        let indices = self.indices;
 
         [
-            color0, color1, texels[0], texels[1], texels[2], texels[3], texels[4], texels[5],
+            color0, color1, indices[0], indices[1], indices[2], indices[3], indices[4], indices[5],
         ]
     }
 
@@ -56,12 +56,12 @@ impl Block {
     pub fn from_bytes(bytes: [u8; 8]) -> Block {
         let color0 = R8U::new(bytes[0]);
         let color1 = R8U::new(bytes[1]);
-        let texels = [bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
+        let indices = [bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
 
         Block {
             color0,
             color1,
-            texels,
+            indices,
         }
     }
 
@@ -74,7 +74,7 @@ impl Block {
 
         // Prepare local variables.
         let mut colors = [[R32F::BLACK; 4]; 4];
-        let texels = self.texels;
+        let indices = self.indices;
 
         // Check mode and build palette.
         let palette = if self.color0.bits() > self.color1.bits() {
@@ -101,15 +101,15 @@ impl Block {
             ]
         };
 
-        // Decode texels.
+        // Decode indices.
         for x in 0..4 {
             for y in 0..4 {
                 let start_bit = (y * 4 + x) * 3;
                 let start_byte = start_bit / 8;
 
-                let mut index = (texels[start_byte] >> (start_bit & 7)) & 0b111;
+                let mut index = (indices[start_byte] >> (start_bit & 7)) & 0b111;
                 if start_bit & 7 > 5 {
-                    index |= (texels[start_byte + 1] << (8 - (start_bit & 7))) & 0b111;
+                    index |= (indices[start_byte + 1] << (8 - (start_bit & 7))) & 0b111;
                 }
 
                 colors[y][x] = palette[index as usize];
@@ -154,7 +154,7 @@ impl Block {
             return Block {
                 color0,
                 color1: R8U::BLACK,
-                texels: [0x00; 6],
+                indices: [0x00; 6],
             };
         } else if color0.bits() < color1.bits() {
             swap(&mut color0, &mut color1);
@@ -163,7 +163,7 @@ impl Block {
             }
         }
 
-        let mut texels = [0; 6];
+        let mut indices = [0; 6];
         for y in 0..4 {
             for x in 0..4 {
                 let idx = match cf.indices[y * 4 + x] {
@@ -181,9 +181,9 @@ impl Block {
                 let start_bit = (y * 4 + x) * 3;
                 let start_byte = start_bit / 8;
 
-                texels[start_byte] |= idx << (start_bit & 7);
+                indices[start_byte] |= idx << (start_bit & 7);
                 if start_bit & 7 > 5 {
-                    texels[start_byte + 1] |= idx >> (8 - (start_bit & 7));
+                    indices[start_byte + 1] |= idx >> (8 - (start_bit & 7));
                 }
             }
         }
@@ -191,7 +191,7 @@ impl Block {
         Block {
             color0,
             color1,
-            texels,
+            indices,
         }
     }
 }

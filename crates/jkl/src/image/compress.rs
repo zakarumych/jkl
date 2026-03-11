@@ -150,6 +150,8 @@ impl Compressor for AnsCompressor {
         let mut context = ans::Context::from_input(input.clone().flatten());
         context.build_encoder_index();
 
+        context.print_frequencies();
+
         for (i, chunk) in input.enumerate() {
             let mut encoder = ans::Encoder::new(&context);
 

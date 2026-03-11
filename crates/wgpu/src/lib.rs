@@ -38,6 +38,16 @@ struct RawTile {
     h: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Params {
+    symbol_count: u32,
+    tile_count: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+}
+
 pub struct Uploader {
     rgb8u_ans_compute_pipeline: ComputePipeline,
 }
@@ -108,7 +118,6 @@ impl Uploader {
             for tile_index in 0..reader.tiles() {
                 let tile = reader.tile(tile_index);
                 let tile_len = reader.tile_payload_len(tile_index) as usize;
-                dbg!(tile_len);
                 reader
                     .copy_tile_payload_into(tile_index, &mut mapped[last_offset..][..tile_len])?;
                 offsets.push(last_offset as u32);
@@ -174,9 +183,8 @@ impl Uploader {
 
                 symbol_buf.unmap();
 
-                let bytes_per_row = width.checked_mul(4).unwrap_or(0);
-                let padded_bytes_per_row = (bytes_per_row + 255) & !255;
-                let output_buffer_size = padded_bytes_per_row as u64 * height as u64;
+                let byte_stride = (width.checked_mul(4).unwrap_or(0) + 255) & !255;
+                let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jkl-wgpu-output"),
                     size: output_buffer_size,
@@ -184,23 +192,13 @@ impl Uploader {
                     mapped_at_creation: false,
                 });
 
-                #[repr(C)]
-                #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-                struct Params {
-                    tile_count: u32,
-                    output_width: u32,
-                    padded_output_width: u32,
-                    output_height: u32,
-                    symbol_count: u32,
-                }
-
                 let tile_count = u32::try_from(tiles.len()).unwrap_or(0);
                 let symbol_count = u32::try_from(table.len()).unwrap_or(0);
                 let params = Params {
                     tile_count,
-                    output_width: width,
-                    padded_output_width: padded_bytes_per_row / 4,
-                    output_height: height,
+                    width,
+                    stride: byte_stride / 4,
+                    height,
                     symbol_count,
                 };
 
@@ -276,7 +274,7 @@ impl Uploader {
                         buffer: &out_buf,
                         layout: wgpu::TexelCopyBufferLayout {
                             offset: 0,
-                            bytes_per_row: Some(padded_bytes_per_row),
+                            bytes_per_row: Some(byte_stride),
                             rows_per_image: Some(height),
                         },
                     },
