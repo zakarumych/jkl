@@ -55,16 +55,12 @@ where
             ) => {
                 if length_minus_2_me == length_minus_2_base {
                     Token::Reference {
-                        // Keep reference-length deltas in valid reference domain (>= 2),
-                        // because length == 1 is reserved for literal tag in `VarCode`.
                         length_minus_2: 0,
                         distance: distance_me - distance_base,
                     }
                 } else {
                     Token::Reference {
-                        // Keep reference-length deltas in valid reference domain (>= 2),
-                        // because length == 1 is reserved for literal tag in `VarCode`.
-                        length_minus_2: (length_minus_2_me - length_minus_2_base),
+                        length_minus_2: length_minus_2_me - length_minus_2_base,
                         distance: distance_me,
                     }
                 }

@@ -65,34 +65,61 @@ struct Tile {
     h: u32,
 };
 
-struct Symbol {
-    sym: u32,
+struct Entry {
     freq: u32,
     cumul: u32,
-    pad: u32,
 };
 
 struct Params {
-    symbol_count: u32,
-    symbol2_count: u32,
+    // Number of entries in table1
+    table0_count: u32,
+
+    // Number of entries in table2
+    // Some formats use 2 independent tables.
+    table1_count: u32,
+
+    // Number of tiles to process.
+    // Threads with `global_invocation_id.x >= tile_count` do nothing.
     tile_count: u32,
+
+    // Output image dimensions and stride in texel blocks.
     width: u32,
+
+    // Output image dimensions and stride in texel blocks.
     height: u32,
-    stride: u32, // in words, not bytes or texels
+
+    // Output buffer stride, in words (not bytes or texels).
+    // This is the distance between the start of one texel block row and the start of the next texel block row.
+    stride: u32,
 };
 
+// Compressed data in 32-bit words.
 @group(0) @binding(0)
 var<storage, read> payload_words: array<u32>;
+
+// Offsets into `payload_words` for the start of each tile's compressed data, in words.
 @group(0) @binding(1)
 var<storage, read> offsets: array<u32>;
 @group(0) @binding(2)
 var<storage, read> tiles: array<Tile>;
 @group(0) @binding(3)
-var<storage, read> symbol_table: array<Symbol>;
+var<storage, read> table: array<Entry>;
 @group(0) @binding(4)
-var<storage, read_write> out_buf: array<u32>;
+var<storage, read> symbols: array<u32>;
 @group(0) @binding(5)
+var<storage, read_write> out_buf: array<u32>;
+@group(0) @binding(6)
 var<uniform> params: Params;
+
+fn get_u16_symbol(index: u32) -> u32 {
+    let word = symbols[index >> 1u];
+    return (word >> ((index & 1u) * 16u)) & 0xFFFFu;
+}
+
+fn get_u8_symbol(index: u32) -> u32 {
+    let word = symbols[index >> 2u];
+    return (word >> ((index & 3u) * 8u)) & 0xFFu;
+}
 
 var<private> write_word_buffer: u32 = 0u;
 
@@ -150,7 +177,7 @@ fn find_symbol_index(bucket: u32, start: u32, end: u32) -> u32 {
         }
 
         let mid = (lo + hi) >> 1u;
-        if (symbol_table[mid].cumul <= bucket) {
+        if (table[mid].cumul <= bucket) {
             lo = mid;
         } else {
             hi = mid;
@@ -168,34 +195,86 @@ fn renorm_state(state: ptr<function, U64>, cursor: ptr<function, u32>, end: u32)
     }
 }
 
-fn decode_symbol(state: ptr<function, U64>, cursor: ptr<function, u32>, end: u32) -> u32 {
+fn decode_symbol(state: ptr<function, U64>, cursor: ptr<function, u32>, end: u32, range: u32) -> u32 {
     renorm_state(state, cursor, end);
+
+    let range_start = select(0u, params.table0_count, range > 0u);
+    let range_end = select(params.table0_count, params.table0_count + params.table1_count, range > 0u);
 
     let bucket = lo(*state);
     let q = hi(*state);
-    let symbol_index = find_symbol_index(bucket, 0, params.symbol_count);
-    let entry = symbol_table[symbol_index];
+    let index = find_symbol_index(bucket, range_start, range_end);
+    let entry = table[index];
 
     let freq = entry.freq;
     let cumul = entry.cumul;
 
     *state = umuladd64(q, freq, bucket - cumul);
-    return entry.sym;
+    return index - range_start;
 }
 
-fn decode_symbol2(state: ptr<function, U64>, cursor: ptr<function, u32>, end: u32) -> u32 {
-    renorm_state(state, cursor, end);
+var<private> lz77_head: u32 = 0u;
+var<private> lz77_window: array<u32, 1024>;
+var<private> lz77_length: u32 = 0u;
+var<private> lz77_distance: u32 = 0u;
 
-    let bucket = lo(*state);
-    let q = hi(*state);
-    let symbol_index = find_symbol_index(bucket, params.symbol_count, params.symbol_count + params.symbol2_count);
-    let entry = symbol_table[symbol_index];
+fn lz77_window_get(idx: u32) -> u32 {
+    return lz77_window[(lz77_head + 1023u - idx) & 1023u];
+}
 
-    let freq = entry.freq;
-    let cumul = entry.cumul;
+fn lz77_window_push(value: u32) {
+    lz77_window[lz77_head] = value;
+    lz77_head = (lz77_head + 1u) & 1023u;
+}
 
-    *state = umuladd64(q, freq, bucket - cumul);
-    return entry.sym;
+fn lz77_rans_decode_u32(state: ptr<function, U64>, cursor: ptr<function, u32>, end: u32, range: u32, symbol_offset: u32) -> u32 {
+    var value: u32;
+
+    if (lz77_length > 0) {
+        lz77_length -= 1u;
+        value = lz77_window_get(lz77_distance);
+    } else {
+        let index = decode_symbol(state, cursor, end, range);
+        let length = symbols[symbol_offset + (index << 1u)];
+        let symbol = symbols[symbol_offset + (index << 1u) + 1u];
+        if (length > 0u) {
+            // Reference token
+            lz77_length = length - 1;
+            lz77_distance = symbol;
+            value = lz77_window_get(lz77_distance);
+        } else {
+            // Literal token
+            value = symbol;
+        }
+    }
+
+    lz77_window_push(value);
+    return value;
+}
+
+fn lz77_rans_decode_u16(state: ptr<function, U64>, cursor: ptr<function, u32>, end: u32, range: u32, symbol_offset: u32) -> u32 {
+    var value: u32;
+
+    if (lz77_length > 0) {
+        lz77_length -= 1u;
+        value = lz77_window_get(lz77_distance);
+    } else {
+        let index = decode_symbol(state, cursor, end, range);
+        let length = get_u16_symbol(symbol_offset + (index << 1u));
+        let symbol = get_u16_symbol(symbol_offset + (index << 1u) + 1u);
+        if (length > 0u) {
+            // Reference token
+            lz77_length = length - 1;
+            lz77_distance = symbol;
+            value = lz77_window_get(lz77_distance);
+        } else {
+            // Literal token
+            value = symbol;
+        }
+    }
+
+    lz77_window_push(value);
+    return value;
 }
 
 @compute @workgroup_size(64)
@@ -205,14 +284,14 @@ fn decompress_rgb8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    if (params.symbol_count == 0u) {
+    if (params.table0_count == 0u) {
         return;
     }
 
     let tile = tiles[tile_index];
 
-    var cursor = offsets[tile_index] / 4u; // Convert byte offset to word offset.
-    var end = offsets[tile_index + 1u] / 4u; // Convert byte offset to word offset.
+    var cursor = offsets[tile_index];
+    var end = offsets[tile_index + 1u];
     var state: U64 = U64(0u, 0u);
 
     // Prime the decoder state.
@@ -231,12 +310,51 @@ fn decompress_rgb8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
 
-        let rgbx = decode_symbol(&state, &cursor, end);
+        let index = decode_symbol(&state, &cursor, end, 0);
+        let rgbx = symbols[index];
 
         write_rgb8(x, y, params.stride, rgbx);
     }
 }
 
+@compute @workgroup_size(64)
+fn decompress_rgb8_lz77_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let tile_index = gid.x;
+    if (tile_index >= params.tile_count) {
+        return;
+    }
+
+    if (params.table0_count == 0u) {
+        return;
+    }
+
+    let tile = tiles[tile_index];
+
+    var cursor = offsets[tile_index];
+    var end = offsets[tile_index + 1u];
+    var state: U64 = U64(0u, 0u);
+
+    // Prime the decoder state.
+    renorm_state(&state, &cursor, end);
+
+    let pixel_count = tile.w * tile.h;
+
+    for (var i = 0u; i < pixel_count; i = i + 1u) {
+        let local_x = i % tile.w;
+        let local_y = i / tile.w;
+
+        let x = tile.x + local_x;
+        let y = tile.y + local_y;
+
+        if (x >= params.width || y >= params.height) {
+            continue;
+        }
+
+        let rgbx = lz77_rans_decode_u32(&state, &cursor, end, 0, 0);
+
+        write_rgb8(x, y, params.stride, rgbx);
+    }
+}
 
 @compute @workgroup_size(64)
 fn decompress_rgba8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -245,14 +363,14 @@ fn decompress_rgba8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    if (params.symbol_count == 0u) {
+    if (params.table0_count == 0u) {
         return;
     }
 
     let tile = tiles[tile_index];
 
-    var cursor = offsets[tile_index] / 4u; // Convert byte offset to word offset.
-    var end = offsets[tile_index + 1u] / 4u; // Convert byte offset to word offset.
+    var cursor = offsets[tile_index];
+    var end = offsets[tile_index + 1u];
     var state: U64 = U64(0u, 0u);
 
     // Prime the decoder state.
@@ -271,7 +389,8 @@ fn decompress_rgba8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
 
-        let rgba = decode_symbol(&state, &cursor, end);
+        let index = decode_symbol(&state, &cursor, end, 0);
+        let rgba = symbols[index];
 
         write_rgba8(x, y, params.stride, rgba);
     }
@@ -284,14 +403,14 @@ fn decompress_bc1_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    if (params.symbol_count == 0u) {
+    if (params.table0_count == 0u || params.table1_count == 0u) {
         return;
     }
 
     let tile = tiles[tile_index];
 
-    var cursor = offsets[tile_index] / 4u; // Convert byte offset to word offset.
-    var end = offsets[tile_index + 1u] / 4u; // Convert byte offset to word offset.
+    var cursor = offsets[tile_index];
+    var end = offsets[tile_index + 1u];
 
     // Prime the decoder state.
     var state: U64 = U64(0u, 0u);
@@ -310,8 +429,8 @@ fn decompress_bc1_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
 
-        let color0 = decode_symbol(&state, &cursor, end);
-        let color1 = decode_symbol(&state, &cursor, end);
+        let color0 = get_u16_symbol(decode_symbol(&state, &cursor, end, 0));
+        let color1 = get_u16_symbol(decode_symbol(&state, &cursor, end, 0));
 
         // let color0 = (31u << 11u);
         // let color1 = (31u << 6u);
@@ -334,10 +453,79 @@ fn decompress_bc1_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
 
-        let a = decode_symbol2(&state, &cursor, end);
-        let b = decode_symbol2(&state, &cursor, end);
-        let c = decode_symbol2(&state, &cursor, end);
-        let d = decode_symbol2(&state, &cursor, end);
+        let a = get_u8_symbol(params.table0_count * 2 + decode_symbol(&state, &cursor, end, 1));
+        let b = get_u8_symbol(params.table0_count * 2 + decode_symbol(&state, &cursor, end, 1));
+        let c = get_u8_symbol(params.table0_count * 2 + decode_symbol(&state, &cursor, end, 1));
+        let d = get_u8_symbol(params.table0_count * 2 + decode_symbol(&state, &cursor, end, 1));
+
+        write_bc1_indices(x, y, params.stride, (d << 24u) | (c << 16u) | (b << 8u) | a);
+    }
+}
+
+@compute @workgroup_size(64)
+fn decompress_bc1_lz77_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let tile_index = gid.x;
+    if (tile_index >= params.tile_count) {
+        return;
+    }
+
+    if (params.table0_count == 0u || params.table1_count == 0u) {
+        return;
+    }
+
+    let tile = tiles[tile_index];
+
+    var cursor = offsets[tile_index];
+    var end = offsets[tile_index + 1u];
+
+    // Prime the decoder state.
+    var state: U64 = U64(0u, 0u);
+    renorm_state(&state, &cursor, end);
+
+    let pixel_count = tile.w * tile.h;
+
+    for (var i = 0u; i < pixel_count; i = i + 1u) {
+        let local_x = i % tile.w;
+        let local_y = i / tile.w;
+
+        let x = tile.x + local_x;
+        let y = tile.y + local_y;
+
+        if (x >= params.width || y >= params.height) {
+            continue;
+        }
+
+        let color0 = lz77_rans_decode_u16(&state, &cursor, end, 0, 0);
+        let color1 = lz77_rans_decode_u16(&state, &cursor, end, 0, 0);
+
+        write_bc1_colors(x, y, params.stride, color0, color1);
+    }
+
+    // Prime the decoder state.
+    state = U64(0u, 0u);
+    renorm_state(&state, &cursor, end);
+
+    lz77_length = 0u;
+    for (var i = 0u; i < 1024u; i = i + 1u) {
+        lz77_head = 0u;
+        lz77_window[i] = 0u;
+    }
+
+    for (var i = 0u; i < pixel_count; i = i + 1u) {
+        let local_x = i % tile.w;
+        let local_y = i / tile.w;
+
+        let x = tile.x + local_x;
+        let y = tile.y + local_y;
+
+        if (x >= params.width || y >= params.height) {
+            continue;
+        }
+
+        let a = lz77_rans_decode_u16(&state, &cursor, end, 1, params.table0_count * 2);
+        let b = lz77_rans_decode_u16(&state, &cursor, end, 1, params.table0_count * 2);
+        let c = lz77_rans_decode_u16(&state, &cursor, end, 1, params.table0_count * 2);
+        let d = lz77_rans_decode_u16(&state, &cursor, end, 1, params.table0_count * 2);
 
         write_bc1_indices(x, y, params.stride, (d << 24u) | (c << 16u) | (b << 8u) | a);
     }
