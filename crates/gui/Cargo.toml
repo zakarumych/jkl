@@ -6,6 +6,6 @@ license.workspace = true
 
 [dependencies]
 jkl = { path = "../jkl" }
+jkl-wgpu = { path = "../wgpu" }
 eframe = { workspace = true, features = ["persistence", "wgpu"] }
 egui.workspace = true
-bytemuck = { version = "1.20", features = ["extern_crate_std"] }

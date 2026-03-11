@@ -1,0 +1,11 @@
+[package]
+name = "jkl-wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jkl = { path = "../jkl" }
+wgpu.workspace = true
+bytemuck = { workspace = true, features = ["extern_crate_std"] }
+wgpu-types = "27.0"

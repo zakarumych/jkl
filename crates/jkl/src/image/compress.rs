@@ -147,7 +147,8 @@ impl Compressor for AnsCompressor {
         input: impl Iterator<Item = impl DoubleEndedIterator<Item = T>> + Clone,
         output: &mut Vec<Vec<u32>>,
     ) -> io::Result<Self::Context<T>> {
-        let context = ans::Context::from_input(input.clone().flatten());
+        let mut context = ans::Context::from_input(input.clone().flatten());
+        context.build_encoder_index();
 
         for (i, chunk) in input.enumerate() {
             let mut encoder = ans::Encoder::new(&context);
@@ -309,26 +310,6 @@ where
         symbols
     }
 }
-
-// fn take_error_or_eof(read_error: &mut Option<io::Error>) -> io::Error {
-//     match read_error.take() {
-//         Some(err) => err,
-//         None => io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF"),
-//     }
-// }
-
-// fn codes_read_iter<'a>(
-//     read: &'a mut ReadBits<impl io::Read>,
-//     read_error: &'a mut Option<io::Error>,
-// ) -> impl Iterator<Item = u32> + 'a {
-//     std::iter::from_fn(|| match u32::read(read) {
-//         Ok(code) => Some(code),
-//         Err(err) => {
-//             *read_error = Some(err);
-//             None
-//         }
-//     })
-// }
 
 struct ExtractError<I> {
     iter: I,

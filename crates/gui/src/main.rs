@@ -3,7 +3,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use eframe::egui_wgpu::wgpu::util::DeviceExt;
 use eframe::{
     egui::{self, Align2, Color32, FontId, Pos2, Sense, Vec2},
     egui_wgpu::{
@@ -11,10 +10,8 @@ use eframe::{
         WgpuSetupCreateNew, wgpu,
     },
 };
-use jkl::{
-    image::format::Format,
-    jackal::image::{Compression, JackalReader, decompress_wgsl_kernel},
-};
+use jkl::jackal::image::JackalReader;
+use jkl_wgpu::Uploader;
 
 fn main() {
     let mut native_options = eframe::NativeOptions::default();
@@ -47,17 +44,8 @@ fn main() {
     .unwrap();
 }
 
-#[derive(Clone)]
 struct PendingDecode {
-    width: u32,
-    height: u32,
-    generation: u64,
-    payload_words: Vec<u32>,
-    tile_word_offsets: Vec<u32>,
-    symbol_cumul: Vec<u32>,
-    symbol_freq: Vec<u32>,
-    symbol_rgb8: Vec<u32>,
-    tile_meta: Vec<u32>,
+    reader: JackalReader<File>,
 }
 
 struct PreviewPipeline {
@@ -66,15 +54,8 @@ struct PreviewPipeline {
     sampler: wgpu::Sampler,
 }
 
-struct ComputePipeline {
-    pipeline: wgpu::ComputePipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-}
-
 struct GpuPreview {
     bind_group: wgpu::BindGroup,
-    texture: wgpu::Texture,
-    generation: u64,
     width: u32,
     height: u32,
 }
@@ -83,9 +64,8 @@ struct SharedPreview {
     pending: Option<PendingDecode>,
     gpu: Option<GpuPreview>,
     render_pipeline: Option<PreviewPipeline>,
-    compute_pipeline: Option<ComputePipeline>,
+    uploader: Option<Uploader>,
     target_format: wgpu::TextureFormat,
-    generation: u64,
     last_error: Option<String>,
 }
 
@@ -105,114 +85,27 @@ impl Jackal {
                 pending: None,
                 gpu: None,
                 render_pipeline: None,
-                compute_pipeline: None,
+                uploader: None,
                 target_format: cc
                     .wgpu_render_state
                     .as_ref()
                     .map(|s| s.target_format)
                     .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb),
-                generation: 0,
                 last_error: None,
             })),
         }
     }
 
     fn load_jkli_preview(&self, path: &std::path::Path) -> Result<(), String> {
-        let file =
-            File::open(path).map_err(|e| format!("failed to open '{}': {e}", path.display()))?;
-
-        let mut reader = JackalReader::open(file)
-            .map_err(|e| format!("failed to parse JKLI '{}': {e}", path.display()))?;
-
-        if reader.format() != Format::RGB8 {
-            return Err(format!(
-                "unsupported format {:?}, expected RGB8",
-                reader.format()
-            ));
-        }
-
-        if reader.compression() != Compression::Ans {
-            return Err(format!(
-                "unsupported compression {:?}, expected Ans",
-                reader.compression()
-            ));
-        }
-
-        let [width_usize, height_usize, _] = reader.extent().raw_size();
-        let width =
-            u32::try_from(width_usize).map_err(|_| "image width does not fit u32".to_owned())?;
-        let height =
-            u32::try_from(height_usize).map_err(|_| "image height does not fit u32".to_owned())?;
-
-        let payload_len = reader
-            .tile_payload_len_bytes()
-            .map_err(|e| format!("failed to query payload length: {e}"))?;
-
-        if payload_len % 4 != 0 {
-            return Err("tile payload byte length is not 4-byte aligned".to_owned());
-        }
-
-        let mut payload_bytes = vec![0u8; payload_len];
-        let tile_offsets_bytes = reader
-            .read_all_tile_payloads_into(&mut payload_bytes)
-            .map_err(|e| format!("failed to read tile payload: {e}"))?;
-
-        let mut tile_word_offsets = Vec::with_capacity(tile_offsets_bytes.len());
-        for &offset in &tile_offsets_bytes {
-            if offset % 4 != 0 {
-                return Err("tile payload offsets are not 4-byte aligned".to_owned());
-            }
-
-            let word = u32::try_from(offset / 4)
-                .map_err(|_| "tile payload offset does not fit u32".to_owned())?;
-            tile_word_offsets.push(word);
-        }
-
-        let payload_words = payload_bytes
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect::<Vec<_>>();
-
-        let ctx = reader
-            .read_rgb8_ans_gpu_context()
-            .map_err(|e| format!("failed to read ANS context: {e}"))?;
-
-        let mut tile_meta = Vec::with_capacity(reader.tiles() * 2);
-        for tile_index in 0..reader.tiles() {
-            let tile = reader.tile(tile_index);
-
-            let x = u32::try_from(tile.rect.x).map_err(|_| "tile x does not fit u32".to_owned())?;
-            let y = u32::try_from(tile.rect.y).map_err(|_| "tile y does not fit u32".to_owned())?;
-            let w =
-                u32::try_from(tile.rect.w).map_err(|_| "tile width does not fit u32".to_owned())?;
-            let h = u32::try_from(tile.rect.h)
-                .map_err(|_| "tile height does not fit u32".to_owned())?;
-
-            if x > 0xFFFF || y > 0xFFFF || w > 0xFFFF || h > 0xFFFF {
-                return Err("tile metadata exceeds 16-bit packing range".to_owned());
-            }
-
-            tile_meta.push((y << 16) | x);
-            tile_meta.push((h << 16) | w);
-        }
+        let file = File::open(path).map_err(|e| format!("failed to open file: {e}"))?;
+        let reader = JackalReader::open(file).map_err(|e| format!("failed to open .jkli: {e}"))?;
 
         let mut shared = self
             .shared
             .lock()
             .map_err(|_| "preview state mutex poisoned".to_owned())?;
 
-        shared.generation = shared.generation.wrapping_add(1);
-        shared.pending = Some(PendingDecode {
-            width,
-            height,
-            generation: shared.generation,
-            payload_words,
-            tile_word_offsets,
-            symbol_cumul: ctx.symbol_cumul,
-            symbol_freq: ctx.symbol_freq,
-            symbol_rgb8: ctx.symbol_rgb8,
-            tile_meta,
-        });
+        shared.pending = Some(PendingDecode { reader });
         shared.last_error = None;
 
         Ok(())
@@ -225,7 +118,12 @@ impl Jackal {
             return Some([gpu.width, gpu.height]);
         }
 
-        shared.pending.as_ref().map(|p| [p.width, p.height])
+        if let Some(pending) = &shared.pending {
+            let extent = pending.reader.extent();
+            return Some([extent.width() as u32, extent.depth() as u32]);
+        }
+
+        None
     }
 
     fn paint_preview(&self, ui: &mut egui::Ui, image_size: [u32; 2]) {
@@ -385,135 +283,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 }
 
-impl ComputePipeline {
-    fn new(device: &wgpu::Device) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("jkl-gui-rgb8-rans-decompress-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                decompress_wgsl_kernel(Format::RGB8, Compression::Ans).into(),
-            ),
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("jkl-gui-rgb8-rans-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("jkl-gui-rgb8-rans-pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("jkl-gui-rgb8-rans-pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("decompress_rgb8_rans"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        Self {
-            pipeline,
-            bind_group_layout,
-        }
-    }
-}
-
-fn encode_params(p: &PendingDecode) -> [u8; 16] {
-    let mut out = [0u8; 16];
-    let tile_count = u32::try_from(p.tile_word_offsets.len().saturating_sub(1)).unwrap_or(0);
-
-    out[0..4].copy_from_slice(&tile_count.to_le_bytes());
-    out[4..8].copy_from_slice(&p.width.to_le_bytes());
-    out[8..12].copy_from_slice(&p.height.to_le_bytes());
-    out[12..16].copy_from_slice(&(u32::try_from(p.symbol_cumul.len()).unwrap_or(0)).to_le_bytes());
-
-    out
-}
-
 impl CallbackTrait for PreviewCallback {
     fn prepare(
         &self,
@@ -527,150 +296,41 @@ impl CallbackTrait for PreviewCallback {
             Ok(guard) => guard,
             Err(_) => return Vec::new(),
         };
+        let shared = &mut *shared;
 
         if shared.render_pipeline.is_none() {
             shared.render_pipeline = Some(PreviewPipeline::new(device, shared.target_format));
         }
-        if shared.compute_pipeline.is_none() {
-            shared.compute_pipeline = Some(ComputePipeline::new(device));
-        }
 
-        let pending = match &shared.pending {
-            Some(p) => p.clone(),
+        let pending = match &mut shared.pending {
+            Some(p) => p,
             None => return Vec::new(),
         };
 
-        let uploaded_generation = shared.gpu.as_ref().map(|g| g.generation).unwrap_or(0);
-        if uploaded_generation == pending.generation {
-            return Vec::new();
+        // ensure uploader exists
+        if shared.uploader.is_none() {
+            shared.uploader = Some(Uploader::new(device));
         }
+        let uploader = shared.uploader.as_ref().unwrap();
 
-        let payload_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jkl-gui-payload-words"),
-            contents: bytemuck::cast_slice(&pending.payload_words),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let offsets_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jkl-gui-tile-word-offsets"),
-            contents: bytemuck::cast_slice(&pending.tile_word_offsets),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let symbol_cumul_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jkl-gui-symbol-cumul"),
-            contents: bytemuck::cast_slice(&pending.symbol_cumul),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let symbol_freq_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jkl-gui-symbol-freq"),
-            contents: bytemuck::cast_slice(&pending.symbol_freq),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let symbol_rgb_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jkl-gui-symbol-rgb"),
-            contents: bytemuck::cast_slice(&pending.symbol_rgb8),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let tile_meta_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jkl-gui-tile-meta"),
-            contents: bytemuck::cast_slice(&pending.tile_meta),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let params_bytes = encode_params(&pending);
-        let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jkl-gui-decode-params"),
-            contents: &params_bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-
-        let out_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("jkl-gui-output-texture"),
-            size: wgpu::Extent3d {
-                width: pending.width,
-                height: pending.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-
-        let out_view = out_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let compute = shared
-            .compute_pipeline
-            .as_ref()
-            .expect("compute pipeline should exist");
-
-        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("jkl-gui-decode-bg"),
-            layout: &compute.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: payload_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: offsets_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: symbol_cumul_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: symbol_freq_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: symbol_rgb_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: tile_meta_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::TextureView(&out_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: params_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("jkl-gui-rgb8-rans-decode-pass"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(&compute.pipeline);
-            cpass.set_bind_group(0, &compute_bind_group, &[]);
-
-            let tile_count =
-                u32::try_from(pending.tile_word_offsets.len().saturating_sub(1)).unwrap_or(0);
-            let groups_x = tile_count.div_ceil(64);
-            if groups_x > 0 {
-                cpass.dispatch_workgroups(groups_x, 1, 1);
+        let texture = match uploader.upload_from_reader(&mut pending.reader, device, encoder) {
+            Ok(tex) => tex,
+            Err(e) => {
+                shared.last_error = Some(format!("upload failed: {e}"));
+                return Vec::new();
             }
-        }
+        };
+
+        shared.pending = None;
+
+        let uploaded = texture; // we already have it
 
         let render = shared
             .render_pipeline
             .as_ref()
             .expect("render pipeline should exist");
 
-        let sampled_view = out_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampled_view = uploaded.create_view(&wgpu::TextureViewDescriptor::default());
         let render_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("jkl-gui-preview-bg"),
             layout: &render.bind_group_layout,
@@ -688,10 +348,8 @@ impl CallbackTrait for PreviewCallback {
 
         shared.gpu = Some(GpuPreview {
             bind_group: render_bind_group,
-            texture: out_texture,
-            generation: pending.generation,
-            width: pending.width,
-            height: pending.height,
+            width: uploaded.width(),
+            height: uploaded.height(),
         });
 
         Vec::new()
@@ -716,8 +374,6 @@ impl CallbackTrait for PreviewCallback {
             Some(g) => g,
             None => return,
         };
-
-        let _keep_alive = &gpu.texture;
 
         render_pass.set_pipeline(&pipeline.render_pipeline);
         render_pass.set_bind_group(0, &gpu.bind_group, &[]);

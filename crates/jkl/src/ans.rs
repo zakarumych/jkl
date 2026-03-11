@@ -6,7 +6,7 @@
 
 use std::{cmp, error::Error, fmt, hash::Hash, io, num::NonZero};
 
-use hashbrown::{HashMap, hash_map::Entry};
+use hashbrown::HashMap;
 
 use crate::{
     bits::{ReadBits, WriteBits},
@@ -14,6 +14,14 @@ use crate::{
     math::Delta,
     vle,
 };
+
+/// Symbol table entry containing the symbol, its frequency, and its cumulative frequency.
+#[derive(Clone, Copy, Debug)]
+pub struct Entry<T> {
+    pub symbol: T,
+    pub freq: NonZero<u32>,
+    pub cumul: u32,
+}
 
 /// Shared frequency table used by [`Encoder`] and [`Decoder`].
 ///
@@ -23,86 +31,50 @@ use crate::{
 /// encoders and decoders.
 #[derive(Clone, Debug)]
 pub struct Context<T> {
-    freqs: HashMap<T, NonZero<u32>>,
-    cumul: HashMap<T, u32>,
-    map: Vec<(u32, T)>,
+    /// Symbol table, sorted by symbol.
+    /// Cumulative frequency is sum of frequencies of all preceding symbols.
+    /// Consequently the array is sorted by cumulative frequency as well.
+    table: Vec<Entry<T>>,
+
+    /// Same, indexed by symbol.
+    /// Used to speed-up encoding.
+    map: Option<HashMap<T, (NonZero<u32>, u32)>>,
 }
 
 impl<T> Context<T> {
     /// Builds a context from sorted (symbol, frequency) pairs and an optional
-    /// pre-built frequency map.
-    fn build(
-        freqs_sorted: impl IntoIterator<Item = (T, NonZero<u32>)>,
-        freqs: Option<HashMap<T, NonZero<u32>>>,
-    ) -> Self
+    pub fn from_frequencies(freqs_sorted: impl IntoIterator<Item = (T, NonZero<u32>)>) -> Self
     where
         T: Eq + Hash + Copy,
     {
-        let mut cumul = HashMap::<T, u32>::new();
+        let mut table = Vec::new();
         let mut accum = 0u32;
-        let build_freqs = freqs.is_none();
-        let mut freqs = freqs.unwrap_or_default();
 
         for (symbol, count) in freqs_sorted {
-            if build_freqs {
-                freqs.insert(symbol, count);
-            } else {
-                debug_assert_eq!(freqs[&symbol], count);
-            }
+            table.push(Entry {
+                symbol,
+                freq: count,
+                cumul: accum,
+            });
 
-            cumul.insert(symbol, accum);
-
-            if 0xFFFF_FFFF - accum <= count.get() {
+            if 0xFFFF_FFFF - accum < count.get() {
                 panic!("Total frequency overflow");
             }
 
             accum += count.get();
         }
 
-        if freqs.len() == 1 {
+        if table.len() == 1 {
             // Fix degenerate case.
-            let (_, count) = freqs.iter_mut().next().unwrap();
-            *count = const { NonZero::new(0xFFFF_FFFF).unwrap() };
+            let symbol = &mut table[0];
+            *symbol = Entry {
+                symbol: symbol.symbol,
+                freq: const { NonZero::new(0xFFFF_FFFF).unwrap() },
+                cumul: 0,
+            };
         }
 
-        let mut map = cumul.iter().map(|(s, c)| (*c, *s)).collect::<Vec<_>>();
-        map.sort_unstable_by_key(|(c, _)| *c);
-
-        Context { freqs, cumul, map }
-    }
-
-    /// Build context from sorted frequencies.
-    ///
-    /// Frequency sequence is sorted by symbols.
-    pub fn from_sorted_frequencies(
-        freqs_sorted: impl IntoIterator<Item = (T, NonZero<u32>)>,
-    ) -> Self
-    where
-        T: Eq + Hash + Copy,
-    {
-        Self::build(freqs_sorted, None)
-    }
-
-    /// Build context from frequency map.
-    pub fn from_frequency_map(freqs: HashMap<T, NonZero<u32>>) -> Self
-    where
-        T: Ord + Hash + Copy,
-    {
-        Self::from_frequency_map_ord_by(freqs, |a, b| a.cmp(&b))
-    }
-
-    /// Build context from frequency map.
-    /// Uses provided order for symbols.
-    pub fn from_frequency_map_ord_by(
-        freqs: HashMap<T, NonZero<u32>>,
-        ord: impl Fn(T, T) -> cmp::Ordering,
-    ) -> Self
-    where
-        T: Eq + Hash + Copy,
-    {
-        let mut freqs_sorted = freqs.iter().map(|(s, c)| (*s, *c)).collect::<Vec<_>>();
-        freqs_sorted.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
-        Self::build(freqs_sorted, Some(freqs))
+        Context { table, map: None }
     }
 
     /// Build context from input data.
@@ -123,54 +95,46 @@ impl<T> Context<T> {
     where
         T: Eq + Hash + Copy,
     {
-        let mut total = 0u32;
-        let mut freqs = HashMap::<T, NonZero<u32>>::new();
+        let mut accum = 0u32;
+
+        let mut map = HashMap::<T, (NonZero<u32>, u32)>::new();
 
         input.into_iter().for_each(|symbol| {
-            if total == 0xFFFF_FFFF {
+            if accum == 0xFFFF_FFFF {
                 panic!("Total frequency overflow");
             }
 
-            total += 1;
-            match freqs.entry(symbol) {
-                Entry::Occupied(mut entry) => {
-                    let freq = entry.get_mut();
+            accum += 1;
+            match map.entry(symbol) {
+                hashbrown::hash_map::Entry::Occupied(mut entry) => {
+                    let freq = &mut entry.get_mut().0;
                     *freq = freq.checked_add(1).expect("frequency overflow");
                 }
-                Entry::Vacant(entry) => {
-                    entry.insert(const { NonZero::new(1).unwrap() });
+                hashbrown::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(const { (NonZero::new(1).unwrap(), 0) });
                 }
             }
         });
 
-        assert!(
-            !freqs.is_empty(),
-            "Context cannot be built from empty input"
-        );
+        let mut table = Vec::with_capacity(map.len());
+        for (symbol, (freq, _)) in map {
+            table.push(Entry {
+                symbol,
+                freq,
+                cumul: 0,
+            });
+        }
+        table.sort_by(|a, b| ord(a.symbol, b.symbol));
 
-        if freqs.len() == 1 {
-            // Fix degenerate case.
-            let (_, count) = freqs.iter_mut().next().unwrap();
-            *count = const { NonZero::new(0xFFFF_FFFF).unwrap() };
-        } else {
-            for freq in freqs.values_mut() {
-                // freq < total
-                // total < 2^32
-                // normalized_freq is in [1..2^32-1]
-                let normalized_freq = (u64::from(freq.get()) << 32) / u64::from(total);
-                *freq = NonZero::new(normalized_freq as u32).unwrap();
-            }
+        let mut accum = 0;
+        for entry in &mut table {
+            debug_assert!(0xFFFF_FFFF - accum >= entry.freq.get());
+
+            entry.cumul = accum;
+            accum += entry.freq.get();
         }
 
-        Self::from_frequency_map_ord_by(freqs, ord)
-    }
-
-    /// Returns an iterator over all `(symbol, frequency)` pairs in this context.
-    pub fn freqs(&self) -> impl ExactSizeIterator<Item = (T, NonZero<u32>)> + '_
-    where
-        T: Copy,
-    {
-        self.freqs.iter().map(|(s, c)| (*s, *c))
+        Context { table, map: None }
     }
 
     fn bit_len(&self) -> usize
@@ -179,20 +143,17 @@ impl<T> Context<T> {
     {
         let mut bit_len = 0;
 
-        let mut freqs = self.freqs().collect::<Vec<_>>();
-        freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
-
         {
             // Write number of symbols.
-            bit_len += vle::encode_bit_len(freqs.len());
+            bit_len += vle::encode_bit_len(self.table.len());
 
             // Encode frequencies.
             let mut last = T::default();
-            for (symbol, count) in &freqs {
-                bit_len += vle::encode_non_zero_bit_len::<u32>(*count);
+            for entry in &self.table {
+                bit_len += vle::encode_non_zero_bit_len::<u32>(entry.freq);
 
-                let d = symbol.delta(last);
-                last = *symbol;
+                let d = entry.symbol.delta(last);
+                last = entry.symbol;
                 bit_len += d.var_bit_len();
             }
         }
@@ -205,20 +166,17 @@ impl<T> Context<T> {
     where
         T: Copy + Default + Ord + Delta + VarCode,
     {
-        let mut freqs = self.freqs().collect::<Vec<_>>();
-        freqs.sort_unstable_by_key(|(symbol, _)| *symbol);
-
         {
             // Write number of symbols.
-            vle::encode(freqs.len(), writer)?;
+            vle::encode(self.table.len(), writer)?;
 
             // Encode frequencies.
             let mut last = T::default();
-            for (symbol, count) in &freqs {
-                vle::encode_non_zero::<u32, _>(*count, writer)?;
+            for entry in &self.table {
+                vle::encode_non_zero::<u32, _>(entry.freq, writer)?;
 
-                let d = symbol.delta(last);
-                last = *symbol;
+                let d = entry.symbol.delta(last);
+                last = entry.symbol;
                 d.var_write(writer)?;
             }
         }
@@ -233,27 +191,23 @@ impl<T> Context<T> {
         &self,
         writer: &mut WriteBits<impl io::Write>,
         init: T,
-        ord: impl Fn(T, T) -> cmp::Ordering,
         delta: impl Fn(T, T) -> U,
     ) -> io::Result<()>
     where
         T: Copy,
         U: VarCode,
     {
-        let mut freqs = self.freqs().collect::<Vec<_>>();
-        freqs.sort_unstable_by(|(a, _), (b, _)| ord(*a, *b));
-
         {
             // Write number of symbols.
-            vle::encode(freqs.len(), writer)?;
+            vle::encode(self.table.len(), writer)?;
 
             // Encode frequencies.
             let mut last = init;
-            for (symbol, count) in &freqs {
-                vle::encode_non_zero::<u32, _>(*count, writer)?;
+            for entry in &self.table {
+                vle::encode_non_zero::<u32, _>(entry.freq, writer)?;
 
-                let d = delta(last, *symbol);
-                last = *symbol;
+                let d = delta(last, entry.symbol);
+                last = entry.symbol;
                 d.var_write(writer)?;
             }
         }
@@ -266,25 +220,39 @@ impl<T> Context<T> {
     /// Should be used if context was written without delta encoding.
     pub fn read(reader: &mut ReadBits<impl io::Read>) -> io::Result<Self>
     where
-        T: Copy + Default + Eq + Hash + Delta + VarCode,
+        T: Ord + Hash + Copy + Default + Delta + VarCode,
     {
         // Read number of symbols.
         let len = { vle::decode::<usize, _>(reader)? };
 
         // Read symbols and build frequency map.
-        let mut freqs_sorted = Vec::<(T, NonZero<u32>)>::with_capacity(len);
+        let mut table = Vec::<Entry<T>>::with_capacity(len);
 
         let mut last = T::default();
+        let mut accum = 0;
         for _ in 0..len {
             let count = vle::decode_non_zero::<u32, _>(reader)?;
 
             let d = T::var_read(reader)?;
             let symbol = T::from_delta(last, d);
             last = symbol;
-            freqs_sorted.push((symbol, count));
+            table.push(Entry {
+                symbol,
+                freq: count,
+                cumul: accum,
+            });
+
+            if 0xFFFF_FFFF - accum < count.get() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Total frequency overflow",
+                ));
+            }
+
+            accum += count.get();
         }
 
-        Ok(Self::from_sorted_frequencies(freqs_sorted))
+        Ok(Context { table, map: None })
     }
 
     /// Read minimal header for ANS encoding.
@@ -300,26 +268,92 @@ impl<T> Context<T> {
         from_delta: impl Fn(T, U) -> T,
     ) -> io::Result<Self>
     where
-        T: Copy + Eq + Hash,
+        T: Eq + Hash + Copy,
         U: VarCode,
     {
         // Read number of symbols.
         let len = { vle::decode::<usize, _>(reader)? };
 
         // Read symbols and build frequency map.
-        let mut freqs_sorted = Vec::<(T, NonZero<u32>)>::with_capacity(len);
+        let mut table = Vec::<Entry<T>>::with_capacity(len);
 
         let mut last = init;
+        let mut accum = 0;
         for _ in 0..len {
             let count = vle::decode_non_zero::<u32, _>(reader)?;
 
             let d = U::var_read(reader)?;
             let symbol = from_delta(last, d);
             last = symbol;
-            freqs_sorted.push((symbol, count));
+            table.push(Entry {
+                symbol,
+                freq: count,
+                cumul: accum,
+            });
+
+            if 0xFFFF_FFFF - accum < count.get() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Total frequency overflow",
+                ));
+            }
+
+            accum += count.get();
         }
 
-        Ok(Self::from_sorted_frequencies(freqs_sorted))
+        Ok(Context { table, map: None })
+    }
+
+    pub fn table(&self) -> &[Entry<T>] {
+        &self.table
+    }
+
+    fn find_by_bucket(&self, c: u32) -> (T, NonZero<u32>, u32)
+    where
+        T: Copy,
+    {
+        assert!(!self.table.is_empty());
+        debug_assert_eq!(self.table[0].cumul, 0);
+
+        let index = match self.table.binary_search_by_key(&c, |e| e.cumul) {
+            Ok(index) => index,
+            Err(next) => next - 1,
+        };
+        let e = &self.table[index];
+        (e.symbol, e.freq, e.cumul)
+    }
+
+    fn find_by_symbol(&self, symbol: T) -> Option<(NonZero<u32>, u32)>
+    where
+        T: Ord + Hash + Copy,
+    {
+        if let Some(map) = &self.map {
+            return map.get(&symbol).copied();
+        }
+
+        let index = self
+            .table
+            .binary_search_by_key(&symbol, |e| e.symbol)
+            .ok()?;
+
+        let e = &self.table[index];
+        Some((e.freq, e.cumul))
+    }
+
+    /// Initialize by-symbol look-up hashmap.
+    /// If not initialized, by-symbol look-up will use binary search over table.
+    /// by-symbol lookup is only used during encoding, so calling this function is wasteful when context will be only used for decoding.
+    pub fn build_encoder_index(&mut self)
+    where
+        T: Hash + Eq + Copy,
+    {
+        // Build a map from symbol to cumulative frequency for faster lookup during encoding.
+        let mut map = HashMap::new();
+
+        for entry in &self.table {
+            map.insert(entry.symbol, (entry.freq, entry.cumul));
+        }
+        self.map = Some(map);
     }
 }
 
@@ -354,7 +388,7 @@ pub struct Encoder<'a, T> {
 
 impl<'a, T> Encoder<'a, T>
 where
-    T: Eq + Hash + Copy,
+    T: Ord + Hash + Copy,
 {
     /// Prepare Ans encoder.
     pub fn new(ctx: &'a Context<T>) -> Self {
@@ -366,8 +400,10 @@ where
 
     /// Encodes a single symbol, returning a `u32` token if state bits need to be emitted.
     pub fn encode(&mut self, symbol: T) -> Option<u32> {
-        let freq = self.ctx.freqs[&symbol];
-        let cumul = self.ctx.cumul[&symbol];
+        let (freq, cumul) = self
+            .ctx
+            .find_by_symbol(symbol)
+            .expect("Symbol not found in context");
 
         let mut emit = None;
 
@@ -470,16 +506,10 @@ where
 
         let c = (self.state & 0xFFFF_FFFF) as u32;
 
-        let index = match self.ctx.map.binary_search_by_key(&c, |(start, _)| *start) {
-            Ok(index) => index,
-            Err(next) => next - 1,
-        };
+        let (symbol, freq, cumul) = self.ctx.find_by_bucket(c);
 
-        let symbol = self.ctx.map[index].1;
-
-        let new_state = (self.state >> 32) * u64::from(self.ctx.freqs[&symbol].get())
-            + (self.state & 0xFFFF_FFFF)
-            - u64::from(self.ctx.cumul[&symbol]);
+        let new_state = (self.state >> 32) * u64::from(freq.get()) + (self.state & 0xFFFF_FFFF)
+            - u64::from(cumul);
 
         self.state = new_state;
 
@@ -509,16 +539,11 @@ where
 
             let c = (self.state & 0xFFFF_FFFF) as u32;
 
-            let index = match self.ctx.map.binary_search_by_key(&c, |(start, _)| *start) {
-                Ok(index) => index,
-                Err(next) => next - 1,
-            };
+            let (symbol, freq, cumul) = self.ctx.find_by_bucket(c);
 
-            let symbol = self.ctx.map[index].1;
-
-            let new_state = (self.state >> 32) * u64::from(self.ctx.freqs[&symbol].get())
+            let new_state = (self.state >> 32) * u64::from(freq.get())
                 + (self.state & 0xFFFF_FFFF) as u64
-                - u64::from(self.ctx.cumul[&symbol]);
+                - u64::from(cumul);
 
             self.state = new_state;
 
