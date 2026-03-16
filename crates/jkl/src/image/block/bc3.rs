@@ -5,7 +5,7 @@
 
 use std::convert::Infallible;
 
-use crate::math::{Rgb32F, Rgba32F, R32F};
+use crate::math::{R32F, Rgb32F, Rgba32F};
 
 use super::{bc1, bc4};
 
@@ -88,7 +88,7 @@ impl Block {
     }
 
     /// Encodes a 4×4 grid of RGB colors into a BC3 block with full alpha.
-    pub fn encode(colors: [[Rgb32F; 4]; 4]) -> Self {
+    pub fn encode(colors: [[(Rgb32F, bool); 4]; 4]) -> Self {
         let rgb = bc1::Block::encode(colors);
 
         Block {
@@ -98,11 +98,11 @@ impl Block {
     }
 
     /// Encodes a 4×4 grid of RGBA colors into a BC3 block with per-texel alpha.
-    pub fn encode_with_alpha(colors: [[Rgba32F; 4]; 4]) -> Self {
-        let alpha_texels = colors.map(|row| row.map(|c| R32F::new(c.a())));
+    pub fn encode_with_alpha(colors: [[(Rgba32F, bool); 4]; 4]) -> Self {
+        let alpha_texels = colors.map(|row| row.map(|(c, v)| (R32F::new(c.a()), v)));
         let alpha = bc4::Block::encode(alpha_texels);
 
-        let rgb_texels = colors.map(|row| row.map(|c| c.rgb()));
+        let rgb_texels = colors.map(|row| row.map(|(c, v)| (c.rgb(), v)));
         let rgb = bc1::Block::encode(rgb_texels);
 
         Block { alpha, rgb }

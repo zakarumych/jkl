@@ -7,6 +7,7 @@ use std::{convert::Infallible, mem::swap};
 
 use crate::{
     cluster_fit::cluster_fit,
+    image::{ImageMut, ImageRef},
     math::{Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F},
 };
 
@@ -154,23 +155,25 @@ impl Block {
     }
 
     /// Encodes a 4×4 grid of RGB colors into a BC1 block.
-    pub fn encode(colors: [[Rgb32F; 4]; 4]) -> Self {
+    pub fn encode(colors: [[(Rgb32F, bool); 4]; 4]) -> Self {
         let mut samples = [Vec3::ZERO; 16];
 
-        for y in 0..4 {
-            for x in 0..4 {
-                samples[y * 4 + x] = colors[y][x].into();
+        let mut count = 0;
+
+        for row in &colors {
+            for &(c, v) in row {
+                if v {
+                    samples[count] = c.into();
+                    count += 1;
+                }
             }
         }
 
-        let mut cf = cluster_fit::<Vec3, 4, 16>(
-            &samples,
-            |a: Vec3, b: Vec3| {
-                let a = Rgb565::from_f32(a.into());
-                let b = Rgb565::from_f32(b.into());
+        assert_ne!(count, 0, "At least one sample must valid");
 
-                (a.into_f32().into(), b.into_f32().into())
-            },
+        let mut cf = cluster_fit::<Vec3, 4, 16>(
+            &samples[..count],
+            |a: Vec3| Rgb565::from_f32(a.into()).into_f32().into(),
             |a: Vec3, b: Vec3| {
                 let a = Rgb32F::from(a);
                 let b = Rgb32F::from(b);
@@ -190,7 +193,7 @@ impl Block {
         if color0 == color1 {
             return Block {
                 color0,
-                color1: Rgb565::BLACK,
+                color1,
                 indices: [0x00; 4],
             };
         } else if color0.bits() < color1.bits() {
@@ -201,9 +204,13 @@ impl Block {
         }
 
         let mut indices = [0; 4];
+        let mut index_index = 0;
         for y in 0..4 {
             for x in 0..4 {
-                let idx = match cf.indices[y * 4 + x] {
+                if colors[y][x].1 {
+                    continue;
+                }
+                let idx = match cf.indices[index_index] {
                     0 => 0,
                     1 => 2,
                     2 => 3,
@@ -211,6 +218,7 @@ impl Block {
                     _ => unreachable!(),
                 };
                 indices[y] |= idx << (x * 2);
+                index_index += 1;
             }
         }
 
@@ -222,44 +230,39 @@ impl Block {
     }
 
     /// Encode block into BC1 setting indices to TRANSPARENT if alpha <= threshold.
-    pub fn encode_with_alpha(colors: [[Rgba32F; 4]; 4], threshold: f32) -> Self {
+    pub fn encode_with_alpha(colors: [[(Rgba32F, bool); 4]; 4], threshold: f32) -> Self {
         #![allow(clippy::needless_range_loop)]
         let mut samples = [Vec3::ZERO; 16];
 
-        let mut num_samples = 0;
+        let mut count = 0;
+        let mut has_transparent = false;
 
         for row in &colors {
-            for &c in row {
-                if c.a() <= threshold {
-                    continue;
+            for &(c, v) in row {
+                if v {
+                    if c.a() > threshold {
+                        samples[count] = c.rgb().into();
+                        count += 1;
+                    } else {
+                        has_transparent = true;
+                    }
                 }
-
-                samples[num_samples] = c.rgb().into();
-                num_samples += 1;
             }
         }
 
-        match num_samples {
-            0 => Self::TRANSPARENT,
-            1..16 => {
+        assert!(
+            count > 0 || has_transparent,
+            "At least one sample must valid"
+        );
+
+        match (count, has_transparent) {
+            (0, _) => Self::TRANSPARENT,
+            (_, true) => {
                 // Some samples are transparent.
                 let mut cf = cluster_fit::<Vec3, 3, 16>(
-                    &samples[..num_samples],
-                    |a: Vec3, b: Vec3| {
-                        let a = Rgb565::from_f32(a.into());
-                        let b = Rgb565::from_f32(b.into());
-
-                        (a.into_f32().into(), b.into_f32().into())
-                    },
-                    |a: Vec3, b: Vec3| {
-                        let a = Rgb32F::from(a);
-                        let b = Rgb32F::from(b);
-
-                        let a = Yiq32F::from_rgb(a);
-                        let b = Yiq32F::from_rgb(b);
-
-                        Yiq32F::perceptual_distance(a, b)
-                    },
+                    &samples[..count],
+                    |a: Vec3| Rgb565::from_f32(a.into()).into_f32().into(),
+                    |a: Vec3, b: Vec3| Yiq32F::perceptual_distance(Yiq32F(a.0), Yiq32F(b.0)),
                 );
 
                 let (color0, color1) = cf.endpoints;
@@ -274,19 +277,21 @@ impl Block {
                 }
 
                 let mut indices = [0; 4];
+                let mut index_index = 0;
                 for y in 0..4 {
                     for x in 0..4 {
-                        let c = colors[y][x];
-                        if c.a() < threshold {
-                            indices[y] |= 0b11 << (x * 2);
-                        } else {
-                            let idx = match cf.indices[y * 4 + x] {
+                        let (c, v) = colors[y][x];
+                        if v && c.a() > threshold {
+                            let idx = match cf.indices[index_index] {
                                 0 => 0,
                                 1 => 2,
                                 2 => 1,
                                 _ => unreachable!(),
                             };
+                            index_index += 1;
                             indices[y] |= idx << (x * 2);
+                        } else {
+                            indices[y] |= 0b11 << (x * 2);
                         }
                     }
                 }
@@ -297,25 +302,12 @@ impl Block {
                     indices,
                 }
             }
-            16 => {
+            (_, false) => {
                 // Solid case.
                 let mut cf = cluster_fit::<Vec3, 4, 16>(
-                    &samples[..num_samples],
-                    |a: Vec3, b: Vec3| {
-                        let a = Rgb565::from_f32(a.into());
-                        let b = Rgb565::from_f32(b.into());
-
-                        (a.into_f32().into(), b.into_f32().into())
-                    },
-                    |a: Vec3, b: Vec3| {
-                        let a = Rgb32F::from(a);
-                        let b = Rgb32F::from(b);
-
-                        let a = Yiq32F::from_rgb(a);
-                        let b = Yiq32F::from_rgb(b);
-
-                        Yiq32F::perceptual_distance(a, b)
-                    },
+                    &samples[..count],
+                    |a: Vec3| Rgb565::from_f32(a.into()).into_f32().into(),
+                    |a: Vec3, b: Vec3| Yiq32F::perceptual_distance(Yiq32F(a.0), Yiq32F(b.0)),
                 );
 
                 let (color0, color1) = cf.endpoints;
@@ -336,16 +328,21 @@ impl Block {
                 }
 
                 let mut indices = [0; 4];
+                let mut index_index = 0;
                 for y in 0..4 {
                     for x in 0..4 {
-                        let idx = match cf.indices[y * 4 + x] {
-                            0 => 0,
-                            1 => 2,
-                            2 => 3,
-                            3 => 1,
-                            _ => unreachable!(),
-                        };
-                        indices[y] |= idx << (x * 2);
+                        let (_, v) = colors[y][x];
+                        if v {
+                            let idx = match cf.indices[index_index] {
+                                0 => 0,
+                                1 => 2,
+                                2 => 3,
+                                3 => 1,
+                                _ => unreachable!(),
+                            };
+                            indices[y] |= idx << (x * 2);
+                            index_index += 1;
+                        }
                     }
                 }
 
@@ -355,7 +352,116 @@ impl Block {
                     indices,
                 }
             }
-            _ => unreachable!(),
+        }
+    }
+}
+
+pub fn encode_image<T>(
+    input: ImageRef<'_, T>,
+    map: impl Fn(T) -> Rgb32F,
+    mut output: ImageMut<'_, Block>,
+) where
+    T: Copy,
+{
+    assert_eq!(output.width(), input.width().div_ceil(4));
+    assert_eq!(output.height(), input.height().div_ceil(4));
+    assert_eq!(output.depth(), input.depth());
+    assert_eq!(output.layers(), input.layers());
+
+    let input = input.as_ref_3d();
+    let mut output = output.as_mut_3d();
+
+    for z in 0..output.depth() {
+        for y in 0..output.height() {
+            for x in 0..output.width() {
+                let mut block_colors = [[(Rgb32F::BLACK, false); 4]; 4];
+
+                for by in 0..4 {
+                    for bx in 0..4 {
+                        if bx >= input.width() - x * 4 || by >= input.height() - y * 4 {
+                            continue;
+                        }
+                        let c = map(*input.get(x * 4 + bx, y * 4 + by, z));
+                        block_colors[by][bx] = (c, true);
+                    }
+                }
+
+                let block = Block::encode(block_colors);
+                output.set(x, y, z, block);
+            }
+        }
+    }
+}
+
+pub fn encode_image_with_alpha<T>(
+    input: ImageRef<'_, T>,
+    map: impl Fn(T) -> Rgba32F,
+    threshold: f32,
+    mut output: ImageMut<'_, Block>,
+) where
+    T: Copy,
+{
+    assert_eq!(output.width(), input.width().div_ceil(4));
+    assert_eq!(output.height(), input.height().div_ceil(4));
+    assert_eq!(output.depth(), input.depth());
+    assert_eq!(output.layers(), input.layers());
+
+    let input = input.as_ref_3d();
+    let mut output = output.as_mut_3d();
+
+    for z in 0..output.depth() {
+        for y in 0..output.height() {
+            for x in 0..output.width() {
+                let mut block_colors = [[(Rgba32F::BLACK, false); 4]; 4];
+
+                for by in 0..4 {
+                    for bx in 0..4 {
+                        if bx >= input.width() - x * 4 || by >= input.height() - y * 4 {
+                            continue;
+                        }
+                        let c = map(*input.get(x * 4 + bx, y * 4 + by, z));
+                        block_colors[by][bx] = (c, true);
+                    }
+                }
+
+                let block = Block::encode_with_alpha(block_colors, threshold);
+                output.set(x, y, z, block);
+            }
+        }
+    }
+}
+
+pub fn decode_image<T>(
+    input: ImageRef<'_, Block>,
+    map: impl Fn(Rgba32F) -> T,
+    mut output: ImageMut<'_, T>,
+) where
+    T: Copy,
+{
+    assert_eq!(output.width().div_ceil(4), input.width());
+    assert_eq!(output.height().div_ceil(4), input.height());
+    assert_eq!(output.depth(), input.depth());
+    assert_eq!(output.layers(), input.layers());
+
+    let input = input.as_ref_3d();
+    let mut output = output.as_mut_3d();
+
+    for z in 0..input.depth() {
+        for y in 0..input.height() {
+            for x in 0..input.width() {
+                let block = input.get(x, y, z);
+                let block_colors = Block::decode_with_alpha(*block);
+
+                for by in 0..4 {
+                    for bx in 0..4 {
+                        if bx >= output.width() - x * 4 || by >= output.height() - y * 4 {
+                            continue;
+                        }
+                        let c = map(block_colors[by][bx]);
+                        output.set(x * 4 + bx, y * 4 + by, z, c);
+                    }
+                }
+            }
         }
     }
 }

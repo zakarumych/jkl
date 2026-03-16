@@ -4,11 +4,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use image::{ColorType, ImageFormat, RgbImage};
 use jkl::{
-    image::{block::bc1::Block, format::Format, Extent, Image2DMut, Image2DRef, ImageRef},
+    image::{
+        Extent, ImageRef, OwnedImage,
+        block::bc1::{self, Block},
+        format::Format,
+    },
     jackal::image::{Compression, JackalReader, Options},
     math::Rgb8U,
 };
@@ -100,7 +104,7 @@ fn encode_command(args: EncodeArgs) -> Result<()> {
             };
 
             jkl::jackal::image::write_image(
-                rgb.as_image_ref(),
+                rgb.as_ref(),
                 Options::new().with_compression(compression),
                 &mut output_file,
             )
@@ -113,7 +117,7 @@ fn encode_command(args: EncodeArgs) -> Result<()> {
             };
 
             jkl::jackal::image::write_image(
-                blocks.as_image_ref(),
+                blocks.as_ref(),
                 Options::new().with_compression(compression),
                 &mut output_file,
             )
@@ -187,7 +191,11 @@ fn load_regular_image(path: &Path) -> Result<SourceImage> {
         pixels.push(Rgb8U::from_bytes([chunk[0], chunk[1], chunk[2]]));
     }
 
-    Ok(SourceImage::Rgb(OwnedImage2D::new(width, height, pixels)))
+    Ok(SourceImage::Rgb(OwnedImage::new_2d(
+        width,
+        height,
+        pixels.into_boxed_slice(),
+    )))
 }
 
 fn load_jkli(path: &Path) -> Result<SourceImage> {
@@ -201,7 +209,11 @@ fn load_jkli(path: &Path) -> Result<SourceImage> {
             let width = reader.extent().width();
             let height = reader.extent().height();
 
-            let mut image = OwnedImage2D::new(width, height, vec![Rgb8U::BLACK; width * height]);
+            let mut image = OwnedImage::new_2d(
+                width,
+                height,
+                vec![Rgb8U::BLACK; width * height].into_boxed_slice(),
+            );
             let mut tile_reader = reader
                 .pixel_reader::<Rgb8U>()
                 .context("failed to open RGB8 tile reader")?;
@@ -211,17 +223,20 @@ fn load_jkli(path: &Path) -> Result<SourceImage> {
                 .iter_tiles(Extent::D2 { width, height });
             assert_eq!(tiles_iter.len(), tile_reader.tiles());
 
-            let mut pixels = image.as_mut();
+            {
+                let mut image = image.as_mut();
+                let mut pixels = image.plane_mut(0);
 
-            for (tile_index, tile) in tiles_iter.enumerate() {
-                if tile.plane != 0 {
-                    bail!("only single-plane images are supported");
+                for (tile_index, tile) in tiles_iter.enumerate() {
+                    if tile.plane != 0 {
+                        bail!("only single-plane images are supported");
+                    }
+
+                    let tile_image = pixels.get_rect_mut(tile.rect);
+                    tile_reader
+                        .read_tile(tile_index, tile_image)
+                        .with_context(|| format!("failed to read tile {tile_index}"))?;
                 }
-
-                let tile_image = pixels.get_rect_mut(tile.rect);
-                tile_reader
-                    .read_tile(tile_index, tile_image)
-                    .with_context(|| format!("failed to read tile {tile_index}"))?;
             }
 
             Ok(SourceImage::Rgb(image))
@@ -230,10 +245,10 @@ fn load_jkli(path: &Path) -> Result<SourceImage> {
             let width_blocks = reader.extent().width();
             let height_blocks = reader.extent().height();
 
-            let mut image = OwnedImage2D::new(
+            let mut image = OwnedImage::new_2d(
                 width_blocks,
                 height_blocks,
-                vec![Block::BLACK; width_blocks * height_blocks],
+                vec![Block::BLACK; width_blocks * height_blocks].into_boxed_slice(),
             );
             let mut tile_reader = reader
                 .pixel_reader::<Block>()
@@ -245,17 +260,20 @@ fn load_jkli(path: &Path) -> Result<SourceImage> {
             });
             assert_eq!(tiles_iter.len(), tile_reader.tiles());
 
-            let mut blocks = image.as_mut();
+            {
+                let mut image = image.as_mut();
+                let mut blocks = image.plane_mut(0);
 
-            for (tile_index, tile) in tiles_iter.enumerate() {
-                if tile.plane != 0 {
-                    bail!("only single-plane images are supported");
+                for (tile_index, tile) in tiles_iter.enumerate() {
+                    if tile.plane != 0 {
+                        bail!("only single-plane images are supported");
+                    }
+
+                    let tile_image = blocks.get_rect_mut(tile.rect);
+                    tile_reader
+                        .read_tile(tile_index, tile_image)
+                        .with_context(|| format!("failed to read tile {tile_index}"))?;
                 }
-
-                let tile_image = blocks.get_rect_mut(tile.rect);
-                tile_reader
-                    .read_tile(tile_index, tile_image)
-                    .with_context(|| format!("failed to read tile {tile_index}"))?;
             }
 
             Ok(SourceImage::Bc1(image))
@@ -309,89 +327,44 @@ fn default_with_extension(path: &Path, extension: &str) -> PathBuf {
     output
 }
 
-fn rgb8_to_bc1(input: Image2DRef<'_, Rgb8U>) -> OwnedImage2D<Block> {
-    let block_width = input.width().div_ceil(4);
-    let block_height = input.height().div_ceil(4);
+fn rgb8_to_bc1(input: ImageRef<'_, Rgb8U>) -> OwnedImage<Block> {
+    let extent = input.extent();
+    let dimentions = extent.dimensions();
+    let raw_size = extent.raw_size();
 
-    let mut blocks = Vec::with_capacity(block_width * block_height);
+    let mut output = OwnedImage::new(
+        dimentions,
+        [
+            raw_size[0].div_ceil(4),
+            raw_size[1].div_ceil(4),
+            raw_size[2],
+        ],
+        vec![bc1::Block::BLACK; raw_size[0].div_ceil(4) * raw_size[1].div_ceil(4) * raw_size[2]]
+            .into_boxed_slice(),
+    );
 
-    for by in 0..block_height {
-        for bx in 0..block_width {
-            let x = bx * 4;
-            let y = by * 4;
+    bc1::encode_image(input, |c| c.into_f32(), output.as_mut());
 
-            let colors = if x + 4 <= input.width() && y + 4 <= input.height() {
-                input
-                    .get_range(x, y, 4, 4)
-                    .into_matrix::<4, 4>()
-                    .map(|row| row.map(|c| c.into_f32()))
-            } else {
-                let mut colors = [[Rgb8U::BLACK.into_f32(); 4]; 4];
-                for (dy, row) in colors.iter_mut().enumerate() {
-                    for (dx, color) in row.iter_mut().enumerate() {
-                        let sx = (x + dx).min(input.width() - 1);
-                        let sy = (y + dy).min(input.height() - 1);
-                        *color = input.get(sx, sy).into_f32();
-                    }
-                }
-                colors
-            };
-
-            blocks.push(Block::encode(colors));
-        }
-    }
-
-    OwnedImage2D::new(block_width, block_height, blocks)
+    output
 }
 
-fn bc1_to_rgb8(input: Image2DRef<'_, Block>) -> OwnedImage2D<Rgb8U> {
-    let width = input.width() * 4;
-    let height = input.height() * 4;
-    let mut output = OwnedImage2D::new(width, height, vec![Rgb8U::BLACK; width * height]);
-    let mut pixels = output.as_mut();
+fn bc1_to_rgb8(input: ImageRef<'_, Block>) -> OwnedImage<Rgb8U> {
+    let extent = input.extent();
+    let dimentions = extent.dimensions();
+    let raw_size = extent.raw_size();
 
-    for by in 0..input.height() {
-        for bx in 0..input.width() {
-            let block = *input.get(bx, by);
-            let decoded = block.decode().map(|row| row.map(Rgb8U::from_f32));
-            let mut tile = pixels.get_range_mut(bx * 4, by * 4, 4, 4);
-            tile.copy_from_matrix(&decoded);
-        }
-    }
+    let mut output = OwnedImage::new(
+        dimentions,
+        [raw_size[0] * 4, raw_size[1] * 4, raw_size[2]],
+        vec![Rgb8U::BLACK; raw_size[0] * 4 * raw_size[1] * 4 * raw_size[2]].into_boxed_slice(),
+    );
+
+    bc1::decode_image(input, |c| Rgb8U::from_f32(c.rgb()), output.as_mut());
 
     output
 }
 
 enum SourceImage {
-    Rgb(OwnedImage2D<Rgb8U>),
-    Bc1(OwnedImage2D<Block>),
-}
-
-struct OwnedImage2D<T> {
-    width: usize,
-    height: usize,
-    pixels: Vec<T>,
-}
-
-impl<T> OwnedImage2D<T> {
-    fn new(width: usize, height: usize, pixels: Vec<T>) -> Self {
-        assert_eq!(pixels.len(), width * height);
-        Self {
-            width,
-            height,
-            pixels,
-        }
-    }
-
-    fn as_ref(&self) -> Image2DRef<'_, T> {
-        Image2DRef::new(self.width, self.height, &self.pixels)
-    }
-
-    fn as_mut(&mut self) -> Image2DMut<'_, T> {
-        Image2DMut::new(self.width, self.height, &mut self.pixels)
-    }
-
-    fn as_image_ref(&self) -> ImageRef<'_, T> {
-        ImageRef::new_2d(self.width, self.height, &self.pixels)
-    }
+    Rgb(OwnedImage<Rgb8U>),
+    Bc1(OwnedImage<Block>),
 }

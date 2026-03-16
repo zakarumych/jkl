@@ -246,6 +246,7 @@ macro_rules! impl_fixedcode_zero {
 pub mod ans;
 pub mod bits;
 pub mod cluster_fit;
+pub mod defer;
 pub mod encode;
 pub mod image;
 pub mod jackal;

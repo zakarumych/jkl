@@ -191,7 +191,7 @@ fn renorm_state(state: ptr<function, U64>, cursor: ptr<function, u32>, end: u32)
     if (hi(*state) == 0u && *cursor < end) {
         // For streams produced from 32-bit token chunks.
         *state = shift_add(*state, payload_words[*cursor]);
-        *cursor = *cursor + 1u;
+        *cursor += 1u;
     }
 }
 
@@ -299,7 +299,7 @@ fn decompress_rgb8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let pixel_count = tile.w * tile.h;
 
-    for (var i = 0u; i < pixel_count; i = i + 1u) {
+    for (var i = 0u; i < pixel_count; i += 1u) {
         let local_x = i % tile.w;
         let local_y = i / tile.w;
 
@@ -339,7 +339,7 @@ fn decompress_rgb8_lz77_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let pixel_count = tile.w * tile.h;
 
-    for (var i = 0u; i < pixel_count; i = i + 1u) {
+    for (var i = 0u; i < pixel_count; i += 1u) {
         let local_x = i % tile.w;
         let local_y = i / tile.w;
 
@@ -378,7 +378,7 @@ fn decompress_rgba8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let pixel_count = tile.w * tile.h;
 
-    for (var i = 0u; i < pixel_count; i = i + 1u) {
+    for (var i = 0u; i < pixel_count; i += 1u) {
         let local_x = i % tile.w;
         let local_y = i / tile.w;
 
@@ -418,7 +418,7 @@ fn decompress_bc1_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let pixel_count = tile.w * tile.h;
 
-    for (var i = 0u; i < pixel_count; i = i + 1u) {
+    for (var i = 0u; i < pixel_count; i += 1u) {
         let local_x = i % tile.w;
         let local_y = i / tile.w;
 
@@ -442,7 +442,7 @@ fn decompress_bc1_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
     state = U64(0u, 0u);
     renorm_state(&state, &cursor, end);
 
-    for (var i = 0u; i < pixel_count; i = i + 1u) {
+    for (var i = 0u; i < pixel_count; i += 1u) {
         let local_x = i % tile.w;
         let local_y = i / tile.w;
 
@@ -484,7 +484,7 @@ fn decompress_bc1_lz77_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let pixel_count = tile.w * tile.h;
 
-    for (var i = 0u; i < pixel_count; i = i + 1u) {
+    for (var i = 0u; i < pixel_count; i += 1u) {
         let local_x = i % tile.w;
         let local_y = i / tile.w;
 
@@ -506,12 +506,12 @@ fn decompress_bc1_lz77_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
     renorm_state(&state, &cursor, end);
 
     lz77_length = 0u;
-    for (var i = 0u; i < 1024u; i = i + 1u) {
+    for (var i = 0u; i < 1024u; i += 1u) {
         lz77_head = 0u;
         lz77_window[i] = 0u;
     }
 
-    for (var i = 0u; i < pixel_count; i = i + 1u) {
+    for (var i = 0u; i < pixel_count; i += 1u) {
         let local_x = i % tile.w;
         let local_y = i / tile.w;
 

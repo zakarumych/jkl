@@ -5,12 +5,7 @@ use smallvec::SmallVec;
 use crate::{
     bits::{ReadBits, write_bits_scope},
     encode::{FixedCode, VarCode},
-    image::{
-        Image2DMut, Image2DRef,
-        block::{bc1, bc2},
-        compress::Compressor,
-        format::Format,
-    },
+    image::{Image2DMut, Image2DRef, block::bc1, compress::Compressor, format::Format},
     math::{Rgb8U, Rgb565},
     vle::Vle,
 };

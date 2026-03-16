@@ -198,7 +198,7 @@ where
 /// A 2D vector.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Vec2([f32; 2]);
+pub struct Vec2(pub [f32; 2]);
 
 impl Zero for Vec2 {
     fn zero() -> Self {
@@ -497,7 +497,7 @@ impl Vec2 {
 /// A 3D vector.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Vec3([f32; 3]);
+pub struct Vec3(pub [f32; 3]);
 
 impl Zero for Vec3 {
     fn zero() -> Self {
@@ -1248,7 +1248,7 @@ impl Vec3 {
 /// A 4D vector.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Vec4([f32; 4]);
+pub struct Vec4(pub [f32; 4]);
 
 impl Zero for Vec4 {
     fn zero() -> Self {
@@ -3315,7 +3315,7 @@ impl Region3 {
 /// A single-channel 8-bit unsigned color (red).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct R8U(u8);
+pub struct R8U(pub u8);
 
 impl_fixedcode_struct!(R8U(r: u8) | Infallible);
 
@@ -3402,14 +3402,14 @@ impl R8U {
     /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
-        Self::diff(a, b)
+        Self::diff(a, b).abs()
     }
 }
 
 /// A single-channel color represented as one `f32`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct R32F(f32);
+pub struct R32F(pub f32);
 
 impl_fixedcode_struct!(R32F(r: f32) | Infallible);
 
@@ -3459,7 +3459,7 @@ impl R32F {
     /// Returns the Euclidean distance.
     #[inline(always)]
     pub fn distance(a: Self, b: Self) -> f32 {
-        Self::diff(a, b)
+        Self::diff(a, b).abs()
     }
 
     /// Translates this color by the given offset.
@@ -3472,7 +3472,7 @@ impl R32F {
 /// A two-channel 8-bit unsigned color (red, green).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Rg8U([u8; 2]);
+pub struct Rg8U(pub [u8; 2]);
 
 impl_fixedcode_array!(Rg8U([u8; 2]) | Infallible);
 
@@ -3593,7 +3593,7 @@ impl Rg8U {
 /// A two-channel (red, green) color represented as 2 `f32`s.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Rg32F([f32; 2]);
+pub struct Rg32F(pub [f32; 2]);
 
 impl_fixedcode_array!(Rg32F([f32; 2]) | Infallible);
 
@@ -3662,7 +3662,7 @@ impl Rg32F {
 /// An RGB color with 8 bit unsigned normalized integers per channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Rgb8U([u8; 3]);
+pub struct Rgb8U(pub [u8; 3]);
 
 impl_fixedcode_array!(Rgb8U([u8; 3]) | Infallible);
 
@@ -3833,7 +3833,7 @@ impl Rgb8U {
 /// An RGB color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Rgb32F([f32; 3]);
+pub struct Rgb32F(pub [f32; 3]);
 
 impl_fixedcode_array!(Rgb32F([f32; 3]) | Infallible);
 
@@ -3928,7 +3928,7 @@ impl Rgb32F {
 /// An RGBA color with 8 bit unsigned normalized integers per channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Rgba8U([u8; 4]);
+pub struct Rgba8U(pub [u8; 4]);
 
 impl_fixedcode_array!(Rgba8U([u8; 4]) | Infallible);
 
@@ -4092,7 +4092,7 @@ impl Rgba8U {
 /// An RGBA color represented as 4 `f32`s.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Rgba32F([f32; 4]);
+pub struct Rgba32F(pub [f32; 4]);
 
 impl_fixedcode_array!(Rgba32F([f32; 4]) | Infallible);
 
@@ -4322,7 +4322,7 @@ impl Rgb565 {
 /// An YIQ color represented as 3 floats.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Yiq32F([f32; 3]);
+pub struct Yiq32F(pub [f32; 3]);
 
 impl_fixedcode_array!(Yiq32F([f32; 3]) | Infallible);
 

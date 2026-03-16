@@ -120,29 +120,24 @@ impl Block {
     }
 
     /// Encodes a 4×4 grid of single-channel colors into a BC4 block.
-    pub fn encode(colors: [[R32F; 4]; 4]) -> Self {
-        let mut samples = [0.0; 16];
+    pub fn encode(colors: [[(R32F, bool); 4]; 4]) -> Self {
+        let mut samples = [0.0f32; 16];
 
-        for y in 0..4 {
-            for x in 0..4 {
-                samples[y * 4 + x] = colors[y][x].r();
+        let mut count = 0;
+
+        for row in &colors {
+            for &(c, v) in row {
+                if v {
+                    samples[count] = c.0;
+                    count += 1;
+                }
             }
         }
 
         let mut cf = cluster_fit::<f32, 8, 16>(
-            &samples,
-            |a: f32, b: f32| {
-                let a = R8U::from_f32(R32F::new(a));
-                let b = R8U::from_f32(R32F::new(b));
-
-                (a.into_f32().r(), b.into_f32().r())
-            },
-            |a: f32, b: f32| {
-                let a = R32F::new(a);
-                let b = R32F::new(b);
-
-                R32F::distance(a, b)
-            },
+            &samples[..count],
+            |a: f32| R8U::from_f32(R32F::new(a)).into_f32().0,
+            |a: f32, b: f32| f32::abs(a - b),
         );
 
         let (color0, color1) = cf.endpoints;
@@ -164,9 +159,14 @@ impl Block {
         }
 
         let mut indices = [0; 6];
+        let mut index_index = 0;
         for y in 0..4 {
             for x in 0..4 {
-                let idx = match cf.indices[y * 4 + x] {
+                if colors[y][x].1 {
+                    continue;
+                }
+
+                let idx = match cf.indices[index_index] {
                     0 => 0,
                     1 => 2,
                     2 => 3,
@@ -177,6 +177,7 @@ impl Block {
                     7 => 1,
                     _ => unreachable!(),
                 };
+                index_index += 1;
 
                 let start_bit = (y * 4 + x) * 3;
                 let start_byte = start_bit / 8;

@@ -5,7 +5,7 @@
 
 use std::convert::Infallible;
 
-use crate::math::{Rg32F, R32F};
+use crate::math::{R32F, Rg32F};
 
 use super::bc4;
 
@@ -78,14 +78,14 @@ impl Block {
     }
 
     /// Encodes a 4×4 grid of two-channel colors into a BC5 block.
-    pub fn encode(colors: [[Rg32F; 4]; 4]) -> Self {
-        let mut red = [[R32F::BLACK; 4]; 4];
-        let mut green = [[R32F::BLACK; 4]; 4];
+    pub fn encode(colors: [[(Rg32F, bool); 4]; 4]) -> Self {
+        let mut red = [[(R32F::BLACK, false); 4]; 4];
+        let mut green = [[(R32F::BLACK, false); 4]; 4];
 
         for y in 0..4 {
             for x in 0..4 {
-                red[y][x] = R32F::new(colors[y][x].r());
-                green[y][x] = R32F::new(colors[y][x].g());
+                red[y][x] = (R32F::new(colors[y][x].0.r()), colors[y][x].1);
+                green[y][x] = (R32F::new(colors[y][x].0.g()), colors[y][x].1);
             }
         }
 

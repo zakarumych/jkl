@@ -70,12 +70,11 @@ impl Sample for Vec3 {
 /// the partition with the lowest total error.
 ///
 /// * `samples` – the values to quantize (at most `N`).
-/// * `remap_endpoints` – snaps endpoints to the target representation (e.g.
-///   rounding to `Rgb565`) and returns the remapped pair.
+/// * `snap` – snaps values to the quantization grid (e.g. to `Rgb565`).
 /// * `error` – distance function between two samples.
 pub fn cluster_fit<T, const I: usize, const N: usize>(
     samples: &[T],
-    remap_endpoints: impl Fn(T, T) -> (T, T),
+    snap: impl Fn(T) -> T + Copy,
     error: impl Fn(T, T) -> f32 + Copy,
 ) -> ClusterFit<T, N>
 where
@@ -97,12 +96,11 @@ where
     let order = order;
 
     let mut best_endpoints = T::fallback_endpoints(samples.iter().copied());
-    best_endpoints = remap_endpoints(best_endpoints.0, best_endpoints.1);
     let mut best_indices = [0; N];
     let mut best_error = 0.0f32;
 
     {
-        let palette = build_palette::<T, I>(best_endpoints.0, best_endpoints.1);
+        let palette = build_palette::<T, I>(best_endpoints.0, best_endpoints.1, snap);
 
         for i in 0..samples.len() {
             let (idx, e) = index_error(samples[order[i].0], &palette, error);
@@ -128,9 +126,10 @@ where
         }
 
         if let Some((c0, c1)) = solve_endpoints(weights, samples) {
-            let (c0, c1) = remap_endpoints(c0, c1);
+            let c0 = snap(c0);
+            let c1 = snap(c1);
 
-            let palette = build_palette::<T, I>(c0, c1);
+            let palette = build_palette::<T, I>(c0, c1, snap);
 
             let mut total_error = 0.0f32;
             let mut indices = [0; N];
@@ -175,7 +174,7 @@ where
 
 fn solve_endpoints<T, const N: usize>(weights: [f32; N], samples: &[T]) -> Option<(T, T)>
 where
-    T: Sample,
+    T: Vector,
 {
     #![allow(non_snake_case)]
 
@@ -215,21 +214,21 @@ where
     Some((C0, C1))
 }
 
-fn build_palette<T, const I: usize>(c0: T, c1: T) -> [T; I]
+fn build_palette<T, const I: usize>(c0: T, c1: T, snap: impl Fn(T) -> T) -> [T; I]
 where
-    T: Sample,
+    T: Vector,
 {
     #![allow(clippy::needless_range_loop)]
     let mut palette = [T::zero(); I];
 
-    palette[0] = c0;
+    palette[0] = snap(c0);
 
     for i in 1..I - 1 {
         let t = (i as f32) / ((I - 1) as f32);
-        palette[i] = c0 * (1.0 - t) + c1 * t;
+        palette[i] = snap(c0 * (1.0 - t) + c1 * t);
     }
 
-    palette[I - 1] = c1;
+    palette[I - 1] = snap(c1);
 
     palette
 }
@@ -240,7 +239,7 @@ fn index_error<T, const I: usize>(
     error: impl Fn(T, T) -> f32,
 ) -> (usize, f32)
 where
-    T: Sample,
+    T: Copy,
 {
     let mut best_index = 0;
     let mut best_error = f32::MAX;
