@@ -1,11 +1,13 @@
 use std::io;
 
 use jkl::{
-    image::format::Format,
+    image::{Image, format::Format},
     jackal::image::{Compression, JackalReader},
     math::{Rgb8U, Rgb565},
 };
 use wgpu::util::DeviceExt;
+
+use crate::image::PixelBuffer;
 
 const RANS_WGSL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/rans.wgsl"));
 
@@ -209,7 +211,7 @@ impl Uploader {
         reader: &mut JackalReader<R>,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> io::Result<wgpu::Texture>
+    ) -> io::Result<Image<PixelBuffer>>
     where
         R: io::Read + io::Seek,
     {
@@ -307,28 +309,13 @@ impl Uploader {
                         .map(|e| Rgb8U::from_bits_interleaved(e.symbol.0).bits()),
                 );
 
-                let byte_stride = (width.checked_mul(4).unwrap_or(0) + 255) & !255;
+                let byte_stride = (width * 4).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jkl-wgpu-output"),
                     size: output_buffer_size,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
-                });
-
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("jkl-wgpu-output-texture"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
                 });
 
                 DecompressDispatch {
@@ -349,29 +336,12 @@ impl Uploader {
                 }
                 .run(device, encoder);
 
-                encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &out_buf,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(byte_stride),
-                            rows_per_image: Some(height),
-                        },
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                Ok(texture)
+                Ok(Image::with_stride(
+                    jkl::image::Dimensions::D2,
+                    [width_usize, height_usize, 1],
+                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    PixelBuffer::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
+                ))
             }
             (Format::RGB8, Compression::Lz77Ans) => {
                 let lz77_ans_context =
@@ -404,28 +374,13 @@ impl Uploader {
                     }),
                 );
 
-                let byte_stride = (width.checked_mul(4).unwrap_or(0) + 255) & !255;
+                let byte_stride = (width * 4).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jkl-wgpu-output"),
                     size: output_buffer_size,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
-                });
-
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("jkl-wgpu-output-texture"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
                 });
 
                 DecompressDispatch {
@@ -446,29 +401,12 @@ impl Uploader {
                 }
                 .run(device, encoder);
 
-                encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &out_buf,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(byte_stride),
-                            rows_per_image: Some(height),
-                        },
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                Ok(texture)
+                Ok(Image::with_stride(
+                    jkl::image::Dimensions::D2,
+                    [width_usize, height_usize, 1],
+                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    PixelBuffer::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
+                ))
             }
             (Format::RGBA8, Compression::Ans) => {
                 let ans_context =
@@ -494,28 +432,13 @@ impl Uploader {
                         .map(|e| Rgb8U::from_bits_interleaved(e.symbol.0).bits()),
                 );
 
-                let byte_stride = (width.checked_mul(4).unwrap_or(0) + 255) & !255;
+                let byte_stride = (width * 4).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jkl-wgpu-output"),
                     size: output_buffer_size,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
-                });
-
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("jkl-wgpu-output-texture"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
                 });
 
                 DecompressDispatch {
@@ -536,29 +459,12 @@ impl Uploader {
                 }
                 .run(device, encoder);
 
-                encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &out_buf,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(byte_stride),
-                            rows_per_image: Some(height),
-                        },
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                Ok(texture)
+                Ok(Image::with_stride(
+                    jkl::image::Dimensions::D2,
+                    [width_usize, height_usize, 1],
+                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    PixelBuffer::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
+                ))
             }
             (Format::BC1, Compression::Ans) => {
                 let (colors_context, indices_context) =
@@ -607,28 +513,13 @@ impl Uploader {
                         .take(padded_len),
                 );
 
-                let byte_stride = (width.checked_mul(16).unwrap_or(0) + 255) & !255;
+                let byte_stride = (width * 16).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jkl-wgpu-output"),
                     size: output_buffer_size,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
-                });
-
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("jkl-wgpu-output-texture"),
-                    size: wgpu::Extent3d {
-                        width: width * 4,
-                        height: height * 4,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Bc1RgbaUnorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
                 });
 
                 DecompressDispatch {
@@ -649,29 +540,12 @@ impl Uploader {
                 }
                 .run(device, encoder);
 
-                encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &out_buf,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(byte_stride),
-                            rows_per_image: Some(height),
-                        },
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: width * 4,
-                        height: height * 4,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                Ok(texture)
+                Ok(Image::with_stride(
+                    jkl::image::Dimensions::D2,
+                    [width_usize, height_usize, 1],
+                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    PixelBuffer::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
+                ))
             }
             (Format::BC1, Compression::Lz77Ans) => {
                 let (colors_context, indices_context) =
@@ -726,28 +600,13 @@ impl Uploader {
                         })),
                 );
 
-                let byte_stride = (width.checked_mul(16).unwrap_or(0) + 255) & !255;
+                let byte_stride = (width * 16).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jkl-wgpu-output"),
                     size: output_buffer_size,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
-                });
-
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("jkl-wgpu-output-texture"),
-                    size: wgpu::Extent3d {
-                        width: width * 4,
-                        height: height * 4,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Bc1RgbaUnorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
                 });
 
                 DecompressDispatch {
@@ -768,29 +627,12 @@ impl Uploader {
                 }
                 .run(device, encoder);
 
-                encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &out_buf,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(byte_stride),
-                            rows_per_image: Some(height),
-                        },
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: width * 4,
-                        height: height * 4,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                Ok(texture)
+                Ok(Image::with_stride(
+                    jkl::image::Dimensions::D2,
+                    [width_usize, height_usize, 1],
+                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    PixelBuffer::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
+                ))
             }
             _ => {
                 return Err(io::Error::new(

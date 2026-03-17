@@ -9,3 +9,4 @@ anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 image.workspace = true
 jkl = { path = "../jkl" }
+jkl-wgpu = { path = "../wgpu" }

@@ -1,8 +1,7 @@
-use jkl::{
-    image::Image2DRef,
-    math::{Rgb8U, Rgba8U},
-};
+use jkl::image::Image;
 use wgpu::util::DeviceExt;
+
+use crate::image::PixelBuffer;
 
 const CLUSTER_FIT_WGSL: &'static str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -22,6 +21,11 @@ pub struct BlockCompressor {
 struct Params {
     width: u32,
     height: u32,
+    layers: u32,
+    in_row_stride: u32,
+    in_plane_stride: u32,
+    out_row_stride: u32,
+    out_plane_stride: u32,
     alpha_threshold: f32,
 }
 
@@ -30,7 +34,7 @@ impl BlockCompressor {
         let bc1_shader = format!("{CLUSTER_FIT_WGSL}\n{BC1_WGSL}");
 
         let bc1_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("jkl-bc1-rgb-shader"),
+            label: Some("jkl-bc1-shader"),
             source: wgpu::ShaderSource::Wgsl(bc1_shader.into()),
         });
 
@@ -91,107 +95,27 @@ impl BlockCompressor {
         }
     }
 
-    pub fn compress_rgb_to_bc1(
-        &self,
-        image: Image2DRef<Rgb8U>,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-    ) {
-        assert!(
-            u32::try_from(image.width()).is_ok(),
-            "Image width exceeds u32::MAX"
-        );
-        assert!(
-            u32::try_from(image.height()).is_ok(),
-            "Image height exceeds u32::MAX"
-        );
-
-        let input_image_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("jkl-image-input"),
-            size: (image.width() * image.height() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: true,
-        });
-
-        {
-            let mut mapped_range = input_image_buffer.get_mapped_range_mut(..);
-            for (i, pixel) in image.pixels().iter().enumerate() {
-                let offset = i * 4;
-                mapped_range[offset] = pixel.r();
-                mapped_range[offset + 1] = pixel.g();
-                mapped_range[offset + 2] = pixel.b();
-                mapped_range[offset + 3] = 255; // Alpha channel, set to opaque
-            }
-        }
-        input_image_buffer.unmap();
-
-        self.compress_rgba_buffer_to_bc1(
-            input_image_buffer,
-            image.width() as u32,
-            image.height() as u32,
-            0.0,
-            device,
-            encoder,
-        );
-    }
-
     pub fn compress_rgba_to_bc1(
         &self,
-        image: Image2DRef<Rgba8U>,
+        image: Image<PixelBuffer>,
         alpha_threshold: f32,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-    ) {
-        assert!(
-            u32::try_from(image.width()).is_ok(),
-            "Image width exceeds u32::MAX"
-        );
-        assert!(
-            u32::try_from(image.height()).is_ok(),
-            "Image height exceeds u32::MAX"
-        );
+    ) -> Image<PixelBuffer> {
+        let extent = image.extent();
+        let dim = extent.dimensions();
 
-        let input_image_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("jkl-image-input"),
-            size: (image.width() * image.height() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: true,
-        });
+        let [in_width, in_height, layers] = extent.raw_size();
 
-        {
-            let mut mapped_range = input_image_buffer.get_mapped_range_mut(..);
-            for (i, pixel) in image.pixels().iter().enumerate() {
-                let offset = i * 4;
-                mapped_range[offset] = pixel.r();
-                mapped_range[offset + 1] = pixel.g();
-                mapped_range[offset + 2] = pixel.b();
-                mapped_range[offset + 3] = pixel.a();
-            }
-        }
-        input_image_buffer.unmap();
+        let out_width = in_width.div_ceil(4);
+        let out_height = in_height.div_ceil(4);
 
-        self.compress_rgba_buffer_to_bc1(
-            input_image_buffer,
-            image.width() as u32,
-            image.height() as u32,
-            alpha_threshold,
-            device,
-            encoder,
-        );
-    }
+        let out_row_stride = (out_width * 16).div_ceil(256) * 256; // Each BC1 block is 16 bytes
+        let out_plane_stride = out_row_stride * out_height;
 
-    pub fn compress_rgba_buffer_to_bc1(
-        &self,
-        image: wgpu::Buffer,
-        width: u32,
-        height: u32,
-        alpha_threshold: f32,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-    ) {
         let out_buf: wgpu::Buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("jkl-blocks-out"),
-            size: (width as u64 * height as u64 / 16) * 8, // Each BC1 block is 16 pixels, 8 bytes
+            size: (out_width as u64 * out_height as u64) * 8, // Each BC1 block is 8 bytes
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -199,8 +123,13 @@ impl BlockCompressor {
         let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("jkl-blocks-params"),
             contents: bytemuck::cast_slice(&[Params {
-                width,
-                height,
+                width: in_width as u32,
+                height: in_height as u32,
+                layers: layers as u32,
+                in_row_stride: image.row_stride() as u32,
+                in_plane_stride: image.plane_stride() as u32,
+                out_row_stride: out_row_stride as u32,
+                out_plane_stride: out_plane_stride as u32,
                 alpha_threshold,
             }]),
             usage: wgpu::BufferUsages::UNIFORM,
@@ -212,7 +141,7 @@ impl BlockCompressor {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: image.as_entire_binding(),
+                    resource: image.data().buffer().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -225,21 +154,29 @@ impl BlockCompressor {
             ],
         });
 
-        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("jkl-bc1-compress-pass"),
-            timestamp_writes: None,
-        });
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("jkl-bc1-compress-pass"),
+                timestamp_writes: None,
+            });
 
-        cpass.set_pipeline(&self.bc1);
-        cpass.set_bind_group(0, &bind_group, &[]);
+            cpass.set_pipeline(&self.bc1);
+            cpass.set_bind_group(0, &bind_group, &[]);
 
-        let group_x = width.div_ceil(8);
-        let group_y = height.div_ceil(8);
+            let group_x = out_width.div_ceil(8) as u32;
+            let group_y = out_height.div_ceil(8) as u32;
+            let group_z = layers as u32;
 
-        if group_x > 0 && group_y > 0 {
-            cpass.dispatch_workgroups(group_x, group_y, 1);
+            if group_x > 0 && group_y > 0 && group_z > 0 {
+                cpass.dispatch_workgroups(group_x, group_y, group_z);
+            }
         }
 
-        cpass.map_buffer_on_submit(&out_buf, wgpu::MapMode::Read, .., |result| {});
+        Image::with_stride(
+            dim,
+            [out_width, out_height, layers],
+            [out_row_stride, out_plane_stride],
+            PixelBuffer::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
+        )
     }
 }

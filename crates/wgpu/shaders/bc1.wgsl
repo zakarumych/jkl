@@ -26,6 +26,11 @@ var<storage, read_write> blocks_output: array<Block>;
 struct Params {
     width: u32,
     height: u32,
+    layers: u32,
+    in_row_stride: u32,
+    in_plane_stride: u32,
+    out_row_stride: u32,
+    out_plane_stride: u32,
     alpha_threshold: f32,
 }
 
@@ -42,18 +47,19 @@ fn div_ceil(a: u32, b: u32) -> u32 {
     }
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(8, 8, 1)
 fn compress_bc1(@builtin(global_invocation_id) gid: vec3<u32>) {
-    var dimensions = vec2<u32>(params.width, params.height);
-
-    if gid.x * 4u >= dimensions.x {
+    if gid.x * 4u >= params.width {
         return;
     }
-    if gid.y * 4u >= dimensions.y {
+    if gid.y * 4u >= params.height {
+        return;
+    }
+    if gid.z >= params.layers {
         return;
     }
 
-    let block_idx = gid.y * div_ceil(params.width, 4) + gid.x;
+    let block_idx = gid.z * params.out_plane_stride + gid.y * params.out_row_stride + gid.x;
 
     var samples = array<vec3<f32>, 16>();
     var sample_count = 0u;
@@ -65,8 +71,8 @@ fn compress_bc1(@builtin(global_invocation_id) gid: vec3<u32>) {
             let x = gid.x * 4u + i;
             let y = gid.y * 4u + j;
 
-            if x < dimensions.x && y < dimensions.y {
-                let c = unpack4x8unorm(image_input[y * params.width + x]);
+            if x < params.width && y < params.height {
+                let c = unpack4x8unorm(image_input[gid.z * params.in_plane_stride + y * params.in_row_stride + x]);
                 if c.a <= params.alpha_threshold {
                     transparents[j * 4u + i] = true;
                     transparent_count += 1u;
@@ -80,7 +86,8 @@ fn compress_bc1(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if sample_count == 0u {
         // All texels are transparent
-        return make_block(0, 0, 0xFFFFFFFFu);
+        blocks_output[block_idx] = make_block(0, 0, 0xFFFFFFFFu);
+        return;
     }
 
     var color0 = 0u;
@@ -135,7 +142,7 @@ fn compress_bc1(@builtin(global_invocation_id) gid: vec3<u32>) {
             let y = gid.y * 4u + j;
 
             var index = 0u;
-            if x < dimensions.x && y < dimensions.y {
+            if x < params.width && y < params.height {
                 if transparents[j * 4u + i] {
                     index = 3u;
                 } else {

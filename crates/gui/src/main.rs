@@ -11,7 +11,7 @@ use eframe::{
     },
 };
 use jkl::jackal::image::JackalReader;
-use jkl_wgpu::Uploader;
+use jkl_wgpu::image::{PixelBuffer, blocks::BlockCompressor, uploader::Uploader};
 
 fn main() {
     let mut native_options = eframe::NativeOptions::default();
@@ -25,7 +25,8 @@ fn main() {
 
             wgpu::DeviceDescriptor {
                 label: Some("egui wgpu device"),
-                required_features: wgpu::Features::SHADER_INT64 | wgpu::Features::TEXTURE_COMPRESSION_BC,
+                required_features: wgpu::Features::SHADER_INT64
+                    | wgpu::Features::TEXTURE_COMPRESSION_BC,
                 required_limits: wgpu::Limits {
                     max_texture_dimension_2d: 8192,
                     ..base_limits
@@ -313,7 +314,7 @@ impl CallbackTrait for PreviewCallback {
         }
         let uploader = shared.uploader.as_ref().unwrap();
 
-        let texture = match uploader.upload_from_reader(&mut pending.reader, device, encoder) {
+        let uploaded = match uploader.upload_from_reader(&mut pending.reader, device, encoder) {
             Ok(tex) => tex,
             Err(e) => {
                 shared.last_error = Some(format!("upload failed: {e}"));
@@ -321,16 +322,16 @@ impl CallbackTrait for PreviewCallback {
             }
         };
 
-        shared.pending = None;
+        let texture = PixelBuffer::copy_to_texture(&uploaded, device, encoder);
 
-        let uploaded = texture; // we already have it
+        shared.pending = None;
 
         let render = shared
             .render_pipeline
             .as_ref()
             .expect("render pipeline should exist");
 
-        let sampled_view = uploaded.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampled_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let render_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("jkl-gui-preview-bg"),
             layout: &render.bind_group_layout,
@@ -348,8 +349,8 @@ impl CallbackTrait for PreviewCallback {
 
         shared.gpu = Some(GpuPreview {
             bind_group: render_bind_group,
-            width: uploaded.width(),
-            height: uploaded.height(),
+            width: texture.width(),
+            height: texture.height(),
         });
 
         Vec::new()

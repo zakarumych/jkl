@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 pub mod block;
 pub mod compress;
@@ -169,7 +169,49 @@ pub enum Dimensions {
     D2Array,
 }
 
-pub struct Image2D<T, P> {
+pub trait PixelBuffer {
+    type Pixel;
+
+    fn len(&self) -> usize;
+}
+
+impl<T> PixelBuffer for &[T] {
+    type Pixel = T;
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        <[T]>::len(self)
+    }
+}
+
+impl<T> PixelBuffer for &mut [T] {
+    type Pixel = T;
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        <[T]>::len(self)
+    }
+}
+
+impl<T> PixelBuffer for Arc<[T]> {
+    type Pixel = T;
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        <[T]>::len(self)
+    }
+}
+
+impl<T> PixelBuffer for Box<[T]> {
+    type Pixel = T;
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        <[T]>::len(self)
+    }
+}
+
+pub struct Image2D<P> {
     /// The width of the image view in pixels.
     width: usize,
     /// The height of the image view in pixels.
@@ -178,8 +220,6 @@ pub struct Image2D<T, P> {
     stride: usize,
     /// The underlying pixel data. Length must be at least `(height - 1) * stride + width`.
     pixels: P,
-
-    _marker: PhantomData<[T]>,
 }
 
 /// An immutable, non-owning 2D rectangular view into a pixel buffer.
@@ -191,7 +231,7 @@ pub struct Image2D<T, P> {
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type Image2DRef<'a, T> = Image2D<T, &'a [T]>;
+pub type Image2DRef<'a, T> = Image2D<&'a [T]>;
 
 /// An immutable, shared 2D rectangular pixel buffer.
 ///
@@ -202,7 +242,7 @@ pub type Image2DRef<'a, T> = Image2D<T, &'a [T]>;
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type SharedImage2D<T> = Image2D<T, Arc<[T]>>;
+pub type SharedImage2D<T> = Image2D<Arc<[T]>>;
 
 /// A mutable, non-owning 2D rectangular view into a pixel buffer.
 ///
@@ -213,7 +253,7 @@ pub type SharedImage2D<T> = Image2D<T, Arc<[T]>>;
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type Image2DMut<'a, T> = Image2D<T, &'a mut [T]>;
+pub type Image2DMut<'a, T> = Image2D<&'a mut [T]>;
 
 /// A mutable, owning 2D rectangular pixel buffer.
 ///
@@ -224,10 +264,10 @@ pub type Image2DMut<'a, T> = Image2D<T, &'a mut [T]>;
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type OwnedImage2D<T> = Image2D<T, Box<[T]>>;
+pub type OwnedImage2D<T> = Image2D<Box<[T]>>;
 
-impl<T, P> Copy for Image2D<T, P> where P: Copy {}
-impl<T, P> Clone for Image2D<T, P>
+impl<P> Copy for Image2D<P> where P: Copy {}
+impl<P> Clone for Image2D<P>
 where
     P: Clone,
 {
@@ -238,15 +278,11 @@ where
             height: self.height,
             stride: self.stride,
             pixels: self.pixels.clone(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<T, P> Image2D<T, P>
-where
-    P: AsRef<[T]>,
-{
+impl<P> Image2D<P> {
     /// Creates a new `Image2DRef` with contiguous row storage (stride equals width).
     ///
     /// # Parameters
@@ -259,13 +295,11 @@ where
     ///
     /// Panics if `pixels.len() < height * width`.
     pub fn new(width: usize, height: usize, pixels: P) -> Self {
-        assert!(pixels.as_ref().len() >= height * width);
         Image2D {
             width,
             height,
             stride: width,
             pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -285,25 +319,24 @@ where
     ///
     /// Panics if pixels is too short to contain all pixels from the specified dimensions and stride.
     pub fn with_stride(width: usize, height: usize, stride: usize, pixels: P) -> Self {
-        let plane_len = len2([width, height], stride);
-        assert!(pixels.as_ref().len() >= plane_len);
         Image2D {
             width,
             height,
             stride,
             pixels,
-            _marker: PhantomData,
         }
     }
 
     /// Creates a new `Image2DRef` from a single row of pixels.
-    pub fn from_row(pixels: P) -> Self {
+    pub fn from_row(pixels: P) -> Self
+    where
+        P: PixelBuffer,
+    {
         Image2D {
-            width: pixels.as_ref().len(),
+            width: pixels.len(),
             height: 1,
-            stride: pixels.as_ref().len(),
+            stride: pixels.len(),
             pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -317,6 +350,21 @@ where
         self.height
     }
 
+    /// Returns the raw underlying pixel slice.
+    pub fn data(&self) -> &P {
+        &self.pixels
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn data_mut(&mut self) -> &mut P {
+        &mut self.pixels
+    }
+}
+
+impl<T, P> Image2D<P>
+where
+    P: PixelBuffer<Pixel = T> + AsRef<[T]>,
+{
     /// Returns an immutable view of this image.
     pub fn as_ref(&self) -> Image2DRef<'_, T> {
         Image2D {
@@ -324,14 +372,13 @@ where
             height: self.height,
             stride: self.stride,
             pixels: self.pixels.as_ref(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<T, P> Image2D<T, P>
+impl<T, P> Image2D<P>
 where
-    P: AsMut<[T]>,
+    P: PixelBuffer<Pixel = T> + AsMut<[T]>,
 {
     /// Returns a mutable view of this image with a reborrowed lifetime.
     pub fn as_mut(&mut self) -> Image2DMut<'_, T> {
@@ -340,7 +387,6 @@ where
             height: self.height,
             stride: self.stride,
             pixels: self.pixels.as_mut(),
-            _marker: PhantomData,
         }
     }
 }
@@ -381,7 +427,6 @@ impl<'a, T> Image2DRef<'a, T> {
             height: h,
             stride: self.stride,
             pixels: &self.pixels[y * self.stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -636,7 +681,6 @@ impl<'a, T> Image2DMut<'a, T> {
             height: h,
             stride: self.stride,
             pixels: &self.pixels[y * self.stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -668,7 +712,6 @@ impl<'a, T> Image2DMut<'a, T> {
             height: h,
             stride: self.stride,
             pixels: &mut self.pixels[y * self.stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -718,7 +761,7 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 }
 
-pub struct Image3D<T, P> {
+pub struct Image3D<P> {
     /// The width of the image view in pixels.
     width: usize,
     /// The height of the image view in pixels.
@@ -731,8 +774,6 @@ pub struct Image3D<T, P> {
     plane_stride: usize,
     /// The underlying pixel data. Length must be at least `(depth - 1) * plane_stride + (height - 1) * row_stride + width`.
     pixels: P,
-
-    _marker: PhantomData<[T]>,
 }
 
 /// An immutable, non-owning 3D view into a pixel buffer.
@@ -744,7 +785,7 @@ pub struct Image3D<T, P> {
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type Image3DRef<'a, T> = Image3D<T, &'a [T]>;
+pub type Image3DRef<'a, T> = Image3D<&'a [T]>;
 
 /// An immutable, shared 3D view into a pixel buffer.
 ///
@@ -755,7 +796,7 @@ pub type Image3DRef<'a, T> = Image3D<T, &'a [T]>;
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type SharedImage3D<T> = Image3D<T, Arc<[T]>>;
+pub type SharedImage3D<T> = Image3D<Arc<[T]>>;
 
 /// A mutable, non-owning 3D view into a pixel buffer.
 ///
@@ -766,7 +807,7 @@ pub type SharedImage3D<T> = Image3D<T, Arc<[T]>>;
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type Image3DMut<'a, T> = Image3D<T, &'a mut [T]>;
+pub type Image3DMut<'a, T> = Image3D<&'a mut [T]>;
 
 /// A mutable, owning 3D view into a pixel buffer.
 ///
@@ -777,13 +818,14 @@ pub type Image3DMut<'a, T> = Image3D<T, &'a mut [T]>;
 /// # Type Parameters
 ///
 /// * `T` - The pixel type. Must be `Copy` for most operations.
-pub type OwnedImage3D<T> = Image3D<T, Box<[T]>>;
+pub type OwnedImage3D<T> = Image3D<Box<[T]>>;
 
-impl<T, P> Copy for Image3D<T, P> where P: Copy {}
-impl<T, P> Clone for Image3D<T, P>
+impl<P> Copy for Image3D<P> where P: Copy {}
+impl<P> Clone for Image3D<P>
 where
     P: Clone,
 {
+    #[inline]
     fn clone(&self) -> Self {
         Image3D {
             width: self.width,
@@ -792,15 +834,11 @@ where
             row_stride: self.row_stride,
             plane_stride: self.plane_stride,
             pixels: self.pixels.clone(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<T, P> Image3D<T, P>
-where
-    P: AsRef<[T]>,
-{
+impl<P> Image3D<P> {
     /// Creates a new `Image3DRef` with contiguous row storage (row stride equals width, plane stride equals width * height).
     ///
     /// # Parameters
@@ -814,7 +852,6 @@ where
     ///
     /// Panics if `pixels.len() < height * width`.
     pub fn new(width: usize, height: usize, depth: usize, pixels: P) -> Self {
-        assert!(pixels.as_ref().len() >= depth * height * width);
         Image3D {
             width,
             height,
@@ -822,7 +859,6 @@ where
             row_stride: width,
             plane_stride: width * height,
             pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -849,8 +885,6 @@ where
         plane_stride: usize,
         pixels: P,
     ) -> Self {
-        let volume_len = len3([width, height, depth], [row_stride, plane_stride]);
-        assert!(pixels.as_ref().len() >= volume_len);
         Image3D {
             width,
             height,
@@ -858,25 +892,26 @@ where
             row_stride,
             plane_stride,
             pixels,
-            _marker: PhantomData,
         }
     }
 
     /// Creates a new `Image3DRef` from a single row of pixels.
-    pub fn from_row(pixels: P) -> Self {
+    pub fn from_row(pixels: P) -> Self
+    where
+        P: PixelBuffer,
+    {
         Image3D {
-            width: pixels.as_ref().len(),
+            width: pixels.len(),
             height: 1,
             depth: 1,
-            row_stride: pixels.as_ref().len(),
-            plane_stride: pixels.as_ref().len(),
+            row_stride: pixels.len(),
+            plane_stride: pixels.len(),
             pixels,
-            _marker: PhantomData,
         }
     }
 
     /// Creates a new `Image3DRef` from a single XY plane of pixels.
-    pub fn from_plane(plane: Image2D<T, P>) -> Self {
+    pub fn from_plane(plane: Image2D<P>) -> Self {
         let plane_len = len2([plane.width, plane.height], plane.stride);
         Image3D {
             width: plane.width,
@@ -885,7 +920,6 @@ where
             row_stride: plane.stride,
             plane_stride: plane_len,
             pixels: plane.pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -904,6 +938,21 @@ where
         self.depth
     }
 
+    /// Returns the raw underlying pixel slice.
+    pub fn data(&self) -> &P {
+        &self.pixels
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn data_mut(&mut self) -> &mut P {
+        &mut self.pixels
+    }
+}
+
+impl<T, P> Image3D<P>
+where
+    P: PixelBuffer<Pixel = T> + AsRef<[T]>,
+{
     /// Creates a new `Image3DMut` by reborrowing its pixel data immutably.
     pub fn as_ref(&self) -> Image3DRef<'_, T> {
         Image3D {
@@ -913,14 +962,13 @@ where
             row_stride: self.row_stride,
             plane_stride: self.plane_stride,
             pixels: self.pixels.as_ref(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<T, P> Image3D<T, P>
+impl<T, P> Image3D<P>
 where
-    P: AsMut<[T]>,
+    P: PixelBuffer<Pixel = T> + AsMut<[T]>,
 {
     /// Creates a new `Image3DMut` by reborrowing its pixel data mutably.
     pub fn as_mut(&mut self) -> Image3DMut<'_, T> {
@@ -931,7 +979,6 @@ where
             row_stride: self.row_stride,
             plane_stride: self.plane_stride,
             pixels: self.pixels.as_mut(),
-            _marker: PhantomData,
         }
     }
 }
@@ -966,7 +1013,6 @@ impl<'a, T> Image3DRef<'a, T> {
             height: self.height,
             stride: self.row_stride,
             pixels: &self.pixels[z * self.plane_stride..],
-            _marker: PhantomData,
         }
     }
 
@@ -979,7 +1025,6 @@ impl<'a, T> Image3DRef<'a, T> {
             height: self.depth,
             stride: self.plane_stride,
             pixels: &self.pixels[y * self.row_stride..],
-            _marker: PhantomData,
         }
     }
 
@@ -1008,7 +1053,6 @@ impl<'a, T> Image3DRef<'a, T> {
             height: h,
             stride: self.row_stride,
             pixels: &self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1037,7 +1081,6 @@ impl<'a, T> Image3DRef<'a, T> {
             height: h,
             stride: self.plane_stride,
             pixels: &self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1069,7 +1112,6 @@ impl<'a, T> Image3DRef<'a, T> {
             row_stride: self.row_stride,
             plane_stride: self.plane_stride,
             pixels: &self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1107,7 +1149,6 @@ impl<'a, T> Image3DRef<'a, T> {
                 height,
                 stride: row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
@@ -1233,7 +1274,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: self.height,
             stride: self.row_stride,
             pixels: &self.pixels[z * self.plane_stride..],
-            _marker: PhantomData,
         }
     }
 
@@ -1246,7 +1286,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: self.height,
             stride: self.row_stride,
             pixels: &mut self.pixels[z * self.plane_stride..],
-            _marker: PhantomData,
         }
     }
 
@@ -1259,7 +1298,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: self.depth,
             stride: self.plane_stride,
             pixels: &self.pixels[y * self.row_stride..],
-            _marker: PhantomData,
         }
     }
 
@@ -1272,7 +1310,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: self.depth,
             stride: self.plane_stride,
             pixels: &mut self.pixels[y * self.row_stride..],
-            _marker: PhantomData,
         }
     }
 
@@ -1301,7 +1338,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: h,
             stride: self.row_stride,
             pixels: &self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1330,7 +1366,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: h,
             stride: self.row_stride,
             pixels: &mut self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1359,7 +1394,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: h,
             stride: self.plane_stride,
             pixels: &self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1388,7 +1422,6 @@ impl<'a, T> Image3DMut<'a, T> {
             height: h,
             stride: self.plane_stride,
             pixels: &mut self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1420,7 +1453,6 @@ impl<'a, T> Image3DMut<'a, T> {
             row_stride: self.row_stride,
             plane_stride: self.plane_stride,
             pixels: &self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1452,7 +1484,6 @@ impl<'a, T> Image3DMut<'a, T> {
             row_stride: self.row_stride,
             plane_stride: self.plane_stride,
             pixels: &mut self.pixels[z * self.plane_stride + y * self.row_stride + x..],
-            _marker: PhantomData,
         }
     }
 
@@ -1495,7 +1526,6 @@ impl<'a, T> Image3DMut<'a, T> {
                 height,
                 stride: row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
@@ -1527,7 +1557,6 @@ impl<'a, T> Image3DMut<'a, T> {
                 height,
                 stride: row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
@@ -1559,7 +1588,6 @@ impl<'a, T> Image3DMut<'a, T> {
                 height,
                 stride: row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
@@ -1724,13 +1752,11 @@ impl<'a, T> Image3DMut<'a, T> {
     }
 }
 
-pub struct Image<T, P> {
+pub struct Image<P> {
     dimensions: Dimensions,
     extent: [usize; 3],
     stride: [usize; 2],
     pixels: P,
-
-    _marker: PhantomData<[T]>,
 }
 
 /// An immutable, non-owning view into a pixel buffer interpreted as an image
@@ -1739,7 +1765,7 @@ pub struct Image<T, P> {
 /// Combines the flexibility of arbitrary dimensionality
 /// (`D1`, `D2`, `D3`, `D1Array`, `D2Array`) with a uniform interface for
 /// iteration, slicing, and layer extraction.
-pub type ImageRef<'a, T> = Image<T, &'a [T]>;
+pub type ImageRef<'a, T> = Image<&'a [T]>;
 
 /// An immutable, shared pixel buffer interpreted as an image
 /// with a specific [`Dimensions`] and extent.
@@ -1747,7 +1773,7 @@ pub type ImageRef<'a, T> = Image<T, &'a [T]>;
 /// Combines the flexibility of arbitrary dimensionality
 /// (`D1`, `D2`, `D3`, `D1Array`, `D2Array`) with a uniform interface for
 /// iteration, slicing, and layer extraction.
-pub type SharedImage<T> = Image<T, Arc<[T]>>;
+pub type SharedImage<T> = Image<Arc<[T]>>;
 
 /// A mutable, non-owning view into a pixel buffer interpreted as an image
 /// with a specific [`Dimensions`] and extent.
@@ -1755,7 +1781,7 @@ pub type SharedImage<T> = Image<T, Arc<[T]>>;
 /// Combines the flexibility of arbitrary dimensionality
 /// (`D1`, `D2`, `D3`, `D1Array`, `D2Array`) with a uniform interface for
 /// iteration, slicing, and layer extraction.
-pub type ImageMut<'a, T> = Image<T, &'a mut [T]>;
+pub type ImageMut<'a, T> = Image<&'a mut [T]>;
 
 /// A mutable, owned pixel buffer interpreted as an image
 /// with a specific [`Dimensions`] and extent.
@@ -1763,10 +1789,10 @@ pub type ImageMut<'a, T> = Image<T, &'a mut [T]>;
 /// Combines the flexibility of arbitrary dimensionality
 /// (`D1`, `D2`, `D3`, `D1Array`, `D2Array`) with a uniform interface for
 /// iteration, slicing, and layer extraction.
-pub type OwnedImage<T> = Image<T, Box<[T]>>;
+pub type OwnedImage<T> = Image<Box<[T]>>;
 
-impl<T, P> Copy for Image<T, P> where P: Copy {}
-impl<T, P> Clone for Image<T, P>
+impl<P> Copy for Image<P> where P: Copy {}
+impl<P> Clone for Image<P>
 where
     P: Clone,
 {
@@ -1777,15 +1803,11 @@ where
             extent: self.extent,
             stride: self.stride,
             pixels: self.pixels.clone(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<T, P> Image<T, P>
-where
-    P: AsRef<[T]>,
-{
+impl<P> Image<P> {
     /// Creates a new `Image` with contiguous storage.
     ///
     /// `extent` is `[width, height_or_layers, depth_or_layers]` interpreted
@@ -1796,32 +1818,11 @@ where
     /// Panics if `pixels.len()` does not equal the total element count, or if
     /// unused axes are not `1`.
     pub fn new(dimensions: Dimensions, extent: [usize; 3], pixels: P) -> Self {
-        let len = match dimensions {
-            Dimensions::D1 => {
-                assert_eq!(extent[1], 1);
-                assert_eq!(extent[2], 1);
-                extent[0]
-            }
-            Dimensions::D2 => {
-                assert_eq!(extent[2], 1);
-                extent[0] * extent[1]
-            }
-            Dimensions::D3 => extent[0] * extent[1] * extent[2],
-            Dimensions::D1Array => {
-                assert_eq!(extent[2], 1);
-                extent[0] * extent[1]
-            }
-            Dimensions::D2Array => extent[0] * extent[1] * extent[2],
-        };
-
-        assert_eq!(pixels.as_ref().len(), len);
-
         Image {
             dimensions,
             extent,
             stride: [extent[0], extent[0] * extent[1]],
             pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -1838,27 +1839,11 @@ where
         stride: [usize; 2],
         pixels: P,
     ) -> Self {
-        let len = match dimensions {
-            Dimensions::D1 => {
-                assert_eq!(extent[1], 1);
-                assert_eq!(extent[2], 1);
-                extent[0]
-            }
-            Dimensions::D2 | Dimensions::D1Array => {
-                assert_eq!(extent[2], 1);
-                len2([extent[0], extent[1]], stride[0])
-            }
-            Dimensions::D3 | Dimensions::D2Array => len3(extent, stride),
-        };
-
-        assert_eq!(pixels.as_ref().len(), len);
-
         Image {
             dimensions,
             extent,
             stride,
             pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -1998,6 +1983,33 @@ where
         }
     }
 
+    pub fn raw_stride(&self) -> [usize; 2] {
+        self.stride
+    }
+
+    pub fn row_stride(&self) -> usize {
+        self.stride[0]
+    }
+
+    pub fn plane_stride(&self) -> usize {
+        self.stride[1]
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn data(&self) -> &P {
+        &self.pixels
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn data_mut(&mut self) -> &mut P {
+        &mut self.pixels
+    }
+}
+
+impl<T, P> Image<P>
+where
+    P: PixelBuffer<Pixel = T> + AsRef<[T]>,
+{
     /// Creates a new `ImageRef` by reborrowing its pixel data immutably.
     pub fn as_ref(&self) -> ImageRef<'_, T> {
         Image {
@@ -2005,14 +2017,13 @@ where
             extent: self.extent,
             stride: self.stride,
             pixels: self.pixels.as_ref(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<T, P> Image<T, P>
+impl<T, P> Image<P>
 where
-    P: AsMut<[T]>,
+    P: PixelBuffer<Pixel = T> + AsMut<[T]>,
 {
     /// Creates a new `ImageMut` by reborrowing its pixel data mutably.
     pub fn as_mut(&mut self) -> ImageMut<'_, T> {
@@ -2021,7 +2032,6 @@ where
             extent: self.extent,
             stride: self.stride,
             pixels: self.pixels.as_mut(),
-            _marker: PhantomData,
         }
     }
 }
@@ -2081,7 +2091,6 @@ impl<'a, T> ImageRef<'a, T> {
             row_stride: self.stride[0],
             plane_stride: self.stride[1],
             pixels: self.pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -2104,7 +2113,6 @@ impl<'a, T> ImageRef<'a, T> {
                     height: 1,
                     stride: self.stride[0],
                     pixels: &self.pixels[layer * self.stride[0]..],
-                    _marker: PhantomData,
                 }
             }
             Dimensions::D2 | Dimensions::D2Array => {
@@ -2114,7 +2122,6 @@ impl<'a, T> ImageRef<'a, T> {
                     height: self.extent[1],
                     stride: self.stride[0],
                     pixels: &self.pixels[layer * self.stride[1]..],
-                    _marker: PhantomData,
                 }
             }
             Dimensions::D3 => {
@@ -2124,7 +2131,6 @@ impl<'a, T> ImageRef<'a, T> {
                     height: self.extent[1],
                     stride: self.stride[0],
                     pixels: &self.pixels[layer * self.stride[1]..],
-                    _marker: PhantomData,
                 }
             }
         }
@@ -2151,7 +2157,6 @@ impl<'a, T> ImageRef<'a, T> {
                 height: sizes.height,
                 stride: sizes.row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
@@ -2285,7 +2290,6 @@ impl<'a, T> ImageMut<'a, T> {
             row_stride: self.stride[0],
             plane_stride: self.stride[1],
             pixels: &*self.pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -2304,7 +2308,6 @@ impl<'a, T> ImageMut<'a, T> {
             row_stride: self.stride[0],
             plane_stride: self.stride[1],
             pixels: &mut *self.pixels,
-            _marker: PhantomData,
         }
     }
 
@@ -2327,7 +2330,6 @@ impl<'a, T> ImageMut<'a, T> {
                     height: 1,
                     stride: self.stride[0],
                     pixels: &self.pixels[layer * self.stride[0]..],
-                    _marker: PhantomData,
                 }
             }
             Dimensions::D2 | Dimensions::D2Array => {
@@ -2337,7 +2339,6 @@ impl<'a, T> ImageMut<'a, T> {
                     height: self.extent[1],
                     stride: self.stride[0],
                     pixels: &self.pixels[layer * self.stride[1]..],
-                    _marker: PhantomData,
                 }
             }
             Dimensions::D3 => {
@@ -2347,7 +2348,6 @@ impl<'a, T> ImageMut<'a, T> {
                     height: self.extent[1],
                     stride: self.stride[0],
                     pixels: &self.pixels[layer * self.stride[1]..],
-                    _marker: PhantomData,
                 }
             }
         }
@@ -2372,7 +2372,6 @@ impl<'a, T> ImageMut<'a, T> {
                     height: 1,
                     stride: self.stride[0],
                     pixels: &mut self.pixels[layer * self.stride[0]..],
-                    _marker: PhantomData,
                 }
             }
             Dimensions::D2 | Dimensions::D2Array => {
@@ -2382,7 +2381,6 @@ impl<'a, T> ImageMut<'a, T> {
                     height: self.extent[1],
                     stride: self.stride[0],
                     pixels: &mut self.pixels[layer * self.stride[1]..],
-                    _marker: PhantomData,
                 }
             }
             Dimensions::D3 => {
@@ -2392,7 +2390,6 @@ impl<'a, T> ImageMut<'a, T> {
                     height: self.extent[1],
                     stride: self.stride[0],
                     pixels: &mut self.pixels[layer * self.stride[1]..],
-                    _marker: PhantomData,
                 }
             }
         }
@@ -2419,7 +2416,6 @@ impl<'a, T> ImageMut<'a, T> {
                 height: sizes.height,
                 stride: sizes.row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
@@ -2444,7 +2440,6 @@ impl<'a, T> ImageMut<'a, T> {
                 height: sizes.height,
                 stride: sizes.row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
@@ -2469,7 +2464,6 @@ impl<'a, T> ImageMut<'a, T> {
                 height: sizes.height,
                 stride: sizes.row_stride,
                 pixels: plane,
-                _marker: PhantomData,
             })
     }
 
