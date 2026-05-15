@@ -4,6 +4,7 @@ pub mod block;
 pub mod compress;
 pub mod filter;
 pub mod format;
+pub mod quality;
 pub mod tiles;
 
 /// The spatial extent of an image, encoding both size and dimensionality.

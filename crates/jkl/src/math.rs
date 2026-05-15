@@ -4484,6 +4484,130 @@ impl From<Vec4> for Rgba32F {
     }
 }
 
+/// A color in the YIQ color space with an additional alpha channel, stored as four `f32` components.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
+pub struct Yiqa32F(pub [f32; 4]);
+
+impl_fixedcode_array!(Yiqa32F([f32; 4]) | Infallible);
+
+impl Yiqa32F {
+    /// Full white (luminance 1.0, no chrominance, fully opaque).
+    pub const WHITE: Yiqa32F = Yiqa32F([1.0, 0.0, 0.0, 1.0]);
+    /// Full black (all components zero, fully opaque).
+    pub const BLACK: Yiqa32F = Yiqa32F([0.0, 0.0, 0.0, 1.0]);
+    /// Fully transparent black.
+    pub const TRANSPARENT: Yiqa32F = Yiqa32F([0.0, 0.0, 0.0, 0.0]);
+
+    /// Creates a new YIQA color from luminance (`y`), in-phase (`i`), quadrature (`q`), and alpha (`a`).
+    #[inline(always)]
+    pub const fn new(y: f32, i: f32, q: f32, a: f32) -> Self {
+        Yiqa32F([y, i, q, a])
+    }
+
+    /// Returns the luminance (Y) component.
+    #[inline(always)]
+    pub const fn y(&self) -> f32 {
+        self.0[0]
+    }
+
+    /// Returns the in-phase (I) chrominance component.
+    #[inline(always)]
+    pub const fn i(&self) -> f32 {
+        self.0[1]
+    }
+
+    /// Returns the quadrature (Q) chrominance component.
+    #[inline(always)]
+    pub const fn q(&self) -> f32 {
+        self.0[2]
+    }
+
+    /// Returns the alpha component.
+    #[inline(always)]
+    pub const fn a(&self) -> f32 {
+        self.0[3]
+    }
+
+    /// Returns the YIQ components without alpha.
+    #[inline(always)]
+    pub const fn yiq(&self) -> Yiq32F {
+        Yiq32F([self.0[0], self.0[1], self.0[2]])
+    }
+
+    /// Converts an `Rgba32F` color to YIQA color space.
+    #[inline(always)]
+    pub fn from_rgba(rgba: Rgba32F) -> Self {
+        let Yiq32F([y, i, q]) = Yiq32F::from_rgb(rgba.rgb());
+        Yiqa32F([y, i, q, rgba.a()])
+    }
+
+    /// Converts this YIQA color back to RGBA color space.
+    #[inline(always)]
+    pub fn into_rgba(self) -> Rgba32F {
+        let Rgb32F([r, g, b]) = self.yiq().into_rgb();
+        Rgba32F([r, g, b, self.0[3]])
+    }
+
+    /// Linearly interpolates between two colors component-wise.
+    #[inline(always)]
+    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+        Yiqa32F([
+            lerp(a.y(), b.y(), t),
+            lerp(a.i(), b.i(), t),
+            lerp(a.q(), b.q(), t),
+            lerp(a.a(), b.a(), t),
+        ])
+    }
+
+    /// Returns the per-channel difference as a `Vec4`.
+    #[inline(always)]
+    pub const fn diff(a: Self, b: Self) -> Vec4 {
+        Vec4([a.y() - b.y(), a.i() - b.i(), a.q() - b.q(), a.a() - b.a()])
+    }
+
+    /// Returns the squared Euclidean distance.
+    #[inline(always)]
+    pub const fn distance_squared(a: Self, b: Self) -> f32 {
+        let d = Self::diff(a, b);
+        d.dot(d)
+    }
+
+    /// Returns the Euclidean distance.
+    #[inline(always)]
+    pub fn distance(a: Self, b: Self) -> f32 {
+        Self::distance_squared(a, b).sqrt()
+    }
+}
+
+impl From<Rgba32F> for Yiqa32F {
+    #[inline(always)]
+    fn from(rgba: Rgba32F) -> Self {
+        Yiqa32F::from_rgba(rgba)
+    }
+}
+
+impl From<Yiqa32F> for Rgba32F {
+    #[inline(always)]
+    fn from(yiqa: Yiqa32F) -> Self {
+        yiqa.into_rgba()
+    }
+}
+
+impl From<Vec4> for Yiqa32F {
+    #[inline(always)]
+    fn from(value: Vec4) -> Self {
+        Yiqa32F([value.x(), value.y(), value.z(), value.w()])
+    }
+}
+
+impl From<Yiqa32F> for Vec4 {
+    #[inline(always)]
+    fn from(value: Yiqa32F) -> Self {
+        Vec4([value.y(), value.i(), value.q(), value.a()])
+    }
+}
+
 pub trait Vector:
     Zero
     + Add<Output = Self>

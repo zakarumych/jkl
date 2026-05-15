@@ -12,6 +12,7 @@ use jkl::{
         Extent, ImageRef, OwnedImage,
         block::bc1::{self, Block},
         format::Format,
+        quality,
     },
     jackal::image::{Compression, JackalReader, Options},
     math::{Rgb8U, Rgba8U},
@@ -61,6 +62,9 @@ struct EncodeArgs {
     format: FormatArg,
     #[arg(long)]
     compression: Option<CompressionArg>,
+    /// Measure and print quality metrics (MSE, PSNR, max error, GMSD) after encoding.
+    #[arg(long)]
+    analyze_compression_quality: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -124,8 +128,8 @@ impl WgpuContext {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // let mut cx = WgpuContext::new();
-    let mut cx = None;
+    let mut cx = WgpuContext::new();
+    // let mut cx = None;
 
     match cli.command {
         Command::Encode(args) => encode_command(args, cx.as_mut()),
@@ -157,11 +161,19 @@ fn encode_command(args: EncodeArgs, cx: Option<&mut WgpuContext>) -> Result<()> 
                 &mut output_file,
             )
             .with_context(|| format!("failed to write JKLI file: {}", output.display()))?;
+
+            if args.analyze_compression_quality {
+                // RGB8 uses lossless compression; decoded is bit-identical to original.
+                print_quality_metrics(rgb.as_ref(), rgb.as_ref());
+            }
         }
         FormatArg::Bc1 => {
-            let blocks = match source {
-                SourceImage::Rgb(image) => rgb8_to_bc1(image.as_ref(), cx),
-                SourceImage::Bc1(image) => image,
+            let (blocks, original) = match source {
+                SourceImage::Rgb(image) => {
+                    let blocks = rgb8_to_bc1(image.as_ref(), cx);
+                    (blocks, Some(image))
+                }
+                SourceImage::Bc1(image) => (image, None),
             };
 
             jkl::jackal::image::write_image(
@@ -170,6 +182,14 @@ fn encode_command(args: EncodeArgs, cx: Option<&mut WgpuContext>) -> Result<()> 
                 &mut output_file,
             )
             .with_context(|| format!("failed to write JKLI file: {}", output.display()))?;
+
+            if args.analyze_compression_quality {
+                let decoded = bc1_to_rgb8(blocks.as_ref());
+                match original {
+                    Some(ref orig) => print_quality_metrics(orig.as_ref(), decoded.as_ref()),
+                    None => print_quality_metrics(decoded.as_ref(), decoded.as_ref()),
+                }
+            }
         }
     }
 
@@ -500,6 +520,21 @@ fn bc1_to_rgb8(input: ImageRef<'_, Block>) -> OwnedImage<Rgb8U> {
     bc1::decode_image(input, |c| Rgb8U::from_f32(c.rgb()), output.as_mut());
 
     output
+}
+
+fn print_quality_metrics(original: ImageRef<'_, Rgb8U>, decoded: ImageRef<'_, Rgb8U>) {
+    let mse_val = quality::mse(original, decoded);
+    let psnr_val = quality::psnr_from_mse::<Rgb8U>(mse_val);
+    let max_err = quality::max_error(original, decoded);
+    let gmsd_val = quality::gmsd(original, decoded);
+    println!("MSE:       {:.6}", mse_val);
+    if psnr_val.is_finite() {
+        println!("PSNR:      {:.2} dB", psnr_val);
+    } else {
+        println!("PSNR:      inf dB");
+    }
+    println!("max error: {:.6}", max_err);
+    println!("GMSD:      {:.6}", gmsd_val);
 }
 
 enum SourceImage {
