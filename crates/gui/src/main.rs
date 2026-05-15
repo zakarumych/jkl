@@ -11,7 +11,7 @@ use eframe::{
     },
 };
 use jkl::jackal::image::JackalReader;
-use jkl_wgpu::image::{PixelBuffer, blocks::BlockCompressor, uploader::Uploader};
+use jkl_wgpu::image::{WgpuImage, uploader::Uploader};
 
 fn main() {
     let mut native_options = eframe::NativeOptions::default();
@@ -26,7 +26,8 @@ fn main() {
             wgpu::DeviceDescriptor {
                 label: Some("egui wgpu device"),
                 required_features: wgpu::Features::SHADER_INT64
-                    | wgpu::Features::TEXTURE_COMPRESSION_BC,
+                    | wgpu::Features::TEXTURE_COMPRESSION_BC
+                    | wgpu::Features::SUBGROUP,
                 required_limits: wgpu::Limits {
                     max_texture_dimension_2d: 8192,
                     ..base_limits
@@ -322,7 +323,7 @@ impl CallbackTrait for PreviewCallback {
             }
         };
 
-        let texture = PixelBuffer::copy_to_texture(&uploaded, device, encoder);
+        let texture = uploaded.make_texture(device, encoder);
 
         shared.pending = None;
 

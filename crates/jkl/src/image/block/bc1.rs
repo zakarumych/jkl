@@ -207,18 +207,18 @@ impl Block {
         let mut index_index = 0;
         for y in 0..4 {
             for x in 0..4 {
-                if colors[y][x].1 {
-                    continue;
+                let (_, v) = colors[y][x];
+                if v {
+                    let idx = match cf.indices[index_index] {
+                        0 => 0,
+                        1 => 2,
+                        2 => 3,
+                        3 => 1,
+                        _ => unreachable!(),
+                    };
+                    indices[y] |= idx << (x * 2);
+                    index_index += 1;
                 }
-                let idx = match cf.indices[index_index] {
-                    0 => 0,
-                    1 => 2,
-                    2 => 3,
-                    3 => 1,
-                    _ => unreachable!(),
-                };
-                indices[y] |= idx << (x * 2);
-                index_index += 1;
             }
         }
 
@@ -240,7 +240,7 @@ impl Block {
         for row in &colors {
             for &(c, v) in row {
                 if v {
-                    if c.a() > threshold {
+                    if c.a() >= threshold {
                         samples[count] = c.rgb().into();
                         count += 1;
                     } else {
@@ -281,7 +281,7 @@ impl Block {
                 for y in 0..4 {
                     for x in 0..4 {
                         let (c, v) = colors[y][x];
-                        if v && c.a() > threshold {
+                        if v && c.a() >= threshold {
                             let idx = match cf.indices[index_index] {
                                 0 => 0,
                                 1 => 2,

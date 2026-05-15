@@ -14,8 +14,9 @@ use jkl::{
         format::Format,
     },
     jackal::image::{Compression, JackalReader, Options},
-    math::Rgb8U,
+    math::{Rgb8U, Rgba8U},
 };
+use jkl_wgpu::image::{WgpuImage, WgpuPixels, blocks::BlockCompressor};
 
 #[derive(Parser, Debug)]
 #[command(name = "jkl-cli")]
@@ -76,16 +77,63 @@ fn main() {
     }
 }
 
+struct WgpuContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    block_compressor: BlockCompressor,
+}
+
+impl WgpuContext {
+    fn new() -> Option<Self> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+        });
+
+        let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+
+        let f = async || {
+            for adapter in adapters {
+                let fut = adapter.request_device(&wgpu::DeviceDescriptor {
+                    label: Some("jkl-cli-device"),
+                    required_features: wgpu::Features::SUBGROUP,
+                    ..Default::default()
+                });
+
+                if let Ok((device, queue)) = fut.await {
+                    return Some((device, queue));
+                }
+            }
+
+            None
+        };
+
+        let (device, queue) = futures::executor::block_on(f())?;
+        let block_compressor = BlockCompressor::new(&device);
+
+        Some(WgpuContext {
+            device,
+            queue,
+            block_compressor,
+        })
+    }
+}
+
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    // let mut cx = WgpuContext::new();
+    let mut cx = None;
+
     match cli.command {
-        Command::Encode(args) => encode_command(args),
+        Command::Encode(args) => encode_command(args, cx.as_mut()),
         Command::Decode(args) => decode_command(args),
     }
 }
 
-fn encode_command(args: EncodeArgs) -> Result<()> {
+fn encode_command(args: EncodeArgs, cx: Option<&mut WgpuContext>) -> Result<()> {
     let output = args
         .output
         .unwrap_or_else(|| default_with_extension(&args.input, "jkli"));
@@ -112,7 +160,7 @@ fn encode_command(args: EncodeArgs) -> Result<()> {
         }
         FormatArg::Bc1 => {
             let blocks = match source {
-                SourceImage::Rgb(image) => rgb8_to_bc1(image.as_ref()),
+                SourceImage::Rgb(image) => rgb8_to_bc1(image.as_ref(), cx),
                 SourceImage::Bc1(image) => image,
             };
 
@@ -327,25 +375,115 @@ fn default_with_extension(path: &Path, extension: &str) -> PathBuf {
     output
 }
 
-fn rgb8_to_bc1(input: ImageRef<'_, Rgb8U>) -> OwnedImage<Block> {
-    let extent = input.extent();
-    let dimentions = extent.dimensions();
-    let raw_size = extent.raw_size();
+fn rgb8_to_bc1(input: ImageRef<'_, Rgb8U>, cx: Option<&mut WgpuContext>) -> OwnedImage<Block> {
+    match cx {
+        None => {
+            let start = std::time::Instant::now();
 
-    let mut output = OwnedImage::new(
-        dimentions,
-        [
-            raw_size[0].div_ceil(4),
-            raw_size[1].div_ceil(4),
-            raw_size[2],
-        ],
-        vec![bc1::Block::BLACK; raw_size[0].div_ceil(4) * raw_size[1].div_ceil(4) * raw_size[2]]
-            .into_boxed_slice(),
-    );
+            let extent = input.extent();
+            let dimentions = extent.dimensions();
+            let raw_size = extent.raw_size();
 
-    bc1::encode_image(input, |c| c.into_f32(), output.as_mut());
+            let mut output = OwnedImage::new(
+                dimentions,
+                [
+                    raw_size[0].div_ceil(4),
+                    raw_size[1].div_ceil(4),
+                    raw_size[2],
+                ],
+                vec![
+                    bc1::Block::BLACK;
+                    raw_size[0].div_ceil(4) * raw_size[1].div_ceil(4) * raw_size[2]
+                ]
+                .into_boxed_slice(),
+            );
 
-    output
+            bc1::encode_image(input, |c| c.into_f32(), output.as_mut());
+
+            eprintln!(
+                "BC1 compression CPU time: {:.3} seconds",
+                start.elapsed().as_secs_f32()
+            );
+
+            output
+        }
+        Some(cx) => {
+            let start = std::time::Instant::now();
+
+            // Upload RGB image to GPU
+            let input_buffer = WgpuImage::upload(
+                &cx.device,
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::BufferUsages::STORAGE,
+                input,
+                |c| c.into_opaque().0,
+            );
+
+            // Run BC1 compression kernel
+            let output_buffer = cx.block_compressor.compress_rgba_to_bc1(
+                input_buffer,
+                0.0,
+                &cx.device,
+                &cx.queue,
+                1 << 10, // Batch size of 1024 blocks to avoid GPU timeout.
+            );
+
+            let mut encoder = cx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("jkl-rgba-to-bc1-download-encoder"),
+                });
+
+            let download_buffer = WgpuImage::new(
+                &cx.device,
+                wgpu::TextureFormat::Bc1RgbaUnorm,
+                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                output_buffer.extent(),
+            );
+
+            // Copy compressed data to CPU-readable buffer
+            output_buffer.copy_to(&download_buffer, &mut encoder);
+
+            // And map it for reading on CPU
+            download_buffer.map_on_submit(wgpu::MapMode::Read, &mut encoder);
+
+            let idx = cx.queue.submit(Some(encoder.finish()));
+            cx.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(idx),
+                    timeout: None,
+                })
+                .unwrap();
+
+            let extent = input.extent();
+            let dimentions = extent.dimensions();
+            let raw_size = extent.raw_size();
+
+            let mut output = OwnedImage::new(
+                dimentions,
+                [
+                    raw_size[0].div_ceil(4),
+                    raw_size[1].div_ceil(4),
+                    raw_size[2],
+                ],
+                vec![
+                    bc1::Block::BLACK;
+                    raw_size[0].div_ceil(4) * raw_size[1].div_ceil(4) * raw_size[2]
+                ]
+                .into_boxed_slice(),
+            );
+
+            // Read compressed data from GPU.
+            download_buffer.download(output.as_mut(), bc1::Block::from_bytes);
+
+            eprintln!(
+                "BC1 compression GPU time: {:.3} seconds",
+                start.elapsed().as_secs_f32()
+            );
+
+            output
+        }
+    }
 }
 
 fn bc1_to_rgb8(input: ImageRef<'_, Block>) -> OwnedImage<Rgb8U> {

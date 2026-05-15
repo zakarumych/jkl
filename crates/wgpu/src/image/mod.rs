@@ -1,42 +1,148 @@
 use std::mem::size_of;
 
-use bytemuck::NoUninit;
-use jkl::image::{Dimensions, Image, ImageRef};
+use bytemuck::{AnyBitPattern, NoUninit};
+use jkl::image::{Dimensions, Extent, Image, ImageMut, ImageRef};
 
 pub mod blocks;
 pub mod uploader;
 
-pub struct PixelBuffer {
+pub struct WgpuPixels {
     format: wgpu::TextureFormat,
     buffer: wgpu::Buffer,
 }
 
-impl PixelBuffer {
+impl WgpuPixels {
     pub fn new(format: wgpu::TextureFormat, buffer: wgpu::Buffer) -> Self {
-        PixelBuffer { format, buffer }
+        WgpuPixels { format, buffer }
     }
+}
 
-    pub fn upload<T, U>(
+pub trait WgpuImage {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        usage: wgpu::BufferUsages,
+        extent: Extent,
+    ) -> Self;
+
+    fn map_on_submit(&self, mode: wgpu::MapMode, encoder: &mut wgpu::CommandEncoder);
+    fn unmap(&self);
+
+    fn upload<T, U>(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         usage: wgpu::BufferUsages,
         image: ImageRef<T>,
         map: impl Fn(T) -> U,
-    ) -> Image<PixelBuffer>
+    ) -> Self
     where
         T: Copy,
-        U: NoUninit,
-    {
-        let extent = image.extent();
+        U: NoUninit;
+
+    fn download<T, U>(&self, dst: ImageMut<T>, map: impl Fn(U) -> T)
+    where
+        U: AnyBitPattern;
+
+    fn copy_to(&self, dst: &Self, encoder: &mut wgpu::CommandEncoder);
+
+    fn make_texture(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> wgpu::Texture;
+
+    fn format(&self) -> wgpu::TextureFormat;
+    fn buffer(&self) -> &wgpu::Buffer;
+}
+
+impl WgpuImage for Image<WgpuPixels> {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        usage: wgpu::BufferUsages,
+        extent: Extent,
+    ) -> Image<WgpuPixels> {
         let dimsionsions = extent.dimensions();
         let raw_size = extent.raw_size();
 
-        let row_stride = (raw_size[0] * size_of::<U>()).div_ceil(256) * 256;
+        let block_size = format
+            .block_copy_size(None)
+            .expect("Planar formats not supported");
+
+        assert!(
+            256u32.is_multiple_of(block_size),
+            "Format size must be divide 256 exactly"
+        );
+
+        let row_align = 256 / block_size as usize;
+
+        let row_stride = raw_size[0].div_ceil(row_align) * row_align;
         let plane_stride = row_stride * raw_size[1];
 
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("jkl-image-buffer"),
-            size: plane_stride as u64 * raw_size[2] as u64,
+            size: plane_stride as u64 * raw_size[2] as u64 * u64::from(block_size),
+            usage,
+            mapped_at_creation: false,
+        });
+
+        Image::with_stride(
+            dimsionsions,
+            raw_size,
+            [row_stride, plane_stride],
+            WgpuPixels { format, buffer },
+        )
+    }
+
+    fn map_on_submit(&self, mode: wgpu::MapMode, encoder: &mut wgpu::CommandEncoder) {
+        encoder.map_buffer_on_submit(&self.data().buffer, mode, .., |_| {});
+    }
+
+    fn unmap(&self) {
+        self.data().buffer.unmap();
+    }
+
+    fn upload<T, U>(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        usage: wgpu::BufferUsages,
+        image: ImageRef<T>,
+        map: impl Fn(T) -> U,
+    ) -> Image<WgpuPixels>
+    where
+        T: Copy,
+        U: NoUninit,
+    {
+        const {
+            assert!(
+                256usize.is_multiple_of(size_of::<U>()),
+                "Format size must be divide 256 exactly"
+            );
+        }
+
+        let extent = image.extent();
+        let dimsionsions = extent.dimensions();
+        let raw_size = extent.raw_size();
+
+        let u_size = size_of::<U>();
+
+        let block_size = format
+            .block_copy_size(None)
+            .expect("Planar formats not supported");
+
+        assert_eq!(
+            block_size, u_size as u32,
+            "Format block size does not match type size"
+        );
+
+        let row_align = 256 / u_size;
+
+        let row_stride = raw_size[0].div_ceil(row_align) * row_align;
+        let plane_stride = row_stride * raw_size[1];
+
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("jkl-image-buffer"),
+            size: plane_stride as u64 * raw_size[2] as u64 * u64::from(block_size),
             usage,
             mapped_at_creation: true,
         });
@@ -47,16 +153,16 @@ impl PixelBuffer {
             let image = image.as_ref_3d();
 
             for z in 0..raw_size[2] {
+                let plane_offset = z * plane_stride;
                 for y in 0..raw_size[1] {
-                    let offset = (z * plane_stride + y * row_stride) as usize;
-                    let mapped_row = &mut mapped[offset..];
+                    let row_offset = plane_offset + y * row_stride;
+                    let mapped_row = &mut mapped[row_offset * u_size..];
 
                     for x in 0..raw_size[0] {
                         let pixel = *image.get(x, y, z);
                         let mapped_pixel = map(pixel);
                         let bytes = bytemuck::bytes_of(&mapped_pixel);
-                        mapped_row[x as usize * size_of::<U>()..][..bytes.len()]
-                            .copy_from_slice(bytes);
+                        mapped_row[x * u_size..][..u_size].copy_from_slice(bytes);
                     }
                 }
             }
@@ -68,27 +174,175 @@ impl PixelBuffer {
             dimsionsions,
             raw_size,
             [row_stride, plane_stride],
-            PixelBuffer { format, buffer },
+            WgpuPixels { format, buffer },
         )
     }
 
-    pub fn format(&self) -> wgpu::TextureFormat {
-        self.format
+    fn copy_to(&self, dst: &Image<WgpuPixels>, encoder: &mut wgpu::CommandEncoder) {
+        assert_eq!(
+            self.data().format,
+            dst.data().format,
+            "Source and destination formats must match"
+        );
+
+        let format = self.data().format;
+        let block_size = format
+            .block_copy_size(None)
+            .expect("Planar formats not supported");
+
+        let src_extent = self.extent();
+        let dst_extent = dst.extent();
+
+        assert_eq!(src_extent, dst_extent);
+
+        let size = src_extent.raw_size();
+
+        if size[0] == 0 || size[1] == 0 || size[2] == 0 {
+            return;
+        }
+
+        let src_row_stride = self.row_stride();
+        let src_plane_stride = self.plane_stride();
+        let dst_row_stride = dst.row_stride();
+        let dst_plane_stride = dst.plane_stride();
+
+        match (
+            src_row_stride == dst_row_stride,
+            src_plane_stride == dst_plane_stride,
+        ) {
+            (true, true) => {
+                // If the row and plane strides are the same, we can copy the entire buffer at once
+
+                let copy_len =
+                    src_plane_stride * (size[2] - 1) + src_row_stride * (size[1] - 1) + size[0];
+
+                encoder.copy_buffer_to_buffer(
+                    &self.data().buffer,
+                    0,
+                    &dst.data().buffer,
+                    0,
+                    copy_len as u64 * u64::from(block_size),
+                );
+            }
+            (true, false) => {
+                // If only the row strides are the same, we can copy each plane at once
+
+                for z in 0..size[2] {
+                    let src_offset = z * src_plane_stride;
+                    let dst_offset = z * dst_plane_stride;
+
+                    let copy_len = src_row_stride * (size[1] - 1) + size[0] * block_size as usize;
+
+                    encoder.copy_buffer_to_buffer(
+                        &self.data().buffer,
+                        src_offset as u64 * u64::from(block_size),
+                        &dst.data().buffer,
+                        dst_offset as u64 * u64::from(block_size),
+                        copy_len as u64 * u64::from(block_size),
+                    );
+                }
+            }
+            _ => {
+                // If the row strides are different, we have to copy each row separately
+
+                for z in 0..size[2] {
+                    for y in 0..size[1] {
+                        let src_offset = z * src_plane_stride + y * src_row_stride;
+                        let dst_offset = z * dst_plane_stride + y * dst_row_stride;
+
+                        let copy_len = size[0] * block_size as usize;
+
+                        encoder.copy_buffer_to_buffer(
+                            &self.data().buffer,
+                            src_offset as u64 * u64::from(block_size),
+                            &dst.data().buffer,
+                            dst_offset as u64 * u64::from(block_size),
+                            copy_len as u64 * u64::from(block_size),
+                        );
+                    }
+                }
+            }
+        }
     }
 
-    pub fn buffer(&self) -> &wgpu::Buffer {
-        &self.buffer
+    fn download<T, U>(&self, mut dst: ImageMut<T>, map: impl Fn(U) -> T)
+    where
+        U: AnyBitPattern,
+    {
+        const {
+            assert!(
+                256usize.is_multiple_of(size_of::<U>()),
+                "Format size must be divide 256 exactly"
+            );
+        }
+
+        assert_eq!(
+            self.extent(),
+            dst.extent(),
+            "Source and destination extents must match"
+        );
+
+        let u_size = size_of::<U>();
+
+        let block_size = self
+            .data()
+            .format
+            .block_copy_size(None)
+            .expect("Planar formats not supported");
+
+        assert_eq!(
+            block_size, u_size as u32,
+            "Format block size does not match type size"
+        );
+
+        let extent = self.extent();
+        let raw_size = extent.raw_size();
+
+        let row_align = 256 / u_size;
+
+        let row_stride = raw_size[0].div_ceil(row_align) * row_align;
+        let plane_stride = row_stride * raw_size[1];
+
+        {
+            let mut mapped = self.data().buffer.get_mapped_range_mut(..);
+
+            let mut dst = dst.as_mut_3d();
+
+            for z in 0..raw_size[2] {
+                let plane_offset = z * plane_stride;
+                for y in 0..raw_size[1] {
+                    let row_offset = plane_offset + y * row_stride;
+                    let mapped_row = &mut mapped[row_offset * u_size..];
+
+                    for x in 0..raw_size[0] {
+                        let bytes = &mapped_row[x * u_size..][..u_size];
+                        let pixel: U = *bytemuck::from_bytes(bytes);
+
+                        let mapped_pixel = map(pixel);
+                        dst.set(x, y, z, mapped_pixel);
+                    }
+                }
+            }
+        }
     }
 
-    pub fn copy_to_texture(
-        image: &Image<PixelBuffer>,
+    fn format(&self) -> wgpu::TextureFormat {
+        self.data().format
+    }
+
+    fn buffer(&self) -> &wgpu::Buffer {
+        &self.data().buffer
+    }
+
+    fn make_texture(
+        &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
     ) -> wgpu::Texture {
-        let extent = image.extent();
+        let extent = self.extent();
         let raw_size = extent.raw_size();
 
-        let (bw, bh) = image.data().format.block_dimensions();
+        let (bw, bh) = self.data().format.block_dimensions();
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("jkl-image-texture"),
@@ -104,18 +358,18 @@ impl PixelBuffer {
                 Dimensions::D2 | Dimensions::D2Array => wgpu::TextureDimension::D2,
                 Dimensions::D3 => wgpu::TextureDimension::D3,
             },
-            format: image.data().format,
+            format: self.data().format,
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
 
         encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
-                buffer: &image.data().buffer,
+                buffer: &self.data().buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(image.row_stride() as u32),
-                    rows_per_image: Some((image.plane_stride() / image.row_stride()) as u32),
+                    bytes_per_row: Some(self.row_stride() as u32),
+                    rows_per_image: Some((self.plane_stride() / self.row_stride()) as u32),
                 },
             },
             wgpu::TexelCopyTextureInfo {

@@ -8,5 +8,8 @@ license.workspace = true
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 image.workspace = true
+wgpu.workspace = true
+futures.workspace = true
+
 jkl = { path = "../jkl" }
 jkl-wgpu = { path = "../wgpu" }

@@ -7,7 +7,7 @@ use jkl::{
 };
 use wgpu::util::DeviceExt;
 
-use crate::image::PixelBuffer;
+use crate::image::WgpuPixels;
 
 const RANS_WGSL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/rans.wgsl"));
 
@@ -203,15 +203,13 @@ impl Uploader {
         }
     }
 
-    /// Upload a JKLI image from an existing `JackalReader`. Any I/O
-    /// error produced by the reader is propagated directly; no extra
-    /// error types are added.
+    /// Upload a JKLI image from an existing `JackalReader`.
     pub fn upload_from_reader<R>(
         &self,
         reader: &mut JackalReader<R>,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> io::Result<Image<PixelBuffer>>
+    ) -> io::Result<Image<WgpuPixels>>
     where
         R: io::Read + io::Seek,
     {
@@ -340,7 +338,7 @@ impl Uploader {
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
                     [byte_stride as usize, byte_stride as usize * height_usize],
-                    PixelBuffer::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
+                    WgpuPixels::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
                 ))
             }
             (Format::RGB8, Compression::Lz77Ans) => {
@@ -405,7 +403,7 @@ impl Uploader {
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
                     [byte_stride as usize, byte_stride as usize * height_usize],
-                    PixelBuffer::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
+                    WgpuPixels::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
                 ))
             }
             (Format::RGBA8, Compression::Ans) => {
@@ -463,7 +461,7 @@ impl Uploader {
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
                     [byte_stride as usize, byte_stride as usize * height_usize],
-                    PixelBuffer::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
+                    WgpuPixels::new(wgpu::TextureFormat::Rgba8Unorm, out_buf),
                 ))
             }
             (Format::BC1, Compression::Ans) => {
@@ -544,7 +542,7 @@ impl Uploader {
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
                     [byte_stride as usize, byte_stride as usize * height_usize],
-                    PixelBuffer::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
+                    WgpuPixels::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
                 ))
             }
             (Format::BC1, Compression::Lz77Ans) => {
@@ -631,7 +629,7 @@ impl Uploader {
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
                     [byte_stride as usize, byte_stride as usize * height_usize],
-                    PixelBuffer::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
+                    WgpuPixels::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
                 ))
             }
             _ => {

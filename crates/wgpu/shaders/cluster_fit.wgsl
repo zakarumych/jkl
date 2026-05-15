@@ -664,256 +664,14 @@ fn sort_by_projection(order_indices: ptr<function, array<u32, 16>>, projections:
     }
 }
 
-fn cluster_fit_f32(
-    samples: array<f32, 16>,
-    sample_count: u32,
-    palette_count: u32,
-    bits: u32,
-    error_mode: u32,
-) -> ClusterFitF32 {
-    var out: ClusterFitF32;
-    out.endpoints = vec2<f32>(0.0);
-    out.indices = array<u32, 16>();
-    out.error = 0.0;
-
-    if sample_count == 0u || palette_count < 2u || palette_count > CLUSTER_FIT_MAX_PALETTE || sample_count > CLUSTER_FIT_MAX_SAMPLES || sample_count < palette_count {
-        return out;
-    }
-
-    var order_idx: array<u32, 16>;
-    var projections: array<f32, 16>;
-
-    for (var i = 0u; i < sample_count; i += 1u) {
-        order_idx[i] = i;
-        projections[i] = samples[i];
-    }
-
-    sort_by_projection(&order_idx, &projections, sample_count);
-
-    let endpoints0 = fallback_endpoints_f32(samples, sample_count);
-
-    var best_endpoints = endpoints0;
-    var best_indices = array<u32, 16>();
-    var best_error = 0.0;
-
-    {
-        let palette = build_palette_f32(best_endpoints.x, best_endpoints.y, bits, palette_count);
-        for (var i = 0u; i < sample_count; i += 1u) {
-            let sample_index = order_idx[i];
-            let ie = index_error_f32(samples[sample_index], palette, palette_count, error_mode);
-            best_indices[sample_index] = u32(ie.x);
-            best_error = best_error + ie.y;
-        }
-    }
-
-    var cuts: array<u32, 8>;
-    for (var i = 1u; i < palette_count; i += 1u) {
-        cuts[i] = i - 1u;
-    }
-
-    loop {
-        var weights = array<f32, 16>();
-
-        for (var i = 0u; i < sample_count; i += 1u) {
-            var cluster = 0u;
-            for (var c = 1u; c < palette_count; c += 1u) {
-                if i > cuts[c] {
-                    cluster += 1u;
-                }
-            }
-            let t = f32(cluster) / f32(palette_count - 1u);
-            weights[order_idx[i]] = t;
-        }
-
-        let solved = solve_endpoints_f32(weights, samples, sample_count);
-        if solved.x > 0.0 {
-            let c0 = snap_unorm_f32(solved.y, bits);
-            let c1 = snap_unorm_f32(solved.z, bits);
-
-            let palette = build_palette_f32(c0, c1, bits, palette_count);
-
-            var total_error = 0.0;
-            var indices = array<u32, 16>();
-
-            for (var i = 0u; i < sample_count; i += 1u) {
-                let sample_index = order_idx[i];
-                let ie = index_error_f32(samples[sample_index], palette, palette_count, error_mode);
-                indices[sample_index] = u32(ie.x);
-                total_error = total_error + ie.y;
-            }
-
-            if best_error > total_error {
-                best_error = total_error;
-                best_endpoints = vec2<f32>(c0, c1);
-                best_indices = indices;
-            }
-        }
-
-        var advanced = false;
-        var i = i32(palette_count) - 1;
-        loop {
-            if i <= 0 {
-                break;
-            }
-
-            let iu = u32(i);
-            let max_cut = sample_count - (palette_count - iu);
-            if cuts[iu] < max_cut {
-                cuts[iu] += 1u;
-
-                for (var j = iu + 1u; j < palette_count; j += 1u) {
-                    cuts[j] = cuts[j - 1u] + 1u;
-                }
-
-                advanced = true;
-                break;
-            }
-
-            i = i - 1;
-        }
-
-        if !advanced {
-            break;
-        }
-    }
-
-    out.endpoints = best_endpoints;
-    out.indices = best_indices;
-    out.error = best_error;
-    return out;
-}
-
-fn cluster_fit_vec2(
-    samples: array<vec2<f32>, 16>,
-    sample_count: u32,
-    palette_count: u32,
-    bits: vec2<u32>,
-    error_mode: u32,
-) -> ClusterFitVec2 {
-    var out: ClusterFitVec2;
-    out.endpoint0 = vec2<f32>(0.0);
-    out.endpoint1 = vec2<f32>(0.0);
-    out.indices = array<u32, 16>();
-    out.error = 0.0;
-
-    if sample_count == 0u || palette_count < 2u || palette_count > CLUSTER_FIT_MAX_PALETTE || sample_count > CLUSTER_FIT_MAX_SAMPLES || sample_count < palette_count {
-        return out;
-    }
-
-    let axis = principal_axis_vec2(samples, sample_count);
-
-    var order_idx: array<u32, 16>;
-    var projections: array<f32, 16>;
-
-    for (var i = 0u; i < sample_count; i += 1u) {
-        order_idx[i] = i;
-        projections[i] = project_vec2(samples[i], axis);
-    }
-
-    sort_by_projection(&order_idx, &projections, sample_count);
-
-    let endpoints0 = fallback_endpoints_vec2(samples, sample_count);
-
-    var best0 = endpoints0[0];
-    var best1 = endpoints0[1];
-    var best_indices = array<u32, 16>();
-    var best_error = 0.0;
-
-    {
-        let palette = build_palette_vec2(best0, best1, bits, palette_count);
-        for (var i = 0u; i < sample_count; i += 1u) {
-            let sample_index = order_idx[i];
-            let ie = index_error_vec2(samples[sample_index], palette, palette_count, error_mode);
-            best_indices[sample_index] = u32(ie.x);
-            best_error = best_error + ie.y;
-        }
-    }
-
-    var cuts: array<u32, 8>;
-    for (var i = 1u; i < palette_count; i += 1u) {
-        cuts[i] = i - 1u;
-    }
-
-    loop {
-        var weights = array<f32, 16>();
-
-        for (var i = 0u; i < sample_count; i += 1u) {
-            var cluster = 0u;
-            for (var c = 1u; c < palette_count; c += 1u) {
-                if i > cuts[c] {
-                    cluster += 1u;
-                }
-            }
-            let t = f32(cluster) / f32(palette_count - 1u);
-            weights[order_idx[i]] = t;
-        }
-
-        let solved = solve_endpoints_vec2(weights, samples, sample_count);
-        if solved[0].x > 0.0 {
-            let c0 = snap_unorm_vec2(solved[1], bits);
-            let c1 = snap_unorm_vec2(solved[2], bits);
-
-            let palette = build_palette_vec2(c0, c1, bits, palette_count);
-
-            var total_error = 0.0;
-            var indices = array<u32, 16>();
-
-            for (var i = 0u; i < sample_count; i += 1u) {
-                let sample_index = order_idx[i];
-                let ie = index_error_vec2(samples[sample_index], palette, palette_count, error_mode);
-                indices[sample_index] = u32(ie.x);
-                total_error = total_error + ie.y;
-            }
-
-            if best_error > total_error {
-                best_error = total_error;
-                best0 = c0;
-                best1 = c1;
-                best_indices = indices;
-            }
-        }
-
-        var advanced = false;
-        var i = i32(palette_count) - 1;
-        loop {
-            if i <= 0 {
-                break;
-            }
-
-            let iu = u32(i);
-            let max_cut = sample_count - (palette_count - iu);
-            if cuts[iu] < max_cut {
-                cuts[iu] += 1u;
-
-                for (var j = iu + 1u; j < palette_count; j += 1u) {
-                    cuts[j] = cuts[j - 1u] + 1u;
-                }
-
-                advanced = true;
-                break;
-            }
-
-            i = i - 1;
-        }
-
-        if !advanced {
-            break;
-        }
-    }
-
-    out.endpoint0 = best0;
-    out.endpoint1 = best1;
-    out.indices = best_indices;
-    out.error = best_error;
-    return out;
-}
-
 fn cluster_fit_vec3(
     samples: array<vec3<f32>, 16>,
     sample_count: u32,
     palette_count: u32,
     bits: vec3<u32>,
     error_mode: u32,
+    iter_begin: u32,
+    iter_end: u32,
 ) -> ClusterFitVec3 {
     var out: ClusterFitVec3;
     out.endpoint0 = vec3<f32>(0.0);
@@ -950,22 +708,19 @@ fn cluster_fit_vec3(
             let sample_index = order_idx[i];
             let ie = index_error_vec3(samples[sample_index], palette, palette_count, error_mode);
             best_indices[sample_index] = u32(ie.x);
-            best_error = best_error + ie.y;
+            best_error += ie.y;
         }
     }
 
-    var cuts: array<u32, 8>;
-    for (var i = 1u; i < palette_count; i += 1u) {
-        cuts[i] = i - 1u;
-    }
+    var iter_state = binom_iter_init_at(sample_count - 1u, palette_count - 1u, iter_begin);
 
-    loop {
+    for (var iter = iter_begin; iter < iter_end; iter += 1u) {
         var weights = array<f32, 16>();
 
         for (var i = 0u; i < sample_count; i += 1u) {
             var cluster = 0u;
-            for (var c = 1u; c < palette_count; c += 1u) {
-                if i > cuts[c] {
+            for (var c = 0u; c < palette_count - 1u; c += 1u) {
+                if i > iter_state.indices[c] {
                     cluster += 1u;
                 }
             }
@@ -998,162 +753,13 @@ fn cluster_fit_vec3(
             }
         }
 
-        var advanced = false;
-        var i = i32(palette_count) - 1;
-        loop {
-            if i <= 0 {
-                break;
-            }
-
-            let iu = u32(i);
-            let max_cut = sample_count - (palette_count - iu);
-            if cuts[iu] < max_cut {
-                cuts[iu] += 1u;
-
-                for (var j = iu + 1u; j < palette_count; j += 1u) {
-                    cuts[j] = cuts[j - 1u] + 1u;
-                }
-
-                advanced = true;
-                break;
-            }
-
-            i = i - 1;
-        }
-
-        if !advanced {
-            break;
-        }
+        binom_iter_next(&iter_state);
     }
 
     out.endpoint0 = best0;
     out.endpoint1 = best1;
     out.indices = best_indices;
     out.error = best_error;
-    return out;
-}
 
-fn cluster_fit_vec4(
-    samples: array<vec4<f32>, 16>,
-    sample_count: u32,
-    palette_count: u32,
-    bits: vec4<u32>,
-    error_mode: u32,
-) -> ClusterFitVec4 {
-    var out: ClusterFitVec4;
-    out.endpoint0 = vec4<f32>(0.0);
-    out.endpoint1 = vec4<f32>(0.0);
-    out.indices = array<u32, 16>();
-    out.error = 0.0;
-
-    if sample_count == 0u || palette_count < 2u || palette_count > CLUSTER_FIT_MAX_PALETTE || sample_count > CLUSTER_FIT_MAX_SAMPLES || sample_count < palette_count {
-        return out;
-    }
-
-    let axis = principal_axis_vec4(samples, sample_count);
-
-    var order_idx: array<u32, 16>;
-    var projections: array<f32, 16>;
-
-    for (var i = 0u; i < sample_count; i += 1u) {
-        order_idx[i] = i;
-        projections[i] = project_vec4(samples[i], axis);
-    }
-
-    sort_by_projection(&order_idx, &projections, sample_count);
-
-    let endpoints0 = fallback_endpoints_vec4(samples, sample_count);
-
-    var best0 = endpoints0[0];
-    var best1 = endpoints0[1];
-    var best_indices = array<u32, 16>();
-    var best_error = 0.0;
-
-    {
-        let palette = build_palette_vec4(best0, best1, bits, palette_count);
-        for (var i = 0u; i < sample_count; i += 1u) {
-            let sample_index = order_idx[i];
-            let ie = index_error_vec4(samples[sample_index], palette, palette_count, error_mode);
-            best_indices[sample_index] = u32(ie.x);
-            best_error = best_error + ie.y;
-        }
-    }
-
-    var cuts: array<u32, 8>;
-    for (var i = 1u; i < palette_count; i += 1u) {
-        cuts[i] = i - 1u;
-    }
-
-    loop {
-        var weights = array<f32, 16>();
-
-        for (var i = 0u; i < sample_count; i += 1u) {
-            var cluster = 0u;
-            for (var c = 1u; c < palette_count; c += 1u) {
-                if i > cuts[c] {
-                    cluster += 1u;
-                }
-            }
-            let t = f32(cluster) / f32(palette_count - 1u);
-            weights[order_idx[i]] = t;
-        }
-
-        let solved = solve_endpoints_vec4(weights, samples, sample_count);
-        if solved[0].x > 0.0 {
-            let c0 = snap_unorm_vec4(solved[1], bits);
-            let c1 = snap_unorm_vec4(solved[2], bits);
-
-            let palette = build_palette_vec4(c0, c1, bits, palette_count);
-
-            var total_error = 0.0;
-            var indices = array<u32, 16>();
-
-            for (var i = 0u; i < sample_count; i += 1u) {
-                let sample_index = order_idx[i];
-                let ie = index_error_vec4(samples[sample_index], palette, palette_count, error_mode);
-                indices[sample_index] = u32(ie.x);
-                total_error = total_error + ie.y;
-            }
-
-            if best_error > total_error {
-                best_error = total_error;
-                best0 = c0;
-                best1 = c1;
-                best_indices = indices;
-            }
-        }
-
-        var advanced = false;
-        var i = i32(palette_count) - 1;
-        loop {
-            if i <= 0 {
-                break;
-            }
-
-            let iu = u32(i);
-            let max_cut = sample_count - (palette_count - iu);
-            if cuts[iu] < max_cut {
-                cuts[iu] += 1u;
-
-                for (var j = iu + 1u; j < palette_count; j += 1u) {
-                    cuts[j] = cuts[j - 1u] + 1u;
-                }
-
-                advanced = true;
-                break;
-            }
-
-            i = i - 1;
-        }
-
-        if !advanced {
-            break;
-        }
-    }
-
-    out.endpoint0 = best0;
-    out.endpoint1 = best1;
-    out.indices = best_indices;
-    out.error = best_error;
     return out;
 }

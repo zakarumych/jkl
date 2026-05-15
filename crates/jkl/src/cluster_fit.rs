@@ -81,7 +81,30 @@ where
     T: Sample,
 {
     #![allow(clippy::needless_range_loop)]
+
+    assert_ne!(samples.len(), 0);
     assert!(samples.len() <= N);
+
+    if samples.len() == 1 {
+        let endpoint = snap(samples[0]);
+
+        return ClusterFit {
+            endpoints: (endpoint, endpoint),
+            indices: [0; N],
+            error: error(endpoint, samples[0]),
+        };
+    }
+
+    if samples.len() == 2 {
+        let c0 = snap(samples[0]);
+        let c1 = snap(samples[1]);
+
+        return ClusterFit {
+            endpoints: (c0, c1),
+            indices: [0; N],
+            error: error(c0, samples[0]) + error(c1, samples[1]),
+        };
+    }
 
     let axis = T::principal_axis(samples);
 
@@ -93,7 +116,7 @@ where
     }
 
     order[..samples.len()].sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
-    let order = order;
+    let order = order.map(|(i, _)| i);
 
     let mut best_endpoints = T::fallback_endpoints(samples.iter().copied());
     let mut best_indices = [0; N];
@@ -103,18 +126,18 @@ where
         let palette = build_palette::<T, I>(best_endpoints.0, best_endpoints.1, snap);
 
         for i in 0..samples.len() {
-            let (idx, e) = index_error(samples[order[i].0], &palette, error);
-            best_indices[order[i].0] = idx;
+            let (idx, e) = index_error(samples[order[i]], &palette, error);
+            best_indices[order[i]] = idx;
             best_error += e;
         }
     }
 
     let mut cuts = [0; I]; // 0th index is unused.
     for i in 1..I {
-        cuts[i] = i - 1;
+        cuts[i] = 0;
     }
 
-    'a: loop {
+    'a: for _ in 0..64 {
         // Loop body
 
         let mut weights = [0.0f32; N];
@@ -122,7 +145,7 @@ where
         for i in 0..samples.len() {
             let idx: usize = cuts[1..].iter().map(|&c| if i > c { 1 } else { 0 }).sum();
             let t = (idx as f32) / ((I - 1) as f32);
-            weights[order[i].0] = t;
+            weights[order[i]] = t;
         }
 
         if let Some((c0, c1)) = solve_endpoints(weights, samples) {
@@ -135,8 +158,8 @@ where
             let mut indices = [0; N];
 
             for i in 0..samples.len() {
-                let (idx, e) = index_error(samples[order[i].0], &palette, error);
-                indices[order[i].0] = idx;
+                let (idx, e) = index_error(samples[order[i]], &palette, error);
+                indices[order[i]] = idx;
                 total_error += e;
             }
 
@@ -149,12 +172,12 @@ where
 
         // Loop increment
         for i in (1..I).rev() {
-            let max = samples.len() - (I - i);
+            let max = samples.len() - 2;
             if cuts[i] < max {
                 cuts[i] += 1;
 
                 for j in i + 1..I {
-                    cuts[j] = cuts[j - 1] + 1;
+                    cuts[j] = cuts[i];
                 }
 
                 continue 'a;
