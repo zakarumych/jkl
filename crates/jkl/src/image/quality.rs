@@ -14,7 +14,7 @@
 //! ```
 
 use crate::image::{Image2DRef, ImageRef, OwnedImage};
-use crate::math::{R8U, R32F, Rg8U, Rgb8U, Rgba8U, Yiq32F, Yiqa32F};
+use crate::math::{R8U, R32F, Rg8U, Rg32F, Rgb8U, Rgb32F, Rgba8U, Rgba32F, Yiq32F, Yiqa32F};
 
 // ── Trait ──────────────────────────────────────────────────────────────────
 
@@ -23,6 +23,16 @@ use crate::math::{R8U, R32F, Rg8U, Rgb8U, Rgba8U, Yiq32F, Yiqa32F};
 /// `error_squared`, `error_range`, and `sobel_gm` must all be provided.
 /// `error` has a default implementation as `sqrt(error_squared(a, b))`.
 pub trait ErrorPixel: Copy {
+    /// The pixel type used to represent per-channel absolute error.
+    type ChannelError: Copy;
+
+    /// Per-channel absolute error between two pixels.
+    ///
+    /// For integer types channels are normalised to `[0, 1]`.  Unlike
+    /// [`error_squared`](Self::error_squared), channels are not combined
+    /// into a single scalar or alpha-premultiplied.
+    fn error_channels(a: Self, b: Self) -> Self::ChannelError;
+
     /// Squared error between two pixels in channel space.
     ///
     /// For types with an alpha channel, computes premultiplied color error.
@@ -61,6 +71,11 @@ pub trait ErrorPixelAlpha: ErrorPixel {
 }
 
 impl ErrorPixel for R8U {
+    type ChannelError = R32F;
+    #[inline]
+    fn error_channels(a: Self, b: Self) -> R32F {
+        R32F((a.0 as f32 - b.0 as f32).abs() / 255.0)
+    }
     #[inline]
     fn error_squared(a: Self, b: Self) -> f32 {
         R8U::distance_squared(a, b) / (255.0 * 255.0)
@@ -80,6 +95,14 @@ impl ErrorPixel for R8U {
 }
 
 impl ErrorPixel for Rg8U {
+    type ChannelError = Rg32F;
+    #[inline]
+    fn error_channels(a: Self, b: Self) -> Rg32F {
+        Rg32F([
+            (a.0[0] as f32 - b.0[0] as f32).abs() / 255.0,
+            (a.0[1] as f32 - b.0[1] as f32).abs() / 255.0,
+        ])
+    }
     #[inline]
     fn error_squared(a: Self, b: Self) -> f32 {
         Rg8U::distance_squared(a, b) / (255.0 * 255.0)
@@ -101,6 +124,15 @@ impl ErrorPixel for Rg8U {
 }
 
 impl ErrorPixel for Rgb8U {
+    type ChannelError = Rgb32F;
+    #[inline]
+    fn error_channels(a: Self, b: Self) -> Rgb32F {
+        Rgb32F([
+            (a.0[0] as f32 - b.0[0] as f32).abs() / 255.0,
+            (a.0[1] as f32 - b.0[1] as f32).abs() / 255.0,
+            (a.0[2] as f32 - b.0[2] as f32).abs() / 255.0,
+        ])
+    }
     #[inline]
     fn error_squared(a: Self, b: Self) -> f32 {
         Rgb8U::distance_squared(a, b) / (255.0 * 255.0)
@@ -123,6 +155,16 @@ impl ErrorPixel for Rgb8U {
 }
 
 impl ErrorPixel for Rgba8U {
+    type ChannelError = Rgba32F;
+    #[inline]
+    fn error_channels(a: Self, b: Self) -> Rgba32F {
+        Rgba32F([
+            (a.0[0] as f32 - b.0[0] as f32).abs() / 255.0,
+            (a.0[1] as f32 - b.0[1] as f32).abs() / 255.0,
+            (a.0[2] as f32 - b.0[2] as f32).abs() / 255.0,
+            (a.0[3] as f32 - b.0[3] as f32).abs() / 255.0,
+        ])
+    }
     #[inline]
     fn error_squared(a: Self, b: Self) -> f32 {
         // Alpha-premultiplied: transparent pixels contribute no color error.
@@ -159,6 +201,15 @@ impl ErrorPixelAlpha for Rgba8U {
 }
 
 impl ErrorPixel for Yiq32F {
+    type ChannelError = Yiq32F;
+    #[inline]
+    fn error_channels(a: Self, b: Self) -> Yiq32F {
+        Yiq32F([
+            (a.0[0] - b.0[0]).abs(),
+            (a.0[1] - b.0[1]).abs(),
+            (a.0[2] - b.0[2]).abs(),
+        ])
+    }
     #[inline]
     fn error_squared(a: Self, b: Self) -> f32 {
         Yiq32F::distance_squared(a, b)
@@ -181,6 +232,16 @@ impl ErrorPixel for Yiq32F {
 }
 
 impl ErrorPixel for Yiqa32F {
+    type ChannelError = Yiqa32F;
+    #[inline]
+    fn error_channels(a: Self, b: Self) -> Yiqa32F {
+        Yiqa32F([
+            (a.0[0] - b.0[0]).abs(),
+            (a.0[1] - b.0[1]).abs(),
+            (a.0[2] - b.0[2]).abs(),
+            (a.0[3] - b.0[3]).abs(),
+        ])
+    }
     #[inline]
     fn error_squared(a: Self, b: Self) -> f32 {
         // Alpha-premultiplied color error.
@@ -212,6 +273,11 @@ impl ErrorPixelAlpha for Yiqa32F {
 }
 
 impl ErrorPixel for R32F {
+    type ChannelError = R32F;
+    #[inline]
+    fn error_channels(a: Self, b: Self) -> R32F {
+        R32F((a.0 - b.0).abs())
+    }
     #[inline]
     fn error_squared(a: Self, b: Self) -> f32 {
         R32F::distance_squared(a, b)
@@ -275,7 +341,7 @@ fn sobel_gm_sq_ch<P: Copy>(
     let p = |dx: i32, dy: i32| -> f32 {
         let nx = (xi + dx).max(0).min(w - 1) as usize;
         let ny = (yi + dy).max(0).min(h - 1) as usize;
-        ch(*plane.get(nx, ny))
+        ch(*plane.get_pixel(nx, ny))
     };
     let gx = -p(-1, -1) + p(1, -1) - 2.0 * p(-1, 0) + 2.0 * p(1, 0) - p(-1, 1) + p(1, 1);
     let gy = -p(-1, -1) - 2.0 * p(0, -1) - p(1, -1) + p(-1, 1) + 2.0 * p(0, 1) + p(1, 1);
@@ -376,6 +442,30 @@ pub fn error_histogram<T: ErrorPixel>(
         bin_width: max_err as f64 / bins as f64,
         bins: counts,
     }
+}
+
+/// Spatial map of per-channel per-pixel errors as an [`OwnedImage<T::ChannelError>`].
+///
+/// Each pixel in the returned image holds the absolute per-channel difference
+/// between the corresponding input pixels.  For integer types channels are
+/// normalised to `[0, 1]`; for float types the raw absolute difference is
+/// returned.  Unlike [`error_heatmap`], channels are **not** combined into a
+/// single scalar or alpha-premultiplied.
+///
+/// # Panics
+///
+/// Panics if the images have different extents or dimensionality.
+pub fn error_map<T: ErrorPixel>(
+    a: ImageRef<'_, T>,
+    b: ImageRef<'_, T>,
+) -> OwnedImage<T::ChannelError> {
+    assert_same_extent(&a, &b);
+    let pixels: Box<[T::ChannelError]> = a
+        .iter_pixels()
+        .zip(b.iter_pixels())
+        .map(|(pa, pb)| T::error_channels(*pa, *pb))
+        .collect();
+    OwnedImage::new(a.dimensions(), a.raw_extent(), pixels)
 }
 
 /// Spatial map of per-pixel errors as an [`OwnedImage<f32>`].

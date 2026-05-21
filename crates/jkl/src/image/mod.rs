@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use crate::image::convert::IntoFormat;
+
 pub mod block;
 pub mod compress;
+pub mod convert;
 pub mod filter;
 pub mod format;
 pub mod quality;
@@ -212,6 +215,650 @@ impl<T> PixelBuffer for Box<[T]> {
     }
 }
 
+pub struct Image1D<P> {
+    /// The width of the image view in pixels.
+    width: usize,
+    /// The underlying pixel data. Length must be at least `width`.
+    pixels: P,
+}
+
+/// An immutable, non-owning 1D view into a pixel buffer.
+///
+/// `Image1DRef` borrows a flat slice of pixel data and interprets it as a 1D image
+/// with the given `width`. It is `Copy` and `Clone`, making it cheap to pass around.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type Image1DRef<'a, T> = Image1D<&'a [T]>;
+
+/// An immutable, shared 1D pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type SharedImage1D<T> = Image1D<Arc<[T]>>;
+
+/// A mutable, non-owning 1D view into a pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type Image1DMut<'a, T> = Image1D<&'a mut [T]>;
+
+/// A mutable, owning 1D pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type OwnedImage1D<T> = Image1D<Box<[T]>>;
+
+impl<P> Copy for Image1D<P> where P: Copy {}
+impl<P> Clone for Image1D<P>
+where
+    P: Clone,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Image1D {
+            width: self.width,
+            pixels: self.pixels.clone(),
+        }
+    }
+}
+
+impl<P> Image1D<P> {
+    /// Creates a new `Image1D` with the given width.
+    ///
+    /// # Parameters
+    ///
+    /// * `width` - The width of the image in pixels.
+    /// * `pixels` - The underlying pixel data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pixels.len() < width`.
+    pub fn new(width: usize, pixels: P) -> Self {
+        Image1D { width, pixels }
+    }
+
+    /// Creates a new `Image1D` whose width equals the buffer length.
+    pub fn from_pixels(pixels: P) -> Self
+    where
+        P: PixelBuffer,
+    {
+        Image1D {
+            width: pixels.len(),
+            pixels,
+        }
+    }
+
+    /// Returns the width of this image in pixels.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Returns a reference to the underlying pixel buffer.
+    pub fn data(&self) -> &P {
+        &self.pixels
+    }
+
+    /// Returns a mutable reference to the underlying pixel buffer.
+    pub fn data_mut(&mut self) -> &mut P {
+        &mut self.pixels
+    }
+
+    /// Converts this 1D image into a 2D image with height 1.
+    pub fn into_2d(self) -> Image2D<P> {
+        Image2D {
+            width: self.width,
+            height: 1,
+            stride: self.width,
+            pixels: self.pixels,
+        }
+    }
+
+    /// Converts this 1D image into a 3D image with height 1 and depth 1.
+    pub fn into_3d(self) -> Image3D<P> {
+        Image3D {
+            width: self.width,
+            height: 1,
+            depth: 1,
+            row_stride: self.width,
+            plane_stride: self.width,
+            pixels: self.pixels,
+        }
+    }
+
+    /// Converts this 1D image into a 1D array image with 1 layer.
+    pub fn into_array(self) -> Image1DArray<P> {
+        Image1DArray {
+            width: self.width,
+            layers: 1,
+            stride: self.width,
+            pixels: self.pixels,
+        }
+    }
+}
+
+impl<T, P> Image1D<P>
+where
+    P: PixelBuffer<Pixel = T> + AsRef<[T]>,
+{
+    /// Returns an immutable view of this image.
+    pub fn as_ref(&self) -> Image1DRef<'_, T> {
+        Image1D {
+            width: self.width,
+            pixels: self.pixels.as_ref(),
+        }
+    }
+}
+
+impl<T, P> Image1D<P>
+where
+    P: PixelBuffer<Pixel = T> + AsMut<[T]>,
+{
+    /// Returns a mutable view of this image with a reborrowed lifetime.
+    pub fn as_mut(&mut self) -> Image1DMut<'_, T> {
+        Image1D {
+            width: self.width,
+            pixels: self.pixels.as_mut(),
+        }
+    }
+}
+
+impl<'a, T> Image1DRef<'a, T> {
+    /// Returns a reference to the pixel at coordinate `x`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `x >= width`.
+    pub fn get_pixel(&self, x: usize) -> &'a T {
+        assert!(x < self.width);
+        &self.pixels[x]
+    }
+
+    /// Returns a sub-region of this image as a new `Image1DRef`.
+    ///
+    /// The returned view starts at `x` and has width `w`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sub-region extends beyond the image bounds.
+    pub fn get_range(&self, x: usize, w: usize) -> Image1DRef<'a, T> {
+        assert!(x + w <= self.width);
+        Image1D {
+            width: w,
+            pixels: &self.pixels[x..],
+        }
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn pixels(&self) -> &'a [T] {
+        self.pixels
+    }
+
+    /// Returns an iterator over all pixels in this image.
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> + use<'a, T> {
+        self.pixels[..self.width].iter()
+    }
+}
+
+impl<'a, T> Image1DMut<'a, T> {
+    /// Returns a reference to the pixel at coordinate `x`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `x >= width`.
+    pub fn get_pixel(&self, x: usize) -> &T {
+        assert!(x < self.width);
+        &self.pixels[x]
+    }
+
+    /// Returns a mutable reference to the pixel at coordinate `x`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `x >= width`.
+    pub fn get_pixel_mut(&mut self, x: usize) -> &mut T {
+        assert!(x < self.width);
+        &mut self.pixels[x]
+    }
+
+    /// Sets the pixel at coordinate `x` to `value`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `x >= width`.
+    pub fn set(&mut self, x: usize, value: T) {
+        assert!(x < self.width);
+        self.pixels[x] = value;
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn pixels(&self) -> &[T] {
+        self.pixels
+    }
+
+    /// Returns the raw underlying pixel slice mutably.
+    pub fn pixels_mut(&mut self) -> &mut [T] {
+        self.pixels
+    }
+
+    /// Returns an immutable sub-region of this image as a new `Image1DRef`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sub-region extends beyond the image bounds.
+    pub fn get_range(&self, x: usize, w: usize) -> Image1DRef<'_, T> {
+        assert!(x + w <= self.width);
+        Image1D {
+            width: w,
+            pixels: &self.pixels[x..],
+        }
+    }
+
+    /// Returns a mutable sub-region of this image as a new `Image1DMut`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sub-region extends beyond the image bounds.
+    pub fn get_range_mut(&mut self, x: usize, w: usize) -> Image1DMut<'_, T> {
+        assert!(x + w <= self.width);
+        Image1D {
+            width: w,
+            pixels: &mut self.pixels[x..],
+        }
+    }
+
+    /// Returns an iterator over all pixels in this image.
+    pub fn iter_pixels(&self) -> impl Iterator<Item = &T> + use<'_, T> {
+        self.pixels[..self.width].iter()
+    }
+
+    /// Returns a mutable iterator over all pixels in this image.
+    pub fn iter_pixels_mut(&mut self) -> impl Iterator<Item = &mut T> + use<'_, T> {
+        self.pixels[..self.width].iter_mut()
+    }
+
+    /// Returns a consuming iterator over all pixels in this image.
+    pub fn into_iter_pixels(self) -> impl Iterator<Item = &'a mut T> + use<'a, T> {
+        let Self { width, pixels } = self;
+        pixels[..width].iter_mut()
+    }
+
+    /// Copies pixel data from `src` into this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `src` and `self` have different widths.
+    pub fn copy_from(&mut self, src: Image1DRef<'_, T>)
+    where
+        T: Copy,
+    {
+        assert_eq!(src.width, self.width);
+        self.pixels[..self.width].copy_from_slice(&src.pixels[..src.width]);
+    }
+}
+
+pub struct Image1DArray<P> {
+    /// The width of each layer in pixels.
+    width: usize,
+    /// The number of layers.
+    layers: usize,
+    /// The number of `T` elements between the start of consecutive layers.
+    stride: usize,
+    /// The underlying pixel data. Length must be at least `(layers - 1) * stride + width`.
+    pixels: P,
+}
+
+/// An immutable, non-owning view into a 1D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type Image1DArrayRef<'a, T> = Image1DArray<&'a [T]>;
+
+/// An immutable, shared 1D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type SharedImage1DArray<T> = Image1DArray<Arc<[T]>>;
+
+/// A mutable, non-owning view into a 1D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type Image1DArrayMut<'a, T> = Image1DArray<&'a mut [T]>;
+
+/// A mutable, owning 1D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type OwnedImage1DArray<T> = Image1DArray<Box<[T]>>;
+
+impl<P> Copy for Image1DArray<P> where P: Copy {}
+impl<P> Clone for Image1DArray<P>
+where
+    P: Clone,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Image1DArray {
+            width: self.width,
+            layers: self.layers,
+            stride: self.stride,
+            pixels: self.pixels.clone(),
+        }
+    }
+}
+
+impl<P> Image1DArray<P> {
+    /// Creates a new `Image1DArray` with contiguous layer storage (stride equals width).
+    pub fn new(width: usize, layers: usize, pixels: P) -> Self {
+        Image1DArray {
+            width,
+            layers,
+            stride: width,
+            pixels,
+        }
+    }
+
+    /// Creates a new `Image1DArray` with a custom layer stride.
+    pub fn with_stride(width: usize, layers: usize, stride: usize, pixels: P) -> Self {
+        Image1DArray {
+            width,
+            layers,
+            stride,
+            pixels,
+        }
+    }
+
+    /// Returns the width of each layer in pixels.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Returns the number of layers.
+    pub fn layers(&self) -> usize {
+        self.layers
+    }
+
+    /// Returns the stride (number of `T` elements between the start of consecutive layers).
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
+
+    /// Returns a reference to the underlying pixel buffer.
+    pub fn data(&self) -> &P {
+        &self.pixels
+    }
+
+    /// Returns a mutable reference to the underlying pixel buffer.
+    pub fn data_mut(&mut self) -> &mut P {
+        &mut self.pixels
+    }
+}
+
+impl<T, P> Image1DArray<P>
+where
+    P: PixelBuffer<Pixel = T> + AsRef<[T]>,
+{
+    /// Returns an immutable view of this image.
+    pub fn as_ref(&self) -> Image1DArrayRef<'_, T> {
+        Image1DArray {
+            width: self.width,
+            layers: self.layers,
+            stride: self.stride,
+            pixels: self.pixels.as_ref(),
+        }
+    }
+}
+
+impl<T, P> Image1DArray<P>
+where
+    P: PixelBuffer<Pixel = T> + AsMut<[T]>,
+{
+    /// Returns a mutable view of this image with a reborrowed lifetime.
+    pub fn as_mut(&mut self) -> Image1DArrayMut<'_, T> {
+        Image1DArray {
+            width: self.width,
+            layers: self.layers,
+            stride: self.stride,
+            pixels: self.pixels.as_mut(),
+        }
+    }
+}
+
+impl<'a, T> Image1DArrayRef<'a, T> {
+    /// Returns an immutable view of the layer at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `layer >= self.layers`.
+    pub fn get_layer(&self, layer: usize) -> Image1DRef<'a, T> {
+        assert!(layer < self.layers);
+        Image1D {
+            width: self.width,
+            pixels: &self.pixels[layer * self.stride..],
+        }
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn pixels(&self) -> &'a [T] {
+        self.pixels
+    }
+
+    /// Returns an iterator over all layers in this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn iter_layers(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'a, T>> + use<'a, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            pixels,
+        } = *self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks(stride)
+            .map(move |chunk| Image1D {
+                width,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns an iterator over all pixels in this image in layer-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> + use<'a, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            pixels,
+        } = *self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks(stride)
+            .flat_map(move |chunk| &chunk[..width])
+    }
+}
+
+impl<'a, T> Image1DArrayMut<'a, T> {
+    /// Returns an immutable view of the layer at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `layer >= self.layers`.
+    pub fn get_layer(&self, layer: usize) -> Image1DRef<'_, T> {
+        assert!(layer < self.layers);
+        Image1D {
+            width: self.width,
+            pixels: &self.pixels[layer * self.stride..],
+        }
+    }
+
+    /// Returns a mutable view of the layer at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `layer >= self.layers`.
+    pub fn get_layer_mut(&mut self, layer: usize) -> Image1DMut<'_, T> {
+        assert!(layer < self.layers);
+        Image1D {
+            width: self.width,
+            pixels: &mut self.pixels[layer * self.stride..],
+        }
+    }
+
+    /// Returns the raw underlying pixel slice.
+    pub fn pixels(&self) -> &[T] {
+        self.pixels
+    }
+
+    /// Returns the raw underlying pixel slice mutably.
+    pub fn pixels_mut(&mut self) -> &mut [T] {
+        self.pixels
+    }
+
+    /// Returns an iterator over all layers in this image as immutable views.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn iter_layers(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'_, T>> + use<'_, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            ref pixels,
+        } = *self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks(stride)
+            .map(move |chunk| Image1D {
+                width,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns a mutable iterator over all layers in this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn iter_layers_mut(
+        &mut self,
+    ) -> impl DoubleEndedIterator<Item = Image1DMut<'_, T>> + use<'_, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            ref mut pixels,
+        } = *self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks_mut(stride)
+            .map(move |chunk| Image1D {
+                width,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns a consuming iterator over all layers in this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn into_iter_layers(
+        self,
+    ) -> impl DoubleEndedIterator<Item = Image1DMut<'a, T>> + use<'a, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            pixels,
+        } = self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks_mut(stride)
+            .map(move |chunk| Image1D {
+                width,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns an iterator over all pixels in this image in layer-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &T> + use<'_, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            ref pixels,
+        } = *self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks(stride)
+            .flat_map(move |chunk| &chunk[..width])
+    }
+
+    /// Returns a mutable iterator over all pixels in this image in layer-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn iter_pixels_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> + use<'_, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            ref mut pixels,
+        } = *self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks_mut(stride)
+            .flat_map(move |chunk| &mut chunk[..width])
+    }
+
+    /// Returns a consuming iterator over all pixels in this image in layer-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.stride` is zero.
+    pub fn into_iter_pixels(self) -> impl DoubleEndedIterator<Item = &'a mut T> + use<'a, T> {
+        assert_ne!(self.stride, 0);
+        let Self {
+            width,
+            layers,
+            stride,
+            pixels,
+        } = self;
+        let total_len = len2([width, layers], stride);
+        pixels[..total_len]
+            .chunks_mut(stride)
+            .flat_map(move |chunk| &mut chunk[..width])
+    }
+}
+
 pub struct Image2D<P> {
     /// The width of the image view in pixels.
     width: usize,
@@ -351,6 +998,11 @@ impl<P> Image2D<P> {
         self.height
     }
 
+    /// Returns the row stride (number of `T` elements between the start of consecutive rows).
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
+
     /// Returns the raw underlying pixel slice.
     pub fn data(&self) -> &P {
         &self.pixels
@@ -359,6 +1011,30 @@ impl<P> Image2D<P> {
     /// Returns the raw underlying pixel slice.
     pub fn data_mut(&mut self) -> &mut P {
         &mut self.pixels
+    }
+
+    /// Converts this 2D image into a 3D image with depth 1.
+    pub fn into_3d(self) -> Image3D<P> {
+        Image3D {
+            width: self.width,
+            height: self.height,
+            depth: 1,
+            row_stride: self.stride,
+            plane_stride: self.stride * self.height,
+            pixels: self.pixels,
+        }
+    }
+
+    /// Converts this 2D image into a 2D array image with 1 layer.
+    pub fn into_array(self) -> Image2DArray<P> {
+        Image2DArray {
+            width: self.width,
+            height: self.height,
+            layers: 1,
+            row_stride: self.stride,
+            layer_stride: self.stride * self.height,
+            pixels: self.pixels,
+        }
     }
 }
 
@@ -398,7 +1074,7 @@ impl<'a, T> Image2DRef<'a, T> {
     /// # Panics
     ///
     /// Panics if the computed index `y * stride + x` is out of bounds.
-    pub fn get(&self, x: usize, y: usize) -> &'a T {
+    pub fn get_pixel(&self, x: usize, y: usize) -> &'a T {
         assert!(x < self.width);
         assert!(y < self.height);
 
@@ -406,9 +1082,12 @@ impl<'a, T> Image2DRef<'a, T> {
     }
 
     /// Returns a reference to the row at vertical coordinate `y`.
-    pub fn row(&self, y: usize) -> &'a [T] {
+    pub fn get_row(&self, y: usize) -> Image1DRef<'a, T> {
         assert!(y < self.height);
-        &self.pixels[y * self.stride..][..self.width]
+        Image1D {
+            width: self.width,
+            pixels: &self.pixels[y * self.stride..],
+        }
     }
 
     /// Returns a sub-region of this image as a new `Image2DRef`.
@@ -448,7 +1127,8 @@ impl<'a, T> Image2DRef<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> + use<'a, T> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'a, T>> + use<'a, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -461,11 +1141,12 @@ impl<'a, T> Image2DRef<'a, T> {
 
         pixels[..plane_len]
             .chunks(stride)
-            .map(move |row| &row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
     pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> + use<'a, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -496,7 +1177,7 @@ impl<'a, T> Image2DRef<'a, T> {
         let mut colors = [[self.pixels[0]; W]; H];
 
         for (y, row) in colors.iter_mut().enumerate() {
-            row.copy_from_slice(self.row(y));
+            row.copy_from_slice(&self.get_row(y).pixels()[..W]);
         }
 
         colors
@@ -509,7 +1190,7 @@ impl<'a, T> Image2DMut<'a, T> {
     /// # Panics
     ///
     /// Panics if the computed index `y * stride + x` is out of bounds.
-    pub fn get(&self, x: usize, y: usize) -> &T {
+    pub fn get_pixel(&self, x: usize, y: usize) -> &T {
         assert!(x < self.width);
         assert!(y < self.height);
 
@@ -517,9 +1198,12 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns a reference to the row at vertical coordinate `y`.
-    pub fn row(&self, y: usize) -> &'_ [T] {
+    pub fn get_row(&self, y: usize) -> Image1DRef<'_, T> {
         assert!(y < self.height);
-        &self.pixels[y * self.stride..][..self.width]
+        Image1D {
+            width: self.width,
+            pixels: &self.pixels[y * self.stride..],
+        }
     }
 
     /// Returns a reference to the pixel at coordinates (`x`, `y`).
@@ -527,7 +1211,7 @@ impl<'a, T> Image2DMut<'a, T> {
     /// # Panics
     ///
     /// Panics if the computed index `y * stride + x` is out of bounds.
-    pub fn get_mut(&mut self, x: usize, y: usize) -> &mut T {
+    pub fn get_pixel_mut(&mut self, x: usize, y: usize) -> &mut T {
         assert!(x < self.width);
         assert!(y < self.height);
 
@@ -535,10 +1219,13 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns a reference to the row at vertical coordinate `y`.
-    pub fn row_mut(&mut self, y: usize) -> &'_ mut [T] {
+    pub fn get_row_mut(&mut self, y: usize) -> Image1DMut<'_, T> {
         assert!(y < self.height);
 
-        &mut self.pixels[y * self.stride..][..self.width]
+        Image1D {
+            width: self.width,
+            pixels: &mut self.pixels[y * self.stride..],
+        }
     }
 
     /// Sets the pixel at coordinates (`x`, `y`) to `value`.
@@ -564,7 +1251,8 @@ impl<'a, T> Image2DMut<'a, T> {
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_rows(&self) -> impl Iterator<Item = &'_ [T]> + use<'_, T> {
+    pub fn iter_rows(&self) -> impl Iterator<Item = Image1DRef<'_, T>> + use<'_, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -577,11 +1265,12 @@ impl<'a, T> Image2DMut<'a, T> {
 
         pixels[..plane_len]
             .chunks(stride)
-            .map(move |row| &row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn iter_rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> + use<'_, T> {
+    pub fn iter_rows_mut(&mut self) -> impl Iterator<Item = Image1DMut<'_, T>> + use<'_, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -594,11 +1283,12 @@ impl<'a, T> Image2DMut<'a, T> {
 
         pixels[..plane_len]
             .chunks_mut(stride)
-            .map(move |row| &mut row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
-    pub fn into_iter_rows(self) -> impl Iterator<Item = &'a mut [T]> + use<'a, T> {
+    pub fn into_iter_rows(self) -> impl Iterator<Item = Image1DMut<'a, T>> + use<'a, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -611,11 +1301,12 @@ impl<'a, T> Image2DMut<'a, T> {
 
         pixels[..plane_len]
             .chunks_mut(stride)
-            .map(move |row| &mut row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
     pub fn iter_pixels(&self) -> impl Iterator<Item = &T> + use<'_, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -633,6 +1324,7 @@ impl<'a, T> Image2DMut<'a, T> {
 
     /// Returns an iterator over all pixels in this image in row-major order.
     pub fn iter_pixels_mut(&mut self) -> impl Iterator<Item = &'_ mut T> + use<'_, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -650,6 +1342,7 @@ impl<'a, T> Image2DMut<'a, T> {
 
     /// Returns an iterator over all pixels in this image in row-major order.
     pub fn into_iter_pixels(self) -> impl Iterator<Item = &'a mut T> + use<'a, T> {
+        assert_ne!(self.stride, 0);
         let Self {
             width,
             height,
@@ -740,7 +1433,7 @@ impl<'a, T> Image2DMut<'a, T> {
         assert_eq!(src.height, self.height);
 
         for j in 0..src.height {
-            self.row_mut(j).copy_from_slice(src.row(j));
+            self.get_row_mut(j).copy_from(src.get_row(j));
         }
     }
 
@@ -757,8 +1450,522 @@ impl<'a, T> Image2DMut<'a, T> {
         assert_eq!(self.height, H);
 
         for (y, row) in matrix.iter().enumerate() {
-            self.row_mut(y).copy_from_slice(row);
+            self.get_row_mut(y).pixels_mut()[..W].copy_from_slice(row);
         }
+    }
+}
+
+pub struct Image2DArray<P> {
+    /// The width of each layer in pixels.
+    width: usize,
+    /// The height of each layer in pixels.
+    height: usize,
+    /// The number of layers.
+    layers: usize,
+    /// The number of `T` elements between the start of consecutive rows.
+    row_stride: usize,
+    /// The number of `T` elements between the start of consecutive layers.
+    layer_stride: usize,
+    /// The underlying pixel data. Length must be at least `(layers - 1) * layer_stride + (height - 1) * row_stride + width`.
+    pixels: P,
+}
+
+/// An immutable, non-owning view into a 2D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type Image2DArrayRef<'a, T> = Image2DArray<&'a [T]>;
+
+/// An immutable, shared 2D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type SharedImage2DArray<T> = Image2DArray<Arc<[T]>>;
+
+/// A mutable, non-owning view into a 2D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type Image2DArrayMut<'a, T> = Image2DArray<&'a mut [T]>;
+
+/// A mutable, owning 2D array pixel buffer.
+///
+/// # Type Parameters
+///
+/// * `T` - The pixel type. Must be `Copy` for most operations.
+pub type OwnedImage2DArray<T> = Image2DArray<Box<[T]>>;
+
+impl<P> Copy for Image2DArray<P> where P: Copy {}
+impl<P> Clone for Image2DArray<P>
+where
+    P: Clone,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Image2DArray {
+            width: self.width,
+            height: self.height,
+            layers: self.layers,
+            row_stride: self.row_stride,
+            layer_stride: self.layer_stride,
+            pixels: self.pixels.clone(),
+        }
+    }
+}
+
+impl<P> Image2DArray<P> {
+    /// Creates a new `Image2DArray` with contiguous storage (row stride equals width, layer stride equals width * height).
+    pub fn new(width: usize, height: usize, layers: usize, pixels: P) -> Self {
+        Image2DArray {
+            width,
+            height,
+            layers,
+            row_stride: width,
+            layer_stride: width * height,
+            pixels,
+        }
+    }
+
+    /// Creates a new `Image2DArray` with custom strides.
+    pub fn with_stride(
+        width: usize,
+        height: usize,
+        layers: usize,
+        row_stride: usize,
+        layer_stride: usize,
+        pixels: P,
+    ) -> Self {
+        Image2DArray {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            pixels,
+        }
+    }
+
+    /// Returns the width of each layer in pixels.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Returns the height of each layer in pixels.
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    /// Returns the number of layers.
+    pub fn layers(&self) -> usize {
+        self.layers
+    }
+
+    /// Returns the row stride (number of `T` elements between the start of consecutive rows).
+    pub fn row_stride(&self) -> usize {
+        self.row_stride
+    }
+
+    /// Returns the layer stride (number of `T` elements between the start of consecutive layers).
+    pub fn layer_stride(&self) -> usize {
+        self.layer_stride
+    }
+
+    /// Returns a reference to the underlying pixel buffer.
+    pub fn data(&self) -> &P {
+        &self.pixels
+    }
+
+    /// Returns a mutable reference to the underlying pixel buffer.
+    pub fn data_mut(&mut self) -> &mut P {
+        &mut self.pixels
+    }
+}
+
+impl<T, P> Image2DArray<P>
+where
+    P: PixelBuffer<Pixel = T> + AsRef<[T]>,
+{
+    /// Returns an immutable view of this image.
+    pub fn as_ref(&self) -> Image2DArrayRef<'_, T> {
+        Image2DArray {
+            width: self.width,
+            height: self.height,
+            layers: self.layers,
+            row_stride: self.row_stride,
+            layer_stride: self.layer_stride,
+            pixels: self.pixels.as_ref(),
+        }
+    }
+}
+
+impl<T, P> Image2DArray<P>
+where
+    P: PixelBuffer<Pixel = T> + AsMut<[T]>,
+{
+    /// Returns a mutable view of this image with a reborrowed lifetime.
+    pub fn as_mut(&mut self) -> Image2DArrayMut<'_, T> {
+        Image2DArray {
+            width: self.width,
+            height: self.height,
+            layers: self.layers,
+            row_stride: self.row_stride,
+            layer_stride: self.layer_stride,
+            pixels: self.pixels.as_mut(),
+        }
+    }
+}
+
+impl<'a, T> Image2DArrayRef<'a, T> {
+    /// Returns an immutable view of the layer at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `layer >= self.layers`.
+    pub fn get_layer(&self, layer: usize) -> Image2DRef<'a, T> {
+        assert!(layer < self.layers);
+        Image2D {
+            width: self.width,
+            height: self.height,
+            stride: self.row_stride,
+            pixels: &self.pixels[layer * self.layer_stride..],
+        }
+    }
+
+    /// Returns an iterator over all layers in this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.layer_stride` is zero.
+    pub fn iter_layers(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'a, T>> + use<'a, T> {
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        pixels[..total_len]
+            .chunks(layer_stride)
+            .map(move |chunk| Image2D {
+                width,
+                height,
+                stride: row_stride,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns an iterator over all rows in this image in layer-then-row order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'a, T>> + use<'a, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks(row_stride))
+            .map(move |row| Image1D { width, pixels: row })
+    }
+
+    /// Returns an iterator over all pixels in this image in layer-then-row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> + use<'a, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks(row_stride))
+            .flat_map(move |row| &row[..width])
+    }
+}
+
+impl<'a, T> Image2DArrayMut<'a, T> {
+    /// Returns an immutable view of the layer at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `layer >= self.layers`.
+    pub fn get_layer(&self, layer: usize) -> Image2DRef<'_, T> {
+        assert!(layer < self.layers);
+        Image2D {
+            width: self.width,
+            height: self.height,
+            stride: self.row_stride,
+            pixels: &self.pixels[layer * self.layer_stride..],
+        }
+    }
+
+    /// Returns a mutable view of the layer at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `layer >= self.layers`.
+    pub fn get_layer_mut(&mut self, layer: usize) -> Image2DMut<'_, T> {
+        assert!(layer < self.layers);
+        Image2D {
+            width: self.width,
+            height: self.height,
+            stride: self.row_stride,
+            pixels: &mut self.pixels[layer * self.layer_stride..],
+        }
+    }
+
+    /// Returns an iterator over all layers in this image as immutable views.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.layer_stride` is zero.
+    pub fn iter_layers(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'_, T>> + use<'_, T> {
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            ref pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        pixels[..total_len]
+            .chunks(layer_stride)
+            .map(move |chunk| Image2D {
+                width,
+                height,
+                stride: row_stride,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns a mutable iterator over all layers in this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.layer_stride` is zero.
+    pub fn iter_layers_mut(
+        &mut self,
+    ) -> impl DoubleEndedIterator<Item = Image2DMut<'_, T>> + use<'_, T> {
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            ref mut pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        pixels[..total_len]
+            .chunks_mut(layer_stride)
+            .map(move |chunk| Image2D {
+                width,
+                height,
+                stride: row_stride,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns a consuming iterator over all layers in this image.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.layer_stride` is zero.
+    pub fn into_iter_layers(
+        self,
+    ) -> impl DoubleEndedIterator<Item = Image2DMut<'a, T>> + use<'a, T> {
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            pixels,
+        } = self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        pixels[..total_len]
+            .chunks_mut(layer_stride)
+            .map(move |chunk| Image2D {
+                width,
+                height,
+                stride: row_stride,
+                pixels: chunk,
+            })
+    }
+
+    /// Returns an iterator over all rows in this image in layer-then-row order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'_, T>> + use<'_, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            ref pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks(row_stride))
+            .map(move |row| Image1D { width, pixels: row })
+    }
+
+    /// Returns a mutable iterator over all rows in this image in layer-then-row order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn iter_rows_mut(
+        &mut self,
+    ) -> impl DoubleEndedIterator<Item = Image1DMut<'_, T>> + use<'_, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            ref mut pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks_mut(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks_mut(row_stride))
+            .map(move |row| Image1D { width, pixels: row })
+    }
+
+    /// Returns a consuming iterator over all rows in this image in layer-then-row order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = Image1DMut<'a, T>> + use<'a, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            pixels,
+        } = self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks_mut(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks_mut(row_stride))
+            .map(move |row| Image1D { width, pixels: row })
+    }
+
+    /// Returns an iterator over all pixels in this image in layer-then-row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &T> + use<'_, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            ref pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks(row_stride))
+            .flat_map(move |row| &row[..width])
+    }
+
+    /// Returns a mutable iterator over all pixels in this image in layer-then-row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn iter_pixels_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> + use<'_, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            ref mut pixels,
+        } = *self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks_mut(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks_mut(row_stride))
+            .flat_map(move |row| &mut row[..width])
+    }
+
+    /// Returns a consuming iterator over all pixels in this image in layer-then-row-major order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.row_stride` or `self.layer_stride` is zero.
+    pub fn into_iter_pixels(self) -> impl DoubleEndedIterator<Item = &'a mut T> + use<'a, T> {
+        assert_ne!(self.row_stride, 0);
+        assert_ne!(self.layer_stride, 0);
+        let Self {
+            width,
+            height,
+            layers,
+            row_stride,
+            layer_stride,
+            pixels,
+        } = self;
+        let total_len = len3([width, height, layers], [row_stride, layer_stride]);
+        let layer_len = len2([width, height], row_stride);
+        pixels[..total_len]
+            .chunks_mut(layer_stride)
+            .flat_map(move |layer| layer[..layer_len].chunks_mut(row_stride))
+            .flat_map(move |row| &mut row[..width])
     }
 }
 
@@ -939,6 +2146,16 @@ impl<P> Image3D<P> {
         self.depth
     }
 
+    /// Returns the row stride (number of `T` elements between the start of consecutive rows).
+    pub fn row_stride(&self) -> usize {
+        self.row_stride
+    }
+
+    /// Returns the plane stride (number of `T` elements between the start of consecutive planes).
+    pub fn plane_stride(&self) -> usize {
+        self.plane_stride
+    }
+
     /// Returns the raw underlying pixel slice.
     pub fn data(&self) -> &P {
         &self.pixels
@@ -990,7 +2207,7 @@ impl<'a, T> Image3DRef<'a, T> {
     /// # Panics
     ///
     /// Panics if the computed index `z * plane_stride + y * row_stride + x` is out of bounds.
-    pub fn get(&self, x: usize, y: usize, z: usize) -> &'a T {
+    pub fn get_pixel(&self, x: usize, y: usize, z: usize) -> &'a T {
         assert!(x < self.width);
         assert!(y < self.height);
         assert!(z < self.depth);
@@ -999,10 +2216,13 @@ impl<'a, T> Image3DRef<'a, T> {
     }
 
     /// Returns a reference to the entire row at coordinates (`y`, `z`).
-    pub fn row(&self, y: usize, z: usize) -> &'a [T] {
+    pub fn get_row(&self, y: usize, z: usize) -> Image1DRef<'a, T> {
         assert!(y < self.height);
         assert!(z < self.depth);
-        &self.pixels[z * self.plane_stride + y * self.row_stride..][..self.width]
+        Image1D {
+            width: self.width,
+            pixels: &self.pixels[z * self.plane_stride + y * self.row_stride..],
+        }
     }
 
     /// Returns a reference to the entire XY plane at coordinate `z`.
@@ -1131,6 +2351,7 @@ impl<'a, T> Image3DRef<'a, T> {
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'a, T>> + use<'a, T> {
+        assert_ne!(self.plane_stride, 0);
         let Self {
             width,
             height,
@@ -1162,7 +2383,9 @@ impl<'a, T> Image3DRef<'a, T> {
     ///
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> + use<'a, T> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'a, T>> + use<'a, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -1179,7 +2402,7 @@ impl<'a, T> Image3DRef<'a, T> {
         pixels[..volume_len]
             .chunks(plane_stride)
             .flat_map(move |plane| plane[..plane_len].chunks(row_stride))
-            .map(move |row| &row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
@@ -1192,6 +2415,8 @@ impl<'a, T> Image3DRef<'a, T> {
     /// In case you want to iterate over pixels in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> + use<'a, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -1218,7 +2443,7 @@ impl<'a, T> Image3DMut<'a, T> {
     /// # Panics
     ///
     /// Panics if the computed index `z * plane_stride + y * row_stride + x` is out of bounds.
-    pub fn get(&self, x: usize, y: usize, z: usize) -> &T {
+    pub fn get_pixel(&self, x: usize, y: usize, z: usize) -> &T {
         assert!(x < self.width);
         assert!(y < self.height);
         assert!(z < self.depth);
@@ -1231,7 +2456,7 @@ impl<'a, T> Image3DMut<'a, T> {
     /// # Panics
     ///
     /// Panics if the computed index `z * plane_stride + y * row_stride + x` is out of bounds.
-    pub fn get_mut(&mut self, x: usize, y: usize, z: usize) -> &mut T {
+    pub fn get_pixel_mut(&mut self, x: usize, y: usize, z: usize) -> &mut T {
         assert!(x < self.width);
         assert!(y < self.height);
         assert!(z < self.depth);
@@ -1253,17 +2478,23 @@ impl<'a, T> Image3DMut<'a, T> {
     }
 
     /// Returns an immutable reference to the entire row at coordinates (`y`, `z`).
-    pub fn row(&self, y: usize, z: usize) -> &[T] {
+    pub fn get_row(&self, y: usize, z: usize) -> Image1DRef<'_, T> {
         assert!(y < self.height);
         assert!(z < self.depth);
-        &self.pixels[z * self.plane_stride + y * self.row_stride..][..self.width]
+        Image1D {
+            width: self.width,
+            pixels: &self.pixels[z * self.plane_stride + y * self.row_stride..],
+        }
     }
 
     /// Returns a mutable reference to the entire row at coordinates (`y`, `z`).
-    pub fn row_mut(&mut self, y: usize, z: usize) -> &mut [T] {
+    pub fn get_row_mut(&mut self, y: usize, z: usize) -> Image1DMut<'_, T> {
         assert!(y < self.height);
         assert!(z < self.depth);
-        &mut self.pixels[z * self.plane_stride + y * self.row_stride..][..self.width]
+        Image1D {
+            width: self.width,
+            pixels: &mut self.pixels[z * self.plane_stride + y * self.row_stride..],
+        }
     }
 
     /// Returns an immutable reference to the entire XY plane at coordinate `z`.
@@ -1508,6 +2739,7 @@ impl<'a, T> Image3DMut<'a, T> {
     /// In case you want to iterate over planes in an image with arbitrary strides,
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'_, T>> + use<'_, T> {
+        assert_ne!(self.plane_stride, 0);
         let Self {
             width,
             height,
@@ -1539,6 +2771,7 @@ impl<'a, T> Image3DMut<'a, T> {
     pub fn iter_planes_mut(
         &mut self,
     ) -> impl DoubleEndedIterator<Item = Image2DMut<'_, T>> + use<'_, T> {
+        assert_ne!(self.plane_stride, 0);
         let Self {
             width,
             height,
@@ -1570,6 +2803,7 @@ impl<'a, T> Image3DMut<'a, T> {
     pub fn into_iter_planes(
         self,
     ) -> impl DoubleEndedIterator<Item = Image2DMut<'a, T>> + use<'a, T> {
+        assert_ne!(self.plane_stride, 0);
         let Self {
             width,
             height,
@@ -1600,7 +2834,9 @@ impl<'a, T> Image3DMut<'a, T> {
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &[T]> + use<'_, T> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'_, T>> + use<'_, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -1617,7 +2853,7 @@ impl<'a, T> Image3DMut<'a, T> {
         pixels[..volume_len]
             .chunks(plane_stride)
             .flat_map(move |plane| plane[..plane_len].chunks(row_stride))
-            .map(move |row| &row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all rows in this image in row-major order.
@@ -1626,7 +2862,11 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn iter_rows_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut [T]> + use<'_, T> {
+    pub fn iter_rows_mut(
+        &mut self,
+    ) -> impl DoubleEndedIterator<Item = Image1DMut<'_, T>> + use<'_, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -1643,7 +2883,7 @@ impl<'a, T> Image3DMut<'a, T> {
         pixels[..volume_len]
             .chunks_mut(plane_stride)
             .flat_map(move |plane| plane[..plane_len].chunks_mut(row_stride))
-            .map(move |row| &mut row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all rows in this image in row-major order.
@@ -1652,7 +2892,9 @@ impl<'a, T> Image3DMut<'a, T> {
     ///
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
-    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = &'a mut [T]> + use<'a, T> {
+    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = Image1DMut<'a, T>> + use<'a, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -1669,7 +2911,7 @@ impl<'a, T> Image3DMut<'a, T> {
         pixels[..volume_len]
             .chunks_mut(plane_stride)
             .flat_map(move |plane| plane[..plane_len].chunks_mut(row_stride))
-            .map(move |row| &mut row[..width])
+            .map(move |row| Image1D { width, pixels: row })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
@@ -1681,6 +2923,8 @@ impl<'a, T> Image3DMut<'a, T> {
     /// In case you want to iterate over pixels in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &T> + use<'_, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -1707,6 +2951,8 @@ impl<'a, T> Image3DMut<'a, T> {
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
     pub fn iter_pixels_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> + use<'_, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -1733,6 +2979,8 @@ impl<'a, T> Image3DMut<'a, T> {
     /// Panics if this image reference was constructed with `plane_stride < row_stride * height`.
     /// This is niche case, so this method is focused on performance instead of handling all possible stride configurations.
     pub fn into_iter_pixels(self) -> impl DoubleEndedIterator<Item = &'a mut T> + use<'a, T> {
+        assert_ne!(self.plane_stride, 0);
+        assert_ne!(self.row_stride, 0);
         let Self {
             width,
             height,
@@ -2007,6 +3255,66 @@ impl<P> Image<P> {
     }
 }
 
+impl<P> From<Image1D<P>> for Image<P> {
+    #[inline]
+    fn from(image: Image1D<P>) -> Self {
+        Image {
+            dimensions: Dimensions::D1,
+            extent: [image.width, 1, 1],
+            stride: [image.width, 0],
+            pixels: image.pixels,
+        }
+    }
+}
+
+impl<P> From<Image2D<P>> for Image<P> {
+    #[inline]
+    fn from(image: Image2D<P>) -> Self {
+        Image {
+            dimensions: Dimensions::D2,
+            extent: [image.width, image.height, 1],
+            stride: [image.stride, 0],
+            pixels: image.pixels,
+        }
+    }
+}
+
+impl<P> From<Image3D<P>> for Image<P> {
+    #[inline]
+    fn from(image: Image3D<P>) -> Self {
+        Image {
+            dimensions: Dimensions::D3,
+            extent: [image.width, image.height, image.depth],
+            stride: [image.row_stride, image.plane_stride],
+            pixels: image.pixels,
+        }
+    }
+}
+
+impl<P> From<Image1DArray<P>> for Image<P> {
+    #[inline]
+    fn from(image: Image1DArray<P>) -> Self {
+        Image {
+            dimensions: Dimensions::D1Array,
+            extent: [image.width, image.layers, 1],
+            stride: [image.stride, image.stride * image.layers],
+            pixels: image.pixels,
+        }
+    }
+}
+
+impl<P> From<Image2DArray<P>> for Image<P> {
+    #[inline]
+    fn from(image: Image2DArray<P>) -> Self {
+        Image {
+            dimensions: Dimensions::D2Array,
+            extent: [image.width, image.height, image.layers],
+            stride: [image.row_stride, image.layer_stride],
+            pixels: image.pixels,
+        }
+    }
+}
+
 impl<T, P> Image<P>
 where
     P: PixelBuffer<Pixel = T> + AsRef<[T]>,
@@ -2019,6 +3327,86 @@ where
             stride: self.stride,
             pixels: self.pixels.as_ref(),
         }
+    }
+
+    #[inline]
+    pub fn into_format<U>(&self) -> OwnedImage<U>
+    where
+        T: IntoFormat<U>,
+    {
+        T::into_format(self.as_ref())
+    }
+
+    /// Returns an immutable view typed as [`Image1DRef`] if this image has [`Dimensions::D1`],
+    /// or `None` otherwise.
+    pub fn as_1d(&self) -> Option<Image1DRef<'_, T>> {
+        if self.dimensions != Dimensions::D1 {
+            return None;
+        }
+        Some(Image1D {
+            width: self.extent[0],
+            pixels: self.pixels.as_ref(),
+        })
+    }
+
+    /// Returns an immutable view typed as [`Image1DArrayRef`] if this image has [`Dimensions::D1Array`],
+    /// or `None` otherwise.
+    pub fn as_1d_array(&self) -> Option<Image1DArrayRef<'_, T>> {
+        if self.dimensions != Dimensions::D1Array {
+            return None;
+        }
+        Some(Image1DArray {
+            width: self.extent[0],
+            layers: self.extent[1],
+            stride: self.stride[0],
+            pixels: self.pixels.as_ref(),
+        })
+    }
+
+    /// Returns an immutable view typed as [`Image2DRef`] if this image has [`Dimensions::D2`],
+    /// or `None` otherwise.
+    pub fn as_2d(&self) -> Option<Image2DRef<'_, T>> {
+        if self.dimensions != Dimensions::D2 {
+            return None;
+        }
+        Some(Image2D {
+            width: self.extent[0],
+            height: self.extent[1],
+            stride: self.stride[0],
+            pixels: self.pixels.as_ref(),
+        })
+    }
+
+    /// Returns an immutable view typed as [`Image2DArrayRef`] if this image has [`Dimensions::D2Array`],
+    /// or `None` otherwise.
+    pub fn as_2d_array(&self) -> Option<Image2DArrayRef<'_, T>> {
+        if self.dimensions != Dimensions::D2Array {
+            return None;
+        }
+        Some(Image2DArray {
+            width: self.extent[0],
+            height: self.extent[1],
+            layers: self.extent[2],
+            row_stride: self.stride[0],
+            layer_stride: self.stride[1],
+            pixels: self.pixels.as_ref(),
+        })
+    }
+
+    /// Returns an immutable view typed as [`Image3DRef`] if this image has [`Dimensions::D3`],
+    /// or `None` otherwise.
+    pub fn as_3d(&self) -> Option<Image3DRef<'_, T>> {
+        if self.dimensions != Dimensions::D3 {
+            return None;
+        }
+        Some(Image3D {
+            width: self.extent[0],
+            height: self.extent[1],
+            depth: self.extent[2],
+            row_stride: self.stride[0],
+            plane_stride: self.stride[1],
+            pixels: self.pixels.as_ref(),
+        })
     }
 }
 
@@ -2035,12 +3423,84 @@ where
             pixels: self.pixels.as_mut(),
         }
     }
+
+    /// Returns a mutable view typed as [`Image1DMut`] if this image has [`Dimensions::D1`],
+    /// or `None` otherwise.
+    pub fn as_1d_mut(&mut self) -> Option<Image1DMut<'_, T>> {
+        if self.dimensions != Dimensions::D1 {
+            return None;
+        }
+        Some(Image1D {
+            width: self.extent[0],
+            pixels: self.pixels.as_mut(),
+        })
+    }
+
+    /// Returns a mutable view typed as [`Image1DArrayMut`] if this image has [`Dimensions::D1Array`],
+    /// or `None` otherwise.
+    pub fn as_1d_array_mut(&mut self) -> Option<Image1DArrayMut<'_, T>> {
+        if self.dimensions != Dimensions::D1Array {
+            return None;
+        }
+        Some(Image1DArray {
+            width: self.extent[0],
+            layers: self.extent[1],
+            stride: self.stride[0],
+            pixels: self.pixels.as_mut(),
+        })
+    }
+
+    /// Returns a mutable view typed as [`Image2DMut`] if this image has [`Dimensions::D2`],
+    /// or `None` otherwise.
+    pub fn as_2d_mut(&mut self) -> Option<Image2DMut<'_, T>> {
+        if self.dimensions != Dimensions::D2 {
+            return None;
+        }
+        Some(Image2D {
+            width: self.extent[0],
+            height: self.extent[1],
+            stride: self.stride[0],
+            pixels: self.pixels.as_mut(),
+        })
+    }
+
+    /// Returns a mutable view typed as [`Image2DArrayMut`] if this image has [`Dimensions::D2Array`],
+    /// or `None` otherwise.
+    pub fn as_2d_array_mut(&mut self) -> Option<Image2DArrayMut<'_, T>> {
+        if self.dimensions != Dimensions::D2Array {
+            return None;
+        }
+        Some(Image2DArray {
+            width: self.extent[0],
+            height: self.extent[1],
+            layers: self.extent[2],
+            row_stride: self.stride[0],
+            layer_stride: self.stride[1],
+            pixels: self.pixels.as_mut(),
+        })
+    }
+
+    /// Returns a mutable view typed as [`Image3DMut`] if this image has [`Dimensions::D3`],
+    /// or `None` otherwise.
+    pub fn as_3d_mut(&mut self) -> Option<Image3DMut<'_, T>> {
+        if self.dimensions != Dimensions::D3 {
+            return None;
+        }
+        Some(Image3D {
+            width: self.extent[0],
+            height: self.extent[1],
+            depth: self.extent[2],
+            row_stride: self.stride[0],
+            plane_stride: self.stride[1],
+            pixels: self.pixels.as_mut(),
+        })
+    }
 }
 
 impl<'a, T> ImageRef<'a, T> {
     /// Returns a reference to the specified layer of this image. For non-array types, `layer` must be 0.
     /// The returned image reference is a non-array type.
-    pub fn layer_ref(&self, layer: usize) -> ImageRef<'a, T> {
+    pub fn get_layer(&self, layer: usize) -> ImageRef<'a, T> {
         match self.dimensions {
             Dimensions::D1 => {
                 assert_eq!(layer, 0);
@@ -2084,7 +3544,7 @@ impl<'a, T> ImageRef<'a, T> {
     ///
     /// Layers will be treated as depth dimension,
     /// and missing dimensions will be treated as having extent 1.
-    pub fn as_ref_3d(&self) -> Image3DRef<'a, T> {
+    pub fn reinterpret_as_3d(&self) -> Image3DRef<'a, T> {
         Image3D {
             width: self.extent[0],
             height: self.extent[1],
@@ -2105,7 +3565,7 @@ impl<'a, T> ImageRef<'a, T> {
     /// The main difference from `as_ref_3d` is that layers of D1 are interpreted as layers, not height.
     ///
     /// `self.depth() * self.layers()` must be greater than `layer`, otherwise this method will panic.
-    pub fn plane_ref(&self, layer: usize) -> Image2DRef<'a, T> {
+    pub fn get_plane(&self, layer: usize) -> Image2DRef<'a, T> {
         match self.dimensions {
             Dimensions::D1 | Dimensions::D1Array => {
                 assert!(layer < self.extent[1]);
@@ -2149,6 +3609,8 @@ impl<'a, T> ImageRef<'a, T> {
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'a, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks(sizes.layer_stride)
@@ -2170,14 +3632,20 @@ impl<'a, T> ImageRef<'a, T> {
     ///
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'a [T]> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'a, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks(sizes.layer_stride)
             .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
             .flat_map(move |plane| plane[..sizes.plane_len].chunks(sizes.row_stride))
-            .map(move |row| &row[..sizes.width])
+            .map(move |row| Image1D {
+                width: sizes.width,
+                pixels: row,
+            })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
@@ -2191,6 +3659,9 @@ impl<'a, T> ImageRef<'a, T> {
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'a T> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks(sizes.layer_stride)
@@ -2198,12 +3669,45 @@ impl<'a, T> ImageRef<'a, T> {
             .flat_map(move |plane| plane[..sizes.plane_len].chunks(sizes.row_stride))
             .flat_map(move |row| &row[..sizes.width])
     }
+
+    /// Returns a reference to the pixel at coordinates (`x`, `y`, `z_or_layer`).
+    ///
+    /// The coordinate interpretation matches [`ImageRef::as_ref_3d`]: for `D1Array` images
+    /// `y` is the layer index; for `D2Array` and `D3` images `z_or_layer` is the layer/depth
+    /// index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any coordinate is out of bounds.
+    pub fn get_pixel(&self, x: usize, y: usize, z_or_layer: usize) -> &'a T {
+        assert!(x < self.extent[0]);
+        assert!(y < self.extent[1]);
+        assert!(z_or_layer < self.extent[2]);
+        &self.pixels[z_or_layer * self.stride[1] + y * self.stride[0] + x]
+    }
+
+    /// Returns a reference to the row at coordinates (`y`, `z_or_layer`).
+    ///
+    /// For `D1` and `D2` images `z_or_layer` must be `0`.
+    /// For `D1Array` images `y` is the layer index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `y` or `z_or_layer` are out of bounds.
+    pub fn get_row(&self, y: usize, z_or_layer: usize) -> Image1DRef<'a, T> {
+        assert!(y < self.extent[1]);
+        assert!(z_or_layer < self.extent[2]);
+        Image1D {
+            width: self.extent[0],
+            pixels: &self.pixels[z_or_layer * self.stride[1] + y * self.stride[0]..],
+        }
+    }
 }
 
 impl<'a, T> ImageMut<'a, T> {
     /// Returns a reference to the specified layer of this image. For non-array types, `layer` must be 0.
     /// The returned image reference is a non-array type.
-    pub fn layer_ref(&self, layer: usize) -> ImageRef<'_, T> {
+    pub fn get_layer(&self, layer: usize) -> ImageRef<'_, T> {
         match self.dimensions {
             Dimensions::D1 => {
                 assert_eq!(layer, 0);
@@ -2238,7 +3742,7 @@ impl<'a, T> ImageMut<'a, T> {
 
     /// Returns a mutable reference to the specified layer of this image. For non-array types, `layer` must be 0.
     /// The returned image reference is a non-array type.
-    pub fn layer_mut(&mut self, layer: usize) -> ImageMut<'_, T> {
+    pub fn get_layer_mut(&mut self, layer: usize) -> ImageMut<'_, T> {
         match self.dimensions {
             Dimensions::D1 => {
                 assert_eq!(layer, 0);
@@ -2322,7 +3826,7 @@ impl<'a, T> ImageMut<'a, T> {
     /// The main difference from `as_ref_3d` is that layers of D1 are interpreted as layers, not height.
     ///
     /// `self.depth() * self.layers()` must be greater than `layer`, otherwise this method will panic.
-    pub fn plane_ref(&self, layer: usize) -> Image2DRef<'_, T> {
+    pub fn get_plane(&self, layer: usize) -> Image2DRef<'_, T> {
         match self.dimensions {
             Dimensions::D1 | Dimensions::D1Array => {
                 assert!(layer < self.extent[1]);
@@ -2364,7 +3868,7 @@ impl<'a, T> ImageMut<'a, T> {
     /// The main difference from `as_ref_3d` is that layers of D1 are interpreted as layers, not height.
     ///
     /// `self.depth() * self.layers()` must be greater than `layer`, otherwise this method will panic.
-    pub fn plane_mut(&mut self, layer: usize) -> Image2DMut<'_, T> {
+    pub fn get_plane_mut(&mut self, layer: usize) -> Image2DMut<'_, T> {
         match self.dimensions {
             Dimensions::D1 | Dimensions::D1Array => {
                 assert!(layer < self.extent[1]);
@@ -2408,6 +3912,8 @@ impl<'a, T> ImageMut<'a, T> {
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes(&self) -> impl DoubleEndedIterator<Item = Image2DRef<'_, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks(sizes.layer_stride)
@@ -2432,6 +3938,8 @@ impl<'a, T> ImageMut<'a, T> {
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn iter_planes_mut(&mut self) -> impl DoubleEndedIterator<Item = Image2DMut<'_, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks_mut(sizes.layer_stride)
@@ -2456,6 +3964,8 @@ impl<'a, T> ImageMut<'a, T> {
     /// use `(0..self.depth()).map(|z| self.get_plane_xy(z))` instead.
     pub fn into_iter_planes(self) -> impl DoubleEndedIterator<Item = Image2DMut<'a, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks_mut(sizes.layer_stride)
@@ -2477,14 +3987,54 @@ impl<'a, T> ImageMut<'a, T> {
     ///
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = &'_ [T]> {
+    pub fn iter_rows(&self) -> impl DoubleEndedIterator<Item = Image1DRef<'_, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks(sizes.layer_stride)
             .flat_map(move |layer| layer[..sizes.layer_len].chunks(sizes.plane_stride))
             .flat_map(move |plane| plane[..sizes.plane_len].chunks(sizes.row_stride))
-            .map(move |row| &row[..sizes.width])
+            .map(move |row| Image1D {
+                width: sizes.width,
+                pixels: row,
+            })
+    }
+
+    /// Returns a reference to the row at coordinates (`y`, `z_or_layer`).
+    ///
+    /// For `D1` and `D2` images `z_or_layer` must be `0`.
+    /// For `D1Array` images `y` is the layer index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `y` or `z_or_layer` are out of bounds.
+    pub fn get_row(&self, y: usize, z_or_layer: usize) -> Image1DRef<'_, T> {
+        assert!(y < self.extent[1]);
+        assert!(z_or_layer < self.extent[2]);
+        Image1D {
+            width: self.extent[0],
+            pixels: &self.pixels[z_or_layer * self.stride[1] + y * self.stride[0]..],
+        }
+    }
+
+    /// Returns a mutable reference to the row at coordinates (`y`, `z_or_layer`).
+    ///
+    /// For `D1` and `D2` images `z_or_layer` must be `0`.
+    /// For `D1Array` images `y` is the layer index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `y` or `z_or_layer` are out of bounds.
+    pub fn get_row_mut(&mut self, y: usize, z_or_layer: usize) -> Image1DMut<'_, T> {
+        assert!(y < self.extent[1]);
+        assert!(z_or_layer < self.extent[2]);
+        Image1D {
+            width: self.extent[0],
+            pixels: &mut self.pixels[z_or_layer * self.stride[1] + y * self.stride[0]..],
+        }
     }
 
     /// Returns an iterator over all rows in this image in row-major order.
@@ -2496,14 +4046,20 @@ impl<'a, T> ImageMut<'a, T> {
     ///
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn iter_rows_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut [T]> {
+    pub fn iter_rows_mut(&mut self) -> impl DoubleEndedIterator<Item = Image1DMut<'_, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks_mut(sizes.layer_stride)
             .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
             .flat_map(move |plane| plane[..sizes.plane_len].chunks_mut(sizes.row_stride))
-            .map(move |row| &mut row[..sizes.width])
+            .map(move |row| Image1D {
+                width: sizes.width,
+                pixels: row,
+            })
     }
 
     /// Returns an iterator over all rows in this image in row-major order.
@@ -2515,14 +4071,20 @@ impl<'a, T> ImageMut<'a, T> {
     ///
     /// In case you want to iterate over rows in an image with arbitrary strides,
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_rows())` instead.
-    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = &'a mut [T]> {
+    pub fn into_iter_rows(self) -> impl DoubleEndedIterator<Item = Image1DMut<'a, T>> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks_mut(sizes.layer_stride)
             .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
             .flat_map(move |plane| plane[..sizes.plane_len].chunks_mut(sizes.row_stride))
-            .map(move |row| &mut row[..sizes.width])
+            .map(move |row| Image1D {
+                width: sizes.width,
+                pixels: row,
+            })
     }
 
     /// Returns an iterator over all pixels in this image in row-major order.
@@ -2536,6 +4098,9 @@ impl<'a, T> ImageMut<'a, T> {
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn iter_pixels(&self) -> impl DoubleEndedIterator<Item = &'_ T> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks(sizes.layer_stride)
@@ -2555,6 +4120,9 @@ impl<'a, T> ImageMut<'a, T> {
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn iter_pixels_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut T> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks_mut(sizes.layer_stride)
@@ -2574,12 +4142,73 @@ impl<'a, T> ImageMut<'a, T> {
     /// use `(0..self.depth()).flat_map(|z| self.get_plane_xy(z).iter_pixels())` instead.
     pub fn into_iter_pixels(self) -> impl DoubleEndedIterator<Item = &'a mut T> {
         let sizes = sizes(self.dimensions, self.extent, self.stride);
+        assert_ne!(sizes.layer_stride, 0);
+        assert_ne!(sizes.plane_stride, 0);
+        assert_ne!(sizes.row_stride, 0);
 
         self.pixels[..sizes.total_len]
             .chunks_mut(sizes.layer_stride)
             .flat_map(move |layer| layer[..sizes.layer_len].chunks_mut(sizes.plane_stride))
             .flat_map(move |plane| plane[..sizes.plane_len].chunks_mut(sizes.row_stride))
             .flat_map(move |row| &mut row[..sizes.width])
+    }
+
+    /// Returns a reference to the pixel at coordinates (`x`, `y`, `z_or_layer`).
+    ///
+    /// See [`ImageRef::get`] for the coordinate interpretation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any coordinate is out of bounds.
+    pub fn get_pixel(&self, x: usize, y: usize, z_or_layer: usize) -> &T {
+        assert!(x < self.extent[0]);
+        assert!(y < self.extent[1]);
+        assert!(z_or_layer < self.extent[2]);
+        &self.pixels[z_or_layer * self.stride[1] + y * self.stride[0] + x]
+    }
+
+    /// Returns a mutable reference to the pixel at coordinates (`x`, `y`, `z_or_layer`).
+    ///
+    /// See [`ImageRef::get`] for the coordinate interpretation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any coordinate is out of bounds.
+    pub fn get_pixel_mut(&mut self, x: usize, y: usize, z_or_layer: usize) -> &mut T {
+        assert!(x < self.extent[0]);
+        assert!(y < self.extent[1]);
+        assert!(z_or_layer < self.extent[2]);
+        &mut self.pixels[z_or_layer * self.stride[1] + y * self.stride[0] + x]
+    }
+
+    /// Sets the pixel at coordinates (`x`, `y`, `z_or_layer`) to `value`.
+    ///
+    /// See [`ImageRef::get`] for the coordinate interpretation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any coordinate is out of bounds.
+    pub fn set(&mut self, x: usize, y: usize, z_or_layer: usize, value: T) {
+        assert!(x < self.extent[0]);
+        assert!(y < self.extent[1]);
+        assert!(z_or_layer < self.extent[2]);
+        self.pixels[z_or_layer * self.stride[1] + y * self.stride[0] + x] = value;
+    }
+
+    /// Copies pixel data from `src` into this image row by row.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `src` and `self` have different `dimensions` or `extent`.
+    pub fn copy_from(&mut self, src: ImageRef<'_, T>)
+    where
+        T: Copy,
+    {
+        assert_eq!(src.dimensions, self.dimensions);
+        assert_eq!(src.extent, self.extent);
+        for (mut dst_row, src_row) in self.iter_rows_mut().zip(src.iter_rows()) {
+            dst_row.copy_from(src_row);
+        }
     }
 }
 

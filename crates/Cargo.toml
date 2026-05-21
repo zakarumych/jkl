@@ -1,5 +1,5 @@
 [workspace]
-members = ["jkl", "cli", "experiments", "gui", "wgpu"]
+members = ["jkl", "cli", "experiments", "gui", "wgpu", "app"]
 resolver = "2"
 
 [workspace.package]

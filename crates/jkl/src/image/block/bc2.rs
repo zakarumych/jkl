@@ -306,7 +306,7 @@ pub fn encode_image<T>(
     assert_eq!(output.depth(), input.depth());
     assert_eq!(output.layers(), input.layers());
 
-    let input = input.as_ref_3d();
+    let input = input.reinterpret_as_3d();
     let mut output = output.as_mut_3d();
 
     for z in 0..output.depth() {
@@ -319,13 +319,85 @@ pub fn encode_image<T>(
                         if bx >= input.width() - x * 4 || by >= input.height() - y * 4 {
                             continue;
                         }
-                        let c = map(*input.get(x * 4 + bx, y * 4 + by, z));
+                        let c = map(*input.get_pixel(x * 4 + bx, y * 4 + by, z));
                         block_colors[by][bx] = (c, true);
                     }
                 }
 
                 let block = Block::encode(block_colors);
                 output.set(x, y, z, block);
+            }
+        }
+    }
+}
+
+pub fn encode_image_with_alpha<T>(
+    input: ImageRef<'_, T>,
+    map: impl Fn(T) -> Rgba32F,
+    mut output: ImageMut<'_, Block>,
+) where
+    T: Copy,
+{
+    assert_eq!(output.width(), input.width().div_ceil(4));
+    assert_eq!(output.height(), input.height().div_ceil(4));
+    assert_eq!(output.depth(), input.depth());
+    assert_eq!(output.layers(), input.layers());
+
+    let input = input.reinterpret_as_3d();
+    let mut output = output.as_mut_3d();
+
+    for z in 0..output.depth() {
+        for y in 0..output.height() {
+            for x in 0..output.width() {
+                let mut block_colors = [[(Rgba32F::BLACK, false); 4]; 4];
+
+                for by in 0..4 {
+                    for bx in 0..4 {
+                        if bx >= input.width() - x * 4 || by >= input.height() - y * 4 {
+                            continue;
+                        }
+                        let c = map(*input.get_pixel(x * 4 + bx, y * 4 + by, z));
+                        block_colors[by][bx] = (c, true);
+                    }
+                }
+
+                let block = Block::encode_with_alpha(block_colors);
+                output.set(x, y, z, block);
+            }
+        }
+    }
+}
+
+pub fn decode_image<T>(
+    input: ImageRef<'_, Block>,
+    map: impl Fn(Rgba32F) -> T,
+    mut output: ImageMut<'_, T>,
+) where
+    T: Copy,
+{
+    assert_eq!(output.width().div_ceil(4), input.width());
+    assert_eq!(output.height().div_ceil(4), input.height());
+    assert_eq!(output.depth(), input.depth());
+    assert_eq!(output.layers(), input.layers());
+
+    let input = input.reinterpret_as_3d();
+    let mut output = output.as_mut_3d();
+
+    for z in 0..input.depth() {
+        for y in 0..input.height() {
+            for x in 0..input.width() {
+                let block = input.get_pixel(x, y, z);
+                let block_colors = Block::decode_with_alpha(*block);
+
+                for by in 0..4 {
+                    for bx in 0..4 {
+                        if bx >= output.width() - x * 4 || by >= output.height() - y * 4 {
+                            continue;
+                        }
+                        let c = map(block_colors[by][bx]);
+                        output.set(x * 4 + bx, y * 4 + by, z, c);
+                    }
+                }
             }
         }
     }

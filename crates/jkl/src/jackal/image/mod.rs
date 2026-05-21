@@ -175,7 +175,7 @@ where
 
     let tiles_iter = tile_size.iter_tiles(extent).map(|tile| {
         input
-            .plane_ref(tile.plane)
+            .get_plane(tile.plane)
             .get_range(tile.rect.x, tile.rect.y, tile.rect.w, tile.rect.h)
     });
 

@@ -5,8 +5,13 @@ use smallvec::SmallVec;
 use crate::{
     bits::{ReadBits, write_bits_scope},
     encode::{FixedCode, VarCode},
-    image::{Image2DMut, Image2DRef, block::bc1, compress::Compressor, format::Format},
-    math::{Rgb8U, Rgb565},
+    image::{
+        Image2DMut, Image2DRef,
+        block::{bc1, bc2},
+        compress::Compressor,
+        format::Format,
+    },
+    math::{Rgb8U, Rgb565, Rgba8U},
     vle::Vle,
 };
 
@@ -111,8 +116,8 @@ impl Pixel for Rgb8U {
 
         let height = image.height();
         for y in 0..height {
-            let row = image.row_mut(y);
-            for pixel in row {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
                 let Vle(bits) = symbols.next().ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -121,6 +126,77 @@ impl Pixel for Rgb8U {
                 })??;
 
                 *pixel = Rgb8U::from_bits_interleaved(bits);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Pixel for Rgba8U {
+    type Context<C: Compressor> = C::Context<Vle<u32>>;
+
+    const FORMAT: Format = Format::RGBA8;
+
+    fn compress_images<'a, C>(
+        input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
+        compressor: C,
+        mut write: impl io::Write + io::Seek,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let mut tokens = Vec::new();
+
+        let context = compressor.compress_symbols(
+            input.map(|image| image.iter_pixels().map(|rgb| Vle(rgb.bits_interleaved()))),
+            &mut tokens,
+        )?;
+
+        let mut offsets = WriteOffsets::new(tokens.len(), &mut write)?;
+
+        write_bits_scope(&mut write, |write_bits| context.var_write(write_bits))?;
+
+        for token_group in &tokens {
+            offsets.push_next(&mut write)?;
+
+            write_bits_scope(&mut write, |write| {
+                for token in token_group {
+                    token.var_write(write)?;
+                }
+                Ok(())
+            })?;
+        }
+
+        offsets.write(&mut write)?;
+        Ok(())
+    }
+
+    fn decompress_image<'a, C>(
+        compressor: C,
+        context: &Self::Context<C>,
+        read: impl io::Read,
+        mut image: Image2DMut<'a, Self>,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let mut read_bits = crate::bits::ReadBits::new(read);
+
+        let mut symbols = compressor.decompress_tokens2(context, read_tokens(&mut read_bits));
+
+        let height = image.height();
+        for y in 0..height {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
+
+                *pixel = Rgba8U::from_bits_interleaved(bits);
             }
         }
 
@@ -226,8 +302,8 @@ impl Pixel for bc1::Block {
         let height = image.height();
 
         for y in 0..height {
-            let row = image.row_mut(y);
-            for pixel in row {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
                 let Vle(bits) = symbols.next().ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -253,8 +329,8 @@ impl Pixel for bc1::Block {
         let mut symbols = compressor.decompress_tokens2(texel_cx, read_tokens(&mut read_bits));
 
         for y in 0..height {
-            let row = image.row_mut(y);
-            for pixel in row {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
                 for i in 0..4 {
                     let bits = symbols.next().ok_or_else(|| {
                         io::Error::new(
@@ -272,142 +348,182 @@ impl Pixel for bc1::Block {
     }
 }
 
-// impl Pixel for bc2::Block {
-//     type Context<C: Compressor> = (
-//         C::Context<Vle<u16>>, // colors
-//         C::Context<u8>,       // indices
-//     );
+impl Pixel for bc2::Block {
+    type Context<C: Compressor> = (
+        C::Context<u8>,       // alpha bytes
+        C::Context<Vle<u16>>, // colors
+        C::Context<u8>,       // indices
+    );
 
-//     const FORMAT: Format = Format::BC2;
+    const FORMAT: Format = Format::BC2;
 
-//     fn compress_images<'a, C>(
-//         input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
-//         compressor: C,
-//         mut write: impl io::Write + io::Seek,
-//     ) -> io::Result<()>
-//     where
-//         C: Compressor,
-//     {
-//         let mut colors_tokens = Vec::new();
+    fn compress_images<'a, C>(
+        input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
+        compressor: C,
+        mut write: impl io::Write + io::Seek,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let mut alpha_tokens = Vec::new();
 
-//         let colors_cx = compressor.compress_symbols(
-//             input.clone().map(|image| {
-//                 image.iter_pixels().flat_map(|b| {
-//                     [
-//                         Vle(b.color0.bits_interleaved()),
-//                         Vle(b.color1.bits_interleaved()),
-//                     ]
-//                 })
-//             }),
-//             &mut colors_tokens,
-//         )?;
+        let alpha_cx = compressor.compress_symbols(
+            input
+                .clone()
+                .map(|image| image.iter_pixels().flat_map(|b| b.alpha)),
+            &mut alpha_tokens,
+        )?;
 
-//         let mut indices_tokens = Vec::new();
-//         let texel_cx = compressor.compress_symbols(
-//             input.map(|image| image.iter_pixels().flat_map(|b| b.indices)),
-//             &mut indices_tokens,
-//         )?;
+        let mut colors_tokens = Vec::new();
 
-//         assert_eq!(
-//             colors_tokens.len(),
-//             indices_tokens.len(),
-//             "Tile count mismatch"
-//         );
+        let colors_cx = compressor.compress_symbols(
+            input.clone().map(|image| {
+                image.iter_pixels().flat_map(|b| {
+                    [
+                        Vle(b.color0.bits_interleaved()),
+                        Vle(b.color1.bits_interleaved()),
+                    ]
+                })
+            }),
+            &mut colors_tokens,
+        )?;
 
-//         let mut offsets = WriteOffsets::new(colors_tokens.len(), &mut write)?;
+        let mut indices_tokens = Vec::new();
+        let texel_cx = compressor.compress_symbols(
+            input.map(|image| image.iter_pixels().flat_map(|b| b.indices)),
+            &mut indices_tokens,
+        )?;
 
-//         write_bits_scope(&mut write, |write| {
-//             (colors_cx, texel_cx).var_write(write)?;
-//             Ok(())
-//         })?;
+        assert_eq!(
+            alpha_tokens.len(),
+            colors_tokens.len(),
+            "Tile count mismatch"
+        );
+        assert_eq!(
+            colors_tokens.len(),
+            indices_tokens.len(),
+            "Tile count mismatch"
+        );
 
-//         for idx in 0..colors_tokens.len() {
-//             offsets.push_next(&mut write)?;
+        let mut offsets = WriteOffsets::new(colors_tokens.len(), &mut write)?;
 
-//             let color_tile = &colors_tokens[idx];
-//             let texel_tile = &indices_tokens[idx];
+        write_bits_scope(&mut write, |write| {
+            (alpha_cx, colors_cx, texel_cx).var_write(write)?;
+            Ok(())
+        })?;
 
-//             write_bits_scope(&mut write, |write| {
-//                 for token in color_tile {
-//                     token.var_write(write)?;
-//                 }
+        for idx in 0..colors_tokens.len() {
+            offsets.push_next(&mut write)?;
 
-//                 for token in texel_tile {
-//                     token.var_write(write)?;
-//                 }
+            let alpha_tile = &alpha_tokens[idx];
+            let color_tile = &colors_tokens[idx];
+            let texel_tile = &indices_tokens[idx];
 
-//                 Ok(())
-//             })?;
-//         }
+            write_bits_scope(&mut write, |write| {
+                for token in alpha_tile {
+                    token.var_write(write)?;
+                }
 
-//         offsets.write(&mut write)?;
+                for token in color_tile {
+                    token.var_write(write)?;
+                }
 
-//         Ok(())
-//     }
+                for token in texel_tile {
+                    token.var_write(write)?;
+                }
 
-//     fn decompress_image<'a, C>(
-//         compressor: C,
-//         context: &Self::Context<C>,
-//         read: impl io::Read,
-//         mut image: Image2DMut<'a, Self>,
-//     ) -> io::Result<()>
-//     where
-//         C: Compressor,
-//     {
-//         let (colors_cx, texel_cx) = context;
+                Ok(())
+            })?;
+        }
 
-//         let mut read_bits = crate::bits::ReadBits::new(read);
+        offsets.write(&mut write)?;
 
-//         let mut symbols = compressor.decompress_tokens2(colors_cx, read_tokens(&mut read_bits));
+        Ok(())
+    }
 
-//         let height = image.height();
+    fn decompress_image<'a, C>(
+        compressor: C,
+        context: &Self::Context<C>,
+        read: impl io::Read,
+        mut image: Image2DMut<'a, Self>,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let (alpha_cx, colors_cx, texel_cx) = context;
 
-//         for y in 0..height {
-//             let row = image.row_mut(y);
-//             for pixel in row {
-//                 let Vle(bits) = symbols.next().ok_or_else(|| {
-//                     io::Error::new(
-//                         io::ErrorKind::UnexpectedEof,
-//                         "Not enough data to fill the image",
-//                     )
-//                 })??;
+        let mut read_bits = crate::bits::ReadBits::new(read);
 
-//                 pixel.color0 = Rgb565::from_bits_interleaved(bits);
+        let mut symbols = compressor.decompress_tokens2(alpha_cx, read_tokens(&mut read_bits));
 
-//                 let Vle(bits) = symbols.next().ok_or_else(|| {
-//                     io::Error::new(
-//                         io::ErrorKind::UnexpectedEof,
-//                         "Not enough data to fill the image",
-//                     )
-//                 })??;
+        let height = image.height();
 
-//                 pixel.color1 = Rgb565::from_bits_interleaved(bits);
-//             }
-//         }
+        for y in 0..height {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
+                for i in 0..8 {
+                    let byte = symbols.next().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "Not enough data to fill the image",
+                        )
+                    })??;
 
-//         drop(symbols);
+                    pixel.alpha[i] = byte;
+                }
+            }
+        }
 
-//         let mut symbols = compressor.decompress_tokens2(texel_cx, read_tokens(&mut read_bits));
+        drop(symbols);
 
-//         for y in 0..height {
-//             let row = image.row_mut(y);
-//             for pixel in row {
-//                 for i in 0..4 {
-//                     let bits = symbols.next().ok_or_else(|| {
-//                         io::Error::new(
-//                             io::ErrorKind::UnexpectedEof,
-//                             "Not enough data to fill the image",
-//                         )
-//                     })??;
+        let mut symbols = compressor.decompress_tokens2(colors_cx, read_tokens(&mut read_bits));
 
-//                     pixel.indices[i] = bits;
-//                 }
-//             }
-//         }
+        for y in 0..height {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
 
-//         Ok(())
-//     }
-// }
+                pixel.color0 = Rgb565::from_bits_interleaved(bits);
+
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
+
+                pixel.color1 = Rgb565::from_bits_interleaved(bits);
+            }
+        }
+
+        drop(symbols);
+
+        let mut symbols = compressor.decompress_tokens2(texel_cx, read_tokens(&mut read_bits));
+
+        for y in 0..height {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
+                for i in 0..4 {
+                    let bits = symbols.next().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "Not enough data to fill the image",
+                        )
+                    })??;
+
+                    pixel.indices[i] = bits;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
 
 fn read_tokens<T>(read: &mut ReadBits<impl io::Read>) -> impl Iterator<Item = io::Result<T>> + '_
 where

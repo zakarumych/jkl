@@ -1,0 +1,18 @@
+[package]
+name = "jkl-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "jkl-gui"
+path = "src/main.rs"
+
+[dependencies]
+jkl-gui = { path = "../gui" }
+jkl = { path = "../jkl" }
+eframe = { workspace = true, features = ["persistence", "wgpu"] }
+image = { workspace = true }
+rfd = "0.15"
+jkl-wgpu = { path = "../wgpu" }
+wgpu = { workspace = true }
