@@ -8,6 +8,7 @@ pub mod convert;
 pub mod filter;
 pub mod format;
 pub mod quality;
+pub mod resize;
 pub mod tiles;
 
 /// The spatial extent of an image, encoding both size and dimensionality.
@@ -430,7 +431,7 @@ impl<'a, T> Image1DMut<'a, T> {
     /// # Panics
     ///
     /// Panics if `x >= width`.
-    pub fn set(&mut self, x: usize, value: T) {
+    pub fn set_pixel(&mut self, x: usize, value: T) {
         assert!(x < self.width);
         self.pixels[x] = value;
     }
@@ -1233,7 +1234,7 @@ impl<'a, T> Image2DMut<'a, T> {
     /// # Panics
     ///
     /// Panics if the computed index `y * stride + x` is out of bounds.
-    pub fn set(&mut self, x: usize, y: usize, value: T) {
+    pub fn set_pixel(&mut self, x: usize, y: usize, value: T) {
         assert!(x < self.width);
         assert!(y < self.height);
 
@@ -1452,6 +1453,99 @@ impl<'a, T> Image2DMut<'a, T> {
         for (y, row) in matrix.iter().enumerate() {
             self.get_row_mut(y).pixels_mut()[..W].copy_from_slice(row);
         }
+    }
+}
+
+impl<T> OwnedImage2D<T> {
+    /// Transposes this image dimensions ignoring the pixel data. After this operation, the width and height are swapped,
+    pub fn transpose_discard(&mut self) {
+        self.stride = self.height;
+        self.height = self.width;
+        self.width = self.stride;
+    }
+
+    /// Transposes this image in-place by rearranging the pixel data. After this operation, the width and height are swapped.
+    pub fn transpose(&mut self)
+    where
+        T: Copy,
+    {
+        // ── trivial cases ─────────────────────────────────────────────────────
+        if self.width == 0 || self.height == 0 || self.width * self.height <= 1 {
+            self.transpose_discard();
+            return;
+        }
+
+        // TODO: Handle case where self.stride >= self.height more efficiently.
+
+        // ── Phase 1: pack rows leftward (stride → width) ───────────────────────
+        //
+        //   Source row r : [r*stride,  r*stride + width)
+        //   Dest   row r : [r*width,   r*width  + width)
+        //
+        //   stride >= width  ⟹  src base >= dst base, so a forward
+        //   memmove is safe even when the spans overlap.
+        if self.stride != self.width {
+            for r in 1..self.height {
+                self.pixels.copy_within(
+                    r * self.stride..r * self.stride + self.width,
+                    r * self.width,
+                );
+            }
+            self.stride = self.width;
+        }
+        // buf[0 .. width*height] is now the packed W×H matrix.
+
+        // ── Phase 2: in-place cycle-following transpose ────────────────────────
+        //
+        //   Permutation  σ  (where element i ends up): σ(p)   = (p % W)·H + p/W
+        //   Its inverse  σ⁻¹(where element i came from): σ⁻¹(q) = (q % H)·W + q/H
+        //
+        //   For each cycle we save buf[start], then pull values backward through
+        //   σ⁻¹ until we complete the loop:
+        //
+        //     tmp   = buf[start]
+        //     p     = start
+        //     loop:
+        //       q         = σ⁻¹(p)
+        //       mark p as visited
+        //       if q == start: buf[p] = tmp; break
+        //       buf[p]    = buf[q]          ← shift value one step forward
+        //       p         = q
+        //
+        //   This writes new_buf[σ(i)] = old_buf[i] for every i in the cycle.
+        let (w, h) = (self.width, self.height);
+        let n = w * h;
+
+        // Visited bitset (stack-allocated for small n, heap otherwise)
+        let words = (n + 63) / 64;
+        let mut visited = vec![0u64; words];
+
+        let mark = |visited: &mut [u64], i: usize| visited[i >> 6] |= 1u64 << (i & 63);
+        let seen = |visited: &[u64], i: usize| visited[i >> 6] & (1u64 << (i & 63)) != 0;
+
+        // Index 0 and n-1 are always fixed points; pre-mark them.
+        mark(&mut visited[..], 0);
+        mark(&mut visited[..], n - 1);
+
+        for start in 1..n - 1 {
+            if seen(&visited[..], start) {
+                continue;
+            }
+            let tmp = self.pixels[start];
+            let mut p = start;
+            loop {
+                let q = (p % h) * w + (p / h); // σ⁻¹(p)
+                mark(&mut visited[..], p);
+                if q == start {
+                    self.pixels[p] = tmp;
+                    break;
+                }
+                self.pixels[p] = self.pixels[q];
+                p = q;
+            }
+        }
+
+        self.transpose_discard();
     }
 }
 
@@ -4188,7 +4282,7 @@ impl<'a, T> ImageMut<'a, T> {
     /// # Panics
     ///
     /// Panics if any coordinate is out of bounds.
-    pub fn set(&mut self, x: usize, y: usize, z_or_layer: usize, value: T) {
+    pub fn set_pixel(&mut self, x: usize, y: usize, z_or_layer: usize, value: T) {
         assert!(x < self.extent[0]);
         assert!(y < self.extent[1]);
         assert!(z_or_layer < self.extent[2]);

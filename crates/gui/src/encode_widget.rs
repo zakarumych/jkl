@@ -43,7 +43,7 @@ impl<'a> EncodingWidget<'a> {
 
         // Trigger background work for the selected (format, compression).
         state.ensure_blocks(format);
-        if state.blocks_done(format) {
+        if state.compression_done(format) {
             state.ensure_jkli(format, compression);
         }
         if state.has_any_in_progress() {
@@ -59,13 +59,12 @@ impl<'a> EncodingWidget<'a> {
         };
         let dim_label = format!("{}x{} {}", input.width(), input.height(), fmt_label);
 
-        let block_psnr = state.block_psnr(format);
-        let block_err = state.block_error(format).map(str::to_owned);
-        let blocks_running = state.blocks_in_progress(format);
-        let blocks_ready = state.blocks_done(format);
-        let jkli_data: Option<Arc<Vec<u8>>> = state.jkli_data(format, compression);
-        let jkli_running = state.jkli_in_progress(format, compression);
-        let jkli_err = state.jkli_error(format, compression).map(str::to_owned);
+        let block_psnr = state.compression_psnr(format);
+        let block_err = state.compression_error(format).map(str::to_owned);
+        let blocks_running = state.compression_in_progress(format);
+        let blocks_ready = state.compression_done(format);
+        let jkli_data: Option<Arc<Vec<u8>>> = state.serialized_data(format, compression);
+        let jkli_running = state.serialization_in_progress(format, compression);
 
         // Snapshot view state; commit back to state after the UI closures run.
         let mut view_mode = state.view_mode;
@@ -100,7 +99,7 @@ impl<'a> EncodingWidget<'a> {
                 });
 
                 // Threshold slider — only visible in Heatmap mode
-                if view_mode == ViewMode::Heatmap && blocks_ready {
+                if view_mode == ViewMode::ErrorHeatmap && blocks_ready {
                     ui.add(
                         egui::Slider::new(&mut heatmap_threshold, 0.0..=1.0)
                             .text("Threshold")
@@ -108,8 +107,8 @@ impl<'a> EncodingWidget<'a> {
                     );
                 }
 
-                // Gamma + palette controls — visible in AbsError or Heatmap mode
-                if (view_mode == ViewMode::AbsError || view_mode == ViewMode::Heatmap)
+                // Gamma + palette controls — visible in Error or Heatmap mode
+                if (view_mode == ViewMode::Error || view_mode == ViewMode::ErrorHeatmap)
                     && blocks_ready
                 {
                     ui.add(
@@ -178,10 +177,6 @@ impl<'a> EncodingWidget<'a> {
                         ui.spinner();
                         ui.label("Encoding blocks\u{2026}");
                     });
-                    return;
-                }
-                if let Some(err) = &jkli_err {
-                    ui.colored_label(Color32::LIGHT_RED, format!("JKLI encode error: {err}"));
                     return;
                 }
                 if jkli_running {

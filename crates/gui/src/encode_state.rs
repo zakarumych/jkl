@@ -120,19 +120,19 @@ pub fn format_label(f: Format) -> &'static str {
 pub enum ViewMode {
     Input,
     Encoded,
-    AbsError,
-    Heatmap,
+    Error,
+    ErrorHeatmap,
 }
 
 impl ViewMode {
-    pub const ALL: &'static [Self] = &[Self::Input, Self::Encoded, Self::AbsError, Self::Heatmap];
+    pub const ALL: &'static [Self] = &[Self::Input, Self::Encoded, Self::Error, Self::ErrorHeatmap];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Input => "Input",
             Self::Encoded => "Encoded",
-            Self::AbsError => "Abs Error",
-            Self::Heatmap => "Heatmap",
+            Self::Error => "Error",
+            Self::ErrorHeatmap => "Error Heatmap",
         }
     }
 }
@@ -146,9 +146,8 @@ enum EncodedDataCacheEntry {
 }
 
 enum JkliCacheEntry {
-    InProgress(mpsc::Receiver<Result<Vec<u8>, String>>),
+    InProgress(mpsc::Receiver<Vec<u8>>),
     Done(Arc<Vec<u8>>),
-    Error(String),
 }
 
 // ── Encoder closure types ──────────────────────────────────────────────────
@@ -162,15 +161,15 @@ pub type BlockEncoderFn =
 
 pub struct EncoderState {
     input: Arc<Image>,
-    pub texture_handle: Option<egui::TextureHandle>,
+    texture_handle: Option<egui::TextureHandle>,
     encoded_cache: HashMap<Format, EncodedDataCacheEntry>,
     jkli_cache: HashMap<(Format, Compression), JkliCacheEntry>,
     encode_blocks: Arc<BlockEncoderFn>,
     selected_format: Format,
     selected_compression: Compression,
-    pub view_mode: ViewMode,
-    pub heatmap_threshold: f32,
-    pub error_gamma: f32,
+    pub(super) view_mode: ViewMode,
+    pub(super) heatmap_threshold: f32,
+    pub(super) error_gamma: f32,
     decoded_pixels: HashMap<Format, Image>,
     decoded_textures: HashMap<Format, egui::TextureHandle>,
     error_textures: HashMap<Format, (u32, egui::TextureHandle)>,
@@ -235,7 +234,7 @@ impl EncoderState {
     }
 
     pub fn current_jkli_data(&self) -> Option<Arc<Vec<u8>>> {
-        self.jkli_data(self.selected_format, self.selected_compression)
+        self.serialized_data(self.selected_format, self.selected_compression)
     }
 
     // ── Texture ────────────────────────────────────────────────────────────
@@ -265,7 +264,7 @@ impl EncoderState {
 
     /// Generate / refresh preview textures for the comparison views.
     ///
-    /// Textures for `Encoded` and `AbsError` are computed once per format.
+    /// Textures for `Encoded` and `Error` are computed once per format.
     /// The `Heatmap` texture is regenerated whenever the format or
     /// [`heatmap_threshold`](Self::heatmap_threshold) changes.
     /// Does nothing if encoded data for `format` is not yet ready.
@@ -415,8 +414,8 @@ impl EncoderState {
         let id = match self.view_mode {
             ViewMode::Input => self.texture_handle.as_ref()?.id(),
             ViewMode::Encoded => self.decoded_textures.get(&format)?.id(),
-            ViewMode::AbsError => self.error_textures.get(&format)?.1.id(),
-            ViewMode::Heatmap => self
+            ViewMode::Error => self.error_textures.get(&format)?.1.id(),
+            ViewMode::ErrorHeatmap => self
                 .heatmap_cache
                 .as_ref()
                 .filter(|(f, _, _, _)| *f == format)?
@@ -455,11 +454,8 @@ impl EncoderState {
                 continue;
             };
             match rx.try_recv() {
-                Ok(Ok(d)) => *entry = JkliCacheEntry::Done(Arc::new(d)),
-                Ok(Err(e)) => *entry = JkliCacheEntry::Error(e),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    *entry = JkliCacheEntry::Error("jkli thread disconnected".into())
-                }
+                Ok(d) => *entry = JkliCacheEntry::Done(Arc::new(d)),
+                Err(mpsc::TryRecvError::Disconnected) => panic!("jkli thread panicked"),
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -497,53 +493,50 @@ impl EncoderState {
 
     // ── Accessors for UI ──────────────────────────────────────────────────
 
-    pub fn blocks_done(&self, format: Format) -> bool {
+    pub fn compression_done(&self, format: Format) -> bool {
         matches!(
             self.encoded_cache.get(&format),
             Some(EncodedDataCacheEntry::Done { .. })
         )
     }
 
-    pub fn blocks_in_progress(&self, format: Format) -> bool {
+    pub fn compression_in_progress(&self, format: Format) -> bool {
         matches!(
             self.encoded_cache.get(&format),
             Some(EncodedDataCacheEntry::InProgress(_))
         )
     }
 
-    pub fn block_psnr(&self, format: Format) -> Option<f64> {
+    pub fn compression_psnr(&self, format: Format) -> Option<f64> {
         match self.encoded_cache.get(&format)? {
             EncodedDataCacheEntry::Done { psnr, .. } => *psnr,
             _ => None,
         }
     }
 
-    pub fn block_error(&self, format: Format) -> Option<&str> {
+    pub fn compression_error(&self, format: Format) -> Option<&str> {
         match self.encoded_cache.get(&format)? {
             EncodedDataCacheEntry::Error(e) => Some(e),
             _ => None,
         }
     }
 
-    pub fn jkli_data(&self, format: Format, compression: Compression) -> Option<Arc<Vec<u8>>> {
+    pub fn serialized_data(
+        &self,
+        format: Format,
+        compression: Compression,
+    ) -> Option<Arc<Vec<u8>>> {
         match self.jkli_cache.get(&(format, compression))? {
             JkliCacheEntry::Done(d) => Some(Arc::clone(d)),
             _ => None,
         }
     }
 
-    pub fn jkli_in_progress(&self, format: Format, compression: Compression) -> bool {
+    pub fn serialization_in_progress(&self, format: Format, compression: Compression) -> bool {
         matches!(
             self.jkli_cache.get(&(format, compression)),
             Some(JkliCacheEntry::InProgress(_))
         )
-    }
-
-    pub fn jkli_error(&self, format: Format, compression: Compression) -> Option<&str> {
-        match self.jkli_cache.get(&(format, compression))? {
-            JkliCacheEntry::Error(e) => Some(e),
-            _ => None,
-        }
     }
 
     pub fn has_any_in_progress(&self) -> bool {
@@ -741,7 +734,7 @@ fn heatvision_color(t: f32) -> [u8; 3] {
 
 // ── JKLI serialization ────────────────────────────────────────────────────
 
-fn serialize_jkli(data: &Image, compression: Compression) -> Result<Vec<u8>, String> {
+fn serialize_jkli(data: &Image, compression: Compression) -> Vec<u8> {
     let opts = Options::new().with_compression(compression);
     let mut buf = Cursor::new(Vec::<u8>::new());
     match data {
@@ -750,6 +743,6 @@ fn serialize_jkli(data: &Image, compression: Compression) -> Result<Vec<u8>, Str
         Image::Bc1(img) => write_image(img.as_ref(), opts, &mut buf),
         Image::Bc2(img) => write_image(img.as_ref(), opts, &mut buf),
     }
-    .map_err(|e| e.to_string())?;
-    Ok(buf.into_inner())
+    .expect("write_image to Cursor<Vec<u8>> is infallible");
+    buf.into_inner()
 }
