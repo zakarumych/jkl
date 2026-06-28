@@ -10,8 +10,9 @@ use crate::{
     bits::{ReadBits, WriteBits},
     encode::VarCode,
     math::Delta,
-    vle,
 };
+
+use super::vle;
 
 /// A run-length encoded element: a `value` repeated `count` times.
 ///

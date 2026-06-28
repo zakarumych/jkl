@@ -4,9 +4,15 @@
 //! while [`VarCode`] extends to bit-level variable-length encoding via
 //! [`WriteBits`] / [`ReadBits`].
 
-use std::{error::Error, io};
+use std::{
+    error::Error,
+    io::{self, Read, Write},
+};
 
-use crate::bits::{ReadBits, WriteBits};
+use crate::{
+    algos::vle::Vle,
+    bits::{ReadBits, WriteBits},
+};
 
 /// A fixed-size byte buffer that can be used as the serialized representation of a [`FixedCode`] value.
 ///
@@ -46,10 +52,7 @@ pub trait FixedCode: Sized {
     }
 }
 
-impl<const N: usize> FixedCode for [u8; N]
-where
-    [u8; N]: ByteArray,
-{
+impl<const N: usize> FixedCode for [u8; N] {
     const SIZE: usize = N;
     type Array = [u8; N];
     type Error = std::convert::Infallible;
@@ -87,18 +90,18 @@ macro_rules! impl_fixedcode_le_bytes {
 
 impl_fixedcode_le_bytes!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64);
 
-macro_rules! impl_fixedcode_tuple {
+macro_rules! impl_varcode_tuple {
     () => {
-        impl VarCode for () {
-            fn var_bit_len(&self) -> usize {
-                0
+        impl FixedCode for () {
+            const SIZE: usize = 0;
+            type Array = [u8; 0];
+            type Error = std::convert::Infallible;
+
+            fn fix_encode(&self) -> Self::Array {
+                []
             }
 
-            fn var_write(&self, _write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
-                Ok(())
-            }
-
-            fn var_read(_read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+            fn fix_decode(_input: &Self::Array) -> Result<Self, Self::Error> {
                 Ok(())
             }
         }
@@ -134,7 +137,7 @@ macro_rules! impl_fixedcode_tuple {
     };
 }
 
-for_tuple!(impl_fixedcode_tuple);
+for_tuple!(impl_varcode_tuple);
 
 /// A trait for variable-length, bit-level encoding and decoding.
 ///
@@ -168,5 +171,40 @@ where
         Self: Sized,
     {
         FixedCode::fix_read(read)
+    }
+}
+
+impl VarCode for String {
+    fn var_bit_len(&self) -> usize {
+        let len = self.len();
+        let len_bits = Vle(len).var_bit_len();
+        len_bits + len * 8
+    }
+
+    fn var_write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        let len = self.len();
+        Vle(len).var_write(write)?;
+        write.write_all(self.as_bytes())
+    }
+
+    fn var_read(read: &mut ReadBits<impl io::Read>) -> io::Result<Self> {
+        let len = Vle::var_read(read)?.0;
+        let mut buffer = vec![0u8; len];
+        read.read_exact(&mut buffer)?;
+        String::from_utf8(buffer).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+}
+
+impl VarCode for str {
+    fn var_bit_len(&self) -> usize {
+        let len = self.len();
+        let len_bits = Vle(len).var_bit_len();
+        len_bits + len * 8
+    }
+
+    fn var_write(&self, write: &mut WriteBits<impl io::Write>) -> io::Result<()> {
+        let len = self.len();
+        Vle(len).var_write(write)?;
+        write.write_all(self.as_bytes())
     }
 }

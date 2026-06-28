@@ -1,37 +1,34 @@
 use std::mem::size_of;
 
 use bytemuck::{AnyBitPattern, NoUninit};
-use jkl::image::{Dimensions, Extent, Image, ImageMut, ImageRef};
+use jkl::image::{Extent, Image, ImageMut, ImageRef};
 
 pub mod blocks;
 pub mod uploader;
 
 pub struct GpuPixels {
-    format: wgpu::TextureFormat,
-    buffer: wgpu::Buffer,
+    format: mev::PixelFormat,
+    buffer: mev::Buffer,
 }
 
 impl GpuPixels {
-    pub fn new(format: wgpu::TextureFormat, buffer: wgpu::Buffer) -> Self {
+    pub fn new(format: mev::PixelFormat, buffer: mev::Buffer) -> Self {
         GpuPixels { format, buffer }
     }
 }
 
-pub trait WgpuImage {
+pub trait MevImage {
     fn new(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        usage: wgpu::BufferUsages,
+        device: &mev::Device,
+        format: mev::PixelFormat,
+        usage: mev::BufferUsage,
         extent: Extent,
     ) -> Self;
 
-    fn map_on_submit(&self, mode: wgpu::MapMode, encoder: &mut wgpu::CommandEncoder);
-    fn unmap(&self);
-
     fn upload<T, U>(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        usage: wgpu::BufferUsages,
+        device: &mev::Device,
+        format: mev::PixelFormat,
+        usage: mev::BufferUsage,
         image: ImageRef<T>,
         map: impl Fn(T) -> U,
     ) -> Self
@@ -39,38 +36,32 @@ pub trait WgpuImage {
         T: Copy,
         U: NoUninit;
 
-    fn download<T, U>(&self, dst: ImageMut<T>, map: impl Fn(U) -> T)
+    fn download<T, U>(&mut self, dst: ImageMut<T>, map: impl Fn(U) -> T)
     where
         U: AnyBitPattern;
 
-    fn copy_to(&self, dst: &Self, encoder: &mut wgpu::CommandEncoder);
+    fn copy_to(&self, dst: &Self, encoder: &mut mev::CommandEncoder);
 
-    fn make_texture(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> wgpu::Texture;
+    fn make_image(&self, device: &mev::Device, encoder: &mut mev::CommandEncoder) -> mev::Image;
 
-    fn format(&self) -> wgpu::TextureFormat;
-    fn buffer(&self) -> &wgpu::Buffer;
+    fn format(&self) -> mev::PixelFormat;
+    fn buffer(&self) -> &mev::Buffer;
 }
 
-impl WgpuImage for Image<GpuPixels> {
+impl MevImage for Image<GpuPixels> {
     fn new(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        usage: wgpu::BufferUsages,
+        device: &mev::Device,
+        format: mev::PixelFormat,
+        usage: mev::BufferUsage,
         extent: Extent,
     ) -> Image<GpuPixels> {
         let dimsionsions = extent.dimensions();
         let raw_size = extent.raw_size();
 
-        let block_size = format
-            .block_copy_size(None)
-            .expect("Planar formats not supported");
+        let block_size = format.block_size();
 
         assert!(
-            256u32.is_multiple_of(block_size),
+            256usize.is_multiple_of(block_size),
             "Format size must divide 256 exactly"
         );
 
@@ -79,11 +70,10 @@ impl WgpuImage for Image<GpuPixels> {
         let row_stride = raw_size[0].div_ceil(row_align) * row_align;
         let plane_stride = row_stride * raw_size[1];
 
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("jkl-image-buffer"),
-            size: plane_stride as u64 * raw_size[2] as u64 * u64::from(block_size),
+        let buffer = device.new_buffer(mev::BufferDesc {
+            name: "jkl-image-buffer",
+            size: plane_stride * raw_size[2] * block_size,
             usage,
-            mapped_at_creation: false,
         });
 
         Image::with_stride(
@@ -94,18 +84,10 @@ impl WgpuImage for Image<GpuPixels> {
         )
     }
 
-    fn map_on_submit(&self, mode: wgpu::MapMode, encoder: &mut wgpu::CommandEncoder) {
-        encoder.map_buffer_on_submit(&self.data().buffer, mode, .., |_| {});
-    }
-
-    fn unmap(&self) {
-        self.data().buffer.unmap();
-    }
-
     fn upload<T, U>(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        usage: wgpu::BufferUsages,
+        device: &mev::Device,
+        format: mev::PixelFormat,
+        usage: mev::BufferUsage,
         image: ImageRef<T>,
         map: impl Fn(T) -> U,
     ) -> Image<GpuPixels>
@@ -126,12 +108,10 @@ impl WgpuImage for Image<GpuPixels> {
 
         let u_size = size_of::<U>();
 
-        let block_size = format
-            .block_copy_size(None)
-            .expect("Planar formats not supported");
+        let block_size = format.block_size();
 
         assert_eq!(
-            block_size, u_size as u32,
+            block_size, u_size,
             "Format block size does not match type size"
         );
 
@@ -140,35 +120,31 @@ impl WgpuImage for Image<GpuPixels> {
         let row_stride = raw_size[0].div_ceil(row_align) * row_align;
         let plane_stride = row_stride * raw_size[1];
 
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("jkl-image-buffer"),
-            size: plane_stride as u64 * raw_size[2] as u64 * u64::from(block_size),
-            usage,
-            mapped_at_creation: true,
+        let mut buffer = device.new_buffer(mev::BufferDesc {
+            name: "jkl-image-buffer",
+            size: plane_stride * raw_size[2] * block_size,
+            usage: usage | mev::BufferUsage::HOST_WRITE,
         });
 
-        {
-            let mut mapped = buffer.get_mapped_range_mut(..);
-
+        if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+            let dst = mapped.as_mut();
             let image = image.reinterpret_as_3d();
 
             for z in 0..raw_size[2] {
                 let plane_offset = z * plane_stride;
                 for y in 0..raw_size[1] {
                     let row_offset = plane_offset + y * row_stride;
-                    let mapped_row = &mut mapped[row_offset * u_size..];
+                    let dst_row = &mut dst[row_offset * u_size..];
 
                     for x in 0..raw_size[0] {
                         let pixel = *image.get_pixel(x, y, z);
                         let mapped_pixel = map(pixel);
                         let bytes = bytemuck::bytes_of(&mapped_pixel);
-                        mapped_row[x * u_size..][..u_size].copy_from_slice(bytes);
+                        dst_row[x * u_size..][..u_size].copy_from_slice(bytes);
                     }
                 }
             }
         }
-
-        buffer.unmap();
 
         Image::with_stride(
             dimsionsions,
@@ -178,7 +154,7 @@ impl WgpuImage for Image<GpuPixels> {
         )
     }
 
-    fn copy_to(&self, dst: &Image<GpuPixels>, encoder: &mut wgpu::CommandEncoder) {
+    fn copy_to(&self, dst: &Image<GpuPixels>, encoder: &mut mev::CommandEncoder) {
         assert_eq!(
             self.data().format,
             dst.data().format,
@@ -186,9 +162,7 @@ impl WgpuImage for Image<GpuPixels> {
         );
 
         let format = self.data().format;
-        let block_size = format
-            .block_copy_size(None)
-            .expect("Planar formats not supported");
+        let block_size = format.block_size();
 
         let src_extent = self.extent();
         let dst_extent = dst.extent();
@@ -206,6 +180,8 @@ impl WgpuImage for Image<GpuPixels> {
         let dst_row_stride = dst.row_stride();
         let dst_plane_stride = dst.plane_stride();
 
+        let mut encoder = encoder.copy();
+
         match (
             src_row_stride == dst_row_stride,
             src_plane_stride == dst_plane_stride,
@@ -221,7 +197,7 @@ impl WgpuImage for Image<GpuPixels> {
                     0,
                     &dst.data().buffer,
                     0,
-                    copy_len as u64 * u64::from(block_size),
+                    copy_len * block_size,
                 );
             }
             (true, false) => {
@@ -231,14 +207,14 @@ impl WgpuImage for Image<GpuPixels> {
                     let src_offset = z * src_plane_stride;
                     let dst_offset = z * dst_plane_stride;
 
-                    let copy_len = src_row_stride * (size[1] - 1) + size[0] * block_size as usize;
+                    let copy_len = src_row_stride * (size[1] - 1) + size[0] * block_size;
 
                     encoder.copy_buffer_to_buffer(
                         &self.data().buffer,
-                        src_offset as u64 * u64::from(block_size),
+                        src_offset * block_size,
                         &dst.data().buffer,
-                        dst_offset as u64 * u64::from(block_size),
-                        copy_len as u64 * u64::from(block_size),
+                        dst_offset * block_size,
+                        copy_len * block_size,
                     );
                 }
             }
@@ -250,14 +226,14 @@ impl WgpuImage for Image<GpuPixels> {
                         let src_offset = z * src_plane_stride + y * src_row_stride;
                         let dst_offset = z * dst_plane_stride + y * dst_row_stride;
 
-                        let copy_len = size[0] * block_size as usize;
+                        let copy_len = size[0] * block_size;
 
                         encoder.copy_buffer_to_buffer(
                             &self.data().buffer,
-                            src_offset as u64 * u64::from(block_size),
+                            src_offset * block_size,
                             &dst.data().buffer,
-                            dst_offset as u64 * u64::from(block_size),
-                            copy_len as u64 * u64::from(block_size),
+                            dst_offset * block_size,
+                            copy_len * block_size,
                         );
                     }
                 }
@@ -265,7 +241,7 @@ impl WgpuImage for Image<GpuPixels> {
         }
     }
 
-    fn download<T, U>(&self, mut dst: ImageMut<T>, map: impl Fn(U) -> T)
+    fn download<T, U>(&mut self, mut dst: ImageMut<T>, map: impl Fn(U) -> T)
     where
         U: AnyBitPattern,
     {
@@ -284,14 +260,10 @@ impl WgpuImage for Image<GpuPixels> {
 
         let u_size = size_of::<U>();
 
-        let block_size = self
-            .data()
-            .format
-            .block_copy_size(None)
-            .expect("Planar formats not supported");
+        let block_size = self.data().format.block_size();
 
         assert_eq!(
-            block_size, u_size as u32,
+            block_size, u_size,
             "Format block size does not match type size"
         );
 
@@ -303,9 +275,8 @@ impl WgpuImage for Image<GpuPixels> {
         let row_stride = raw_size[0].div_ceil(row_align) * row_align;
         let plane_stride = row_stride * raw_size[1];
 
-        {
-            let src = self.data().buffer.get_mapped_range(..);
-
+        if let Ok(mapped) = self.data_mut().buffer.read_mapped_range(..) {
+            let src = mapped.as_ref();
             let mut dst = dst.as_mut_3d();
 
             for z in 0..raw_size[2] {
@@ -326,67 +297,69 @@ impl WgpuImage for Image<GpuPixels> {
         }
     }
 
-    fn format(&self) -> wgpu::TextureFormat {
+    fn format(&self) -> mev::PixelFormat {
         self.data().format
     }
 
-    fn buffer(&self) -> &wgpu::Buffer {
+    fn buffer(&self) -> &mev::Buffer {
         &self.data().buffer
     }
 
-    fn make_texture(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> wgpu::Texture {
+    fn make_image(&self, device: &mev::Device, encoder: &mut mev::CommandEncoder) -> mev::Image {
         let extent = self.extent();
-        let raw_size = extent.raw_size();
         let format = self.data().format;
 
-        let (bw, bh) = format.block_dimensions();
-        let block_size = format
-            .block_copy_size(None)
-            .expect("Planar formats not supported");
+        let block_extent = format.block_extent();
+        let block_size = format.block_size();
 
-        let extent = wgpu::Extent3d {
-            width: raw_size[0] as u32 * bw,
-            height: raw_size[1] as u32 * bh,
-            depth_or_array_layers: raw_size[2] as u32,
+        let image_extent = match extent {
+            Extent::D1 { width } | Extent::D1Array { width, .. } => {
+                mev::ImageExtent::D1(mev::Extent1::new(width as u32 * block_extent.width()))
+            }
+
+            Extent::D2 { width, height } | Extent::D2Array { width, height, .. } => {
+                mev::ImageExtent::D2(mev::Extent2::new(
+                    width as u32 * block_extent.width(),
+                    height as u32 * block_extent.height(),
+                ))
+            }
+            Extent::D3 {
+                width,
+                height,
+                depth,
+            } => mev::ImageExtent::D3(mev::Extent3::new(
+                width as u32 * block_extent.width(),
+                height as u32 * block_extent.height(),
+                depth as u32,
+            )),
         };
 
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("jkl-image-texture"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: match self.dimensions() {
-                Dimensions::D1 | Dimensions::D1Array => wgpu::TextureDimension::D1,
-                Dimensions::D2 | Dimensions::D2Array => wgpu::TextureDimension::D2,
-                Dimensions::D3 => wgpu::TextureDimension::D3,
-            },
+        let layers = match extent {
+            Extent::D1 { .. } | Extent::D2 { .. } | Extent::D3 { .. } => 1,
+            Extent::D1Array { layers, .. } | Extent::D2Array { layers, .. } => layers as u32,
+        };
+
+        let image = device.new_image(mev::ImageDesc {
+            name: "jkl-image",
+            extent: image_extent,
             format,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+            levels: 1,
+            layers,
+            usage: mev::ImageUsage::TRANSFER_DST | mev::ImageUsage::SAMPLED,
         });
 
-        encoder.copy_buffer_to_texture(
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.data().buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.row_stride() as u32 * block_size),
-                    rows_per_image: Some((self.plane_stride() / self.row_stride()) as u32),
-                },
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            extent,
+        encoder.copy().copy_buffer_to_image(
+            &self.data().buffer,
+            0,
+            self.row_stride() * block_size,
+            self.plane_stride() * block_size,
+            &image,
+            mev::Offset::ZERO,
+            image_extent.into_3d(),
+            0..layers,
+            0,
         );
 
-        texture
+        image
     }
 }

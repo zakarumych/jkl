@@ -10,8 +10,9 @@ use crate::{
     bits::{ReadBits, WriteBits},
     encode::VarCode,
     math::Delta,
-    vle,
 };
+
+use super::vle;
 
 /// An LZ77 token: either a literal symbol or a back-reference into the sliding window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

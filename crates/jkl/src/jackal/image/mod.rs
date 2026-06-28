@@ -29,13 +29,13 @@
 //!
 //! ## Reading Images
 //!
-//! Use [`JackalReader`] to open and read JKLI files. The reader provides:
+//! Use [`JackalImageReader`] to open and read JKLI files. The reader provides:
 //! - Header and metadata inspection without full decompression
 //! - Tile offset information for random access
 //! - A [`JackalTileReader`] for efficient tile-by-tile decoding, requires user to provide generic type parameter for pixel format, which must match the image format.
 //!
 //! ```ignore
-//! let mut reader = JackalReader::open(file)?;
+//! let mut reader = JackalImageReader::open(file)?;
 //! if reader.format() == Format::RGB8 {
 //!     let mut tile_reader = reader.tile_reader::<Rgb8U>()?;
 //!     tile_reader.read_tile(0, tile_buffer)?;
@@ -58,26 +58,102 @@
 
 use std::{convert::Infallible, fmt, io};
 
+use smallvec::SmallVec;
+
 use crate::{
     bits::read_bits_scope,
     encode::{FixedCode, VarCode},
     image::{
-        Extent, Image2DMut, ImageRef,
+        Extent, Image2DMut, ImageRef, InvalidExtent,
         compress::{AnsCompressor, LZ77Compressor, RleCompressor},
-        format::Format,
+        format::{Format, InvalidFormat},
         tiles::{Tile, TileSize},
     },
+    jackal::InvalidMagic,
 };
 
-use self::{
-    format::{Offsets, Pixel, WriteOffsets},
-    header::JackalHeader,
-};
+use self::header::JackalImageHeader;
 
-pub use self::header::Compression;
+pub use self::{format::Pixel, header::Compression};
 
 mod format;
 mod header;
+
+/// Array of tile offsets in the Jackal file,
+/// provides population, reading and writing of tile offsets,
+/// to ensure that implementation is consistent across the codebase.
+pub(crate) struct Offsets {
+    array: SmallVec<[u64; 16]>,
+}
+
+impl Offsets {
+    pub fn read(len: usize, mut read: impl io::Read) -> io::Result<Self> {
+        let mut array = SmallVec::with_capacity(len);
+        for _ in 0..len {
+            let offset = u64::fix_read(&mut read)?;
+            array.push(offset);
+        }
+        Ok(Offsets { array })
+    }
+
+    pub fn slice(&self) -> &[u64] {
+        &self.array
+    }
+
+    pub fn bytes_size(&self) -> usize {
+        self.array.len() * <u64 as FixedCode>::SIZE
+    }
+}
+
+pub(crate) struct WriteOffsets {
+    offsets_start: u64,
+    offsets: Offsets,
+}
+
+impl WriteOffsets {
+    /// Creates a new Offsets object, reserves space for `len` offsets,
+    /// and seeks the output stream to the end of the reserved space.
+    pub fn new<W>(len: usize, write: &mut W) -> io::Result<Self>
+    where
+        W: io::Write + io::Seek,
+    {
+        let offsets_start = write.stream_position()?;
+        let offsets_len = u64::try_from(<u64 as FixedCode>::SIZE * len)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Too many tiles"))?; // 8 is the size of u64 in bytes
+        let offsets_end = offsets_start + offsets_len;
+
+        write.seek(io::SeekFrom::Start(offsets_end))?;
+
+        Ok(WriteOffsets {
+            offsets_start,
+            offsets: Offsets {
+                array: SmallVec::with_capacity(len),
+            },
+        })
+    }
+
+    pub fn push_next<W>(&mut self, write: &mut W) -> io::Result<()>
+    where
+        W: io::Seek,
+    {
+        let offset = write.stream_position()?;
+        self.offsets.array.push(offset);
+        Ok(())
+    }
+
+    /// Writes the offsets to the output stream at the reserved space.
+    pub fn write<W>(&self, write: &mut W) -> io::Result<()>
+    where
+        W: io::Write + io::Seek,
+    {
+        write.seek(io::SeekFrom::Start(self.offsets_start))?;
+
+        for offset in &self.offsets.array {
+            offset.fix_write(write)?;
+        }
+        Ok(())
+    }
+}
 
 /// Tile options for image compression.
 pub enum TileOptions {
@@ -95,8 +171,8 @@ pub enum TileOptions {
 }
 
 pub struct Options {
-    compression: Compression,
-    tile_options: TileOptions,
+    pub compression: Compression,
+    pub tile_options: TileOptions,
 }
 
 impl Default for Options {
@@ -146,44 +222,38 @@ impl Options {
     }
 }
 
-/// Encode entire image to the IO stream.
-///
-/// Uses options to determine the compression method and tile size.
-pub fn write_image<T>(
-    input: ImageRef<T>,
-    options: Options,
-    mut write: impl io::Write + io::Seek,
-) -> io::Result<()>
-where
-    T: Pixel,
-{
-    let extent = input.extent();
-
-    let tile_size = match options.tile_options {
+pub(crate) fn tile_size(tile_options: TileOptions, extent: Extent, format: Format) -> TileSize {
+    match tile_options {
         TileOptions::Optimal {
             flat_cost,
             size_cost,
         } => TileSize::find_optimal(
             extent,
-            T::FORMAT.tile_width_granularity(),
-            T::FORMAT.tile_height_granularity(),
+            format.tile_width_granularity(),
+            format.tile_height_granularity(),
             flat_cost,
             size_cost,
         ),
         TileOptions::Size(size) => size,
-    };
+    }
+}
 
-    let tiles_iter = tile_size.iter_tiles(extent).map(|tile| {
+pub(crate) fn write_tiles<T>(
+    input: ImageRef<T>,
+    compression: Compression,
+    tile_size: TileSize,
+    mut write: impl io::Write + io::Seek,
+) -> io::Result<()>
+where
+    T: Pixel,
+{
+    let tiles_iter = tile_size.iter_tiles(input.extent()).map(|tile| {
         input
             .get_plane(tile.plane)
             .get_range(tile.rect.x, tile.rect.y, tile.rect.w, tile.rect.h)
     });
 
-    let header = JackalHeader::new(options.compression, T::FORMAT, extent, 1, tile_size);
-
-    header.fix_write(&mut write)?;
-
-    match options.compression {
+    match compression {
         Compression::None => {
             // Simply write all pixels using fixed code.
 
@@ -208,6 +278,28 @@ where
             T::compress_images(tiles_iter, (RleCompressor, AnsCompressor), write)
         }
     }
+}
+
+/// Encode entire image to the IO stream.
+///
+/// Uses options to determine the compression method and tile size.
+pub fn write_image<T>(
+    input: ImageRef<T>,
+    options: Options,
+    mut write: impl io::Write + io::Seek,
+) -> io::Result<()>
+where
+    T: Pixel,
+{
+    let extent = input.extent();
+
+    let tile_size = tile_size(options.tile_options, extent, T::FORMAT);
+
+    let header = JackalImageHeader::new(options.compression, T::FORMAT, extent, 1, tile_size);
+
+    header.fix_write(&mut write)?;
+
+    write_tiles(input, options.compression, tile_size, write)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -248,6 +340,27 @@ impl From<Infallible> for DecodeError {
     }
 }
 
+impl From<InvalidMagic> for DecodeError {
+    fn from(_: InvalidMagic) -> Self {
+        DecodeError::InvalidMagic
+    }
+}
+
+impl From<InvalidFormat> for DecodeError {
+    fn from(_: InvalidFormat) -> Self {
+        DecodeError::InvalidFormat
+    }
+}
+
+impl From<InvalidExtent> for DecodeError {
+    fn from(error: InvalidExtent) -> Self {
+        match error {
+            InvalidExtent::InvalidDimensions => DecodeError::InvalidDimensions,
+            InvalidExtent::TooLarge => DecodeError::TooLarge,
+        }
+    }
+}
+
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -266,7 +379,7 @@ impl fmt::Display for DecodeError {
 impl std::error::Error for DecodeError {}
 
 /// Convenience reader object for reading Jackal Images from a stream.
-pub struct JackalReader<R> {
+pub struct JackalImageReader<R> {
     compression: Compression,
     format: Format,
     extent: Extent,
@@ -335,8 +448,8 @@ where
     }
 }
 
-impl<R> JackalReader<R> {
-    /// Opens a JackalReader, reads the header and tile offsets from the stream.
+impl<R> JackalImageReader<R> {
+    /// Opens a JackalImageReader, reads the header and tile offsets from the stream.
     pub fn open(mut read: R) -> io::Result<Self>
     where
         R: io::Read + io::Seek,
@@ -344,52 +457,92 @@ impl<R> JackalReader<R> {
         let end = read.seek(io::SeekFrom::End(0))?;
         read.seek(io::SeekFrom::Start(0))?;
 
-        let header = JackalHeader::fix_read(&mut read)?;
+        let header = JackalImageHeader::fix_read(&mut read)?;
 
         // Read tile offsets.
-        let tiles_count = header.tiles_count();
+        let tiles_count = header.tile_size.tiles_count(header.extent);
         let offsets = Offsets::read(tiles_count, &mut read)?;
 
-        Ok(JackalReader {
-            compression: header.compression(),
-            format: header.format(),
-            extent: header.extent(),
-            tile_size: header.tile_size(),
+        Ok(JackalImageReader {
+            compression: header.compression,
+            format: header.format,
+            extent: header.extent,
+            tile_size: header.tile_size,
             offsets,
             read,
             end,
         })
     }
 
+    pub(crate) fn new(
+        compression: Compression,
+        format: Format,
+        extent: Extent,
+        tile_size: TileSize,
+        offsets: Offsets,
+        read: R,
+        end: u64,
+    ) -> Self {
+        JackalImageReader {
+            compression,
+            format,
+            extent,
+            tile_size,
+            offsets,
+            read,
+            end,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn reader(&mut self) -> &mut R {
+        &mut self.read
+    }
+
+    /// Returns image format.
+    #[inline]
     pub fn format(&self) -> Format {
         self.format
     }
 
+    /// Returns compression method.
+    #[inline]
     pub fn compression(&self) -> Compression {
         self.compression
     }
 
+    /// Returns image extent.
+    #[inline]
     pub fn extent(&self) -> Extent {
         self.extent
     }
 
+    /// Returns number of tiles in the image.
+    #[inline]
     pub fn tiles(&self) -> usize {
         self.offsets.slice().len()
     }
 
+    /// Returns slice of tile offsets.
+    #[inline]
     pub fn tile_offsets(&self) -> &[u64] {
         self.offsets.slice()
     }
 
+    /// Returns tile size.
+    #[inline]
     pub fn tile_size(&self) -> TileSize {
         self.tile_size
     }
 
+    /// Returns tile information for the given tile index.
+    #[inline]
     pub fn tile(&self, tile_index: usize) -> Tile {
         self.tile_size.tile(self.extent, tile_index)
     }
 
-    pub fn pixel_reader<T>(&mut self) -> io::Result<JackalTileReader<'_, R, T>>
+    /// Returns an object for reading individual tiles from the image.
+    pub fn tile_reader<T>(&mut self) -> io::Result<JackalTileReader<'_, R, T>>
     where
         T: Pixel,
         R: io::Read + io::Seek,
@@ -400,7 +553,7 @@ impl<R> JackalReader<R> {
             "Pixel type format does not match image format"
         );
 
-        let context_pos = JackalHeader::SIZE + self.offsets.bytes_size();
+        let context_pos = JackalImageHeader::SIZE + self.offsets.bytes_size();
         let context_pos = u64::try_from(context_pos)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
 
@@ -434,13 +587,15 @@ impl<R> JackalReader<R> {
     }
 
     /// Returns payload length of all tiles combined
-    pub fn payload_len(&self) -> u64 {
+    #[inline]
+    pub fn tiles_payload_len(&self) -> u64 {
         match self.offsets.slice().first() {
             None => 0,
             Some(&start) => self.end - start,
         }
     }
 
+    /// Copies compressed payload of the tile into destination buffer.
     pub fn copy_tile_payload_into(&mut self, tile_index: usize, dst: &mut [u8]) -> io::Result<()>
     where
         R: io::Read + io::Seek,
@@ -474,11 +629,12 @@ impl<R> JackalReader<R> {
         }
     }
 
+    /// Returns a reader for the context portion of the image.
     pub fn context_reader(&mut self) -> io::Result<impl io::Read + '_>
     where
         R: io::Read + io::Seek,
     {
-        let start = JackalHeader::SIZE + self.offsets.bytes_size();
+        let start = JackalImageHeader::SIZE + self.offsets.bytes_size();
         let start = u64::try_from(start)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, DecodeError::TooLarge))?;
 
@@ -610,11 +766,11 @@ fn jkli_smoke_test_rgb() {
     )
     .unwrap();
 
-    let mut reader = JackalReader::open(std::io::Cursor::new(&buffer[..])).unwrap();
+    let mut reader = JackalImageReader::open(std::io::Cursor::new(&buffer[..])).unwrap();
 
     assert_eq!(reader.format(), Format::RGB8);
 
-    let mut reader = reader.pixel_reader::<Rgb8U>().unwrap();
+    let mut reader = reader.tile_reader::<Rgb8U>().unwrap();
 
     assert_eq!(reader.extent(), extent);
 
@@ -672,11 +828,11 @@ fn jkli_smoke_test_bc1() {
     )
     .unwrap();
 
-    let mut reader = JackalReader::open(std::io::Cursor::new(&buffer[..])).unwrap();
+    let mut reader = JackalImageReader::open(std::io::Cursor::new(&buffer[..])).unwrap();
 
     assert_eq!(reader.format(), Format::BC1);
 
-    let mut reader = reader.pixel_reader::<Block>().unwrap();
+    let mut reader = reader.tile_reader::<Block>().unwrap();
 
     assert_eq!(reader.extent(), extent);
 

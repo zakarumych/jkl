@@ -13,8 +13,9 @@ use crate::{
     bits::{ReadBits, WriteBits},
     encode::VarCode,
     math::Delta,
-    vle,
 };
+
+use super::vle;
 
 /// An LZ78 token: a dictionary prefix index paired with a trailing literal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]

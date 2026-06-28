@@ -243,19 +243,10 @@ macro_rules! impl_fixedcode_zero {
     };
 }
 
-pub mod ans;
+pub mod algos;
 pub mod bits;
-pub mod cluster_fit;
 pub mod defer;
 pub mod encode;
 pub mod image;
 pub mod jackal;
-pub mod lz77;
-pub mod lz78;
 pub mod math;
-pub mod max_rects;
-pub mod palette;
-pub mod rle;
-pub mod vle;
-pub mod z_curve;
-pub mod zigzaq;

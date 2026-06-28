@@ -1,11 +1,12 @@
 use std::{hash::Hash, io, num::NonZero};
 
 use crate::{
-    ans,
+    algos::{
+        ans, lz77,
+        rle::{Rle, rle},
+    },
     encode::VarCode,
-    lz77,
     math::Delta,
-    rle::{Rle, rle},
 };
 
 /// Trait for types viable as symbols for compression.

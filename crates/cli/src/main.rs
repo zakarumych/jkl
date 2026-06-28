@@ -14,7 +14,7 @@ use jkl::{
         format::Format,
         quality,
     },
-    jackal::image::{Compression, JackalReader, Options},
+    jackal::image::{Compression, JackalImageReader, Options},
     math::{Rgb8U, Rgba8U},
 };
 use jkl_wgpu::image::{WgpuImage, blocks::BlockCompressor};
@@ -368,7 +368,7 @@ fn load_regular_image_rgba(path: &Path) -> Result<SourceImage> {
 fn load_jkli(path: &Path) -> Result<SourceImage> {
     let file = File::open(path)
         .with_context(|| format!("failed to open JKLI file: {}", path.display()))?;
-    let mut reader = JackalReader::open(file)
+    let mut reader = JackalImageReader::open(file)
         .with_context(|| format!("failed to read JKLI header from: {}", path.display()))?;
 
     match reader.format() {
@@ -382,7 +382,7 @@ fn load_jkli(path: &Path) -> Result<SourceImage> {
                 vec![Rgb8U::BLACK; width * height].into_boxed_slice(),
             );
             let mut tile_reader = reader
-                .pixel_reader::<Rgb8U>()
+                .tile_reader::<Rgb8U>()
                 .context("failed to open RGB8 tile reader")?;
 
             let tiles_iter = tile_reader
@@ -418,7 +418,7 @@ fn load_jkli(path: &Path) -> Result<SourceImage> {
                 vec![bc1::Block::BLACK; width_blocks * height_blocks].into_boxed_slice(),
             );
             let mut tile_reader = reader
-                .pixel_reader::<bc1::Block>()
+                .tile_reader::<bc1::Block>()
                 .context("failed to open BC1 tile reader")?;
 
             let tiles_iter = tile_reader.tile_size().iter_tiles(Extent::D2 {
@@ -455,7 +455,7 @@ fn load_jkli(path: &Path) -> Result<SourceImage> {
                 vec![bc2::Block::BLACK; width_blocks * height_blocks].into_boxed_slice(),
             );
             let mut tile_reader = reader
-                .pixel_reader::<bc2::Block>()
+                .tile_reader::<bc2::Block>()
                 .context("failed to open BC2 tile reader")?;
 
             let tiles_iter = tile_reader.tile_size().iter_tiles(Extent::D2 {

@@ -1,3 +1,7 @@
+use std::fmt;
+
+use crate::encode::FixedCode;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum Format {
@@ -90,5 +94,49 @@ impl Format {
             | Format::BC6
             | Format::BC7 => 4,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct InvalidFormat;
+
+impl fmt::Display for InvalidFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Invalid format")
+    }
+}
+
+impl std::error::Error for InvalidFormat {}
+
+impl FixedCode for Format {
+    const SIZE: usize = 2;
+    type Array = [u8; 2];
+    type Error = InvalidFormat;
+
+    #[inline]
+    fn fix_encode(&self) -> [u8; 2] {
+        (*self as u16).to_le_bytes()
+    }
+
+    #[inline]
+    fn fix_decode(bytes: &[u8; 2]) -> Result<Self, InvalidFormat> {
+        let value = u16::from_le_bytes(*bytes);
+
+        let format = match value {
+            0 => Format::R8,
+            1 => Format::RG8,
+            2 => Format::RGB8,
+            3 => Format::RGBA8,
+            256 => Format::BC1,
+            257 => Format::BC2,
+            258 => Format::BC3,
+            259 => Format::BC4,
+            260 => Format::BC5,
+            261 => Format::BC6,
+            262 => Format::BC7,
+            _ => return Err(InvalidFormat),
+        };
+
+        Ok(format)
     }
 }

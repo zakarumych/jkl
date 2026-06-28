@@ -7,7 +7,7 @@
 use std::{convert::Infallible, mem::swap};
 
 use crate::{
-    cluster_fit::cluster_fit,
+    algos::cluster_fit::cluster_fit,
     math::{R8U, R32F},
 };
 

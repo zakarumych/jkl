@@ -6,7 +6,7 @@
 use std::{convert::Infallible, mem::swap};
 
 use crate::{
-    cluster_fit::cluster_fit,
+    algos::cluster_fit::cluster_fit,
     image::{ImageMut, ImageRef},
     math::{Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F},
 };

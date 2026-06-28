@@ -12,8 +12,9 @@ use crate::{
     bits::{ReadBits, WriteBits},
     encode::VarCode,
     math::Delta,
-    vle,
 };
+
+use super::vle;
 
 /// Symbol table entry containing the symbol, its frequency, and its cumulative frequency.
 #[derive(Clone, Copy, Debug)]

@@ -5,10 +5,7 @@
 use smallvec::SmallVec;
 
 use crate::{
-    image::{
-        Image1D, Image1DMut, Image1DRef, Image2D, Image2DMut, Image2DRef, OwnedImage1D,
-        OwnedImage2D,
-    },
+    image::{Image1DMut, Image1DRef, Image2DMut, Image2DRef},
     math::{R8U, R32F, Rg8U, Rg32F, Rgb8U, Rgb32F, Rgba8U, Rgba32F},
 };
 

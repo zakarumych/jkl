@@ -1,5 +1,5 @@
 [workspace]
-members = ["jkl", "cli", "experiments", "gui", "wgpu", "app"]
+members = ["jkl", "cli", "experiments", "gui", "wgpu", "app", "mev"]
 resolver = "2"
 
 [workspace.package]
@@ -17,3 +17,4 @@ wgpu = "27"
 bytemuck = "1.20"
 num-rational = "0.4"
 futures = "0.3"
+mev = { path = "../../mev" }

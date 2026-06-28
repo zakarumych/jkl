@@ -1,8 +1,7 @@
 use std::{hash::Hash, io};
 
-use smallvec::SmallVec;
-
 use crate::{
+    algos::vle::Vle,
     bits::{ReadBits, write_bits_scope},
     encode::{FixedCode, VarCode},
     image::{
@@ -11,8 +10,8 @@ use crate::{
         compress::Compressor,
         format::Format,
     },
+    jackal::image::WriteOffsets,
     math::{Rgb8U, Rgb565, Rgba8U},
-    vle::Vle,
 };
 
 /// This trait is an interface for compression images.
@@ -533,80 +532,4 @@ where
         Ok(token) => Some(Ok(token)),
         Err(err) => Some(Err(err)),
     })
-}
-
-/// Array of tile offsets in the Jackal file,
-/// provides population, reading and writing of tile offsets,
-/// to ensure that implementation is consistent across the codebase.
-pub(super) struct Offsets {
-    array: SmallVec<[u64; 16]>,
-}
-
-impl Offsets {
-    pub fn read(len: usize, mut read: impl io::Read) -> io::Result<Self> {
-        let mut array = SmallVec::<[u64; 16]>::with_capacity(len);
-        for _ in 0..len {
-            let offset = u64::fix_read(&mut read)?;
-            array.push(offset);
-        }
-        Ok(Offsets { array })
-    }
-
-    pub fn slice(&self) -> &[u64] {
-        &self.array
-    }
-
-    pub fn bytes_size(&self) -> usize {
-        self.array.len() * <u64 as FixedCode>::SIZE
-    }
-}
-
-pub(super) struct WriteOffsets {
-    offsets_start: u64,
-    offsets: Offsets,
-}
-
-impl WriteOffsets {
-    /// Creates a new Offsets object, reserves space for `len` offsets,
-    /// and seeks the output stream to the end of the reserved space.
-    pub fn new<W>(len: usize, write: &mut W) -> io::Result<Self>
-    where
-        W: io::Write + io::Seek,
-    {
-        let offsets_start = write.stream_position()?;
-        let offsets_len = u64::try_from(<u64 as FixedCode>::SIZE * len)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Too many tiles"))?; // 8 is the size of u64 in bytes
-        let offsets_end = offsets_start + offsets_len;
-
-        write.seek(io::SeekFrom::Start(offsets_end))?;
-
-        Ok(WriteOffsets {
-            offsets_start,
-            offsets: Offsets {
-                array: SmallVec::with_capacity(len),
-            },
-        })
-    }
-
-    pub fn push_next<W>(&mut self, write: &mut W) -> io::Result<()>
-    where
-        W: io::Seek,
-    {
-        let offset = write.stream_position()?;
-        self.offsets.array.push(offset);
-        Ok(())
-    }
-
-    /// Writes the offsets to the output stream at the reserved space.
-    pub fn write<W>(&self, write: &mut W) -> io::Result<()>
-    where
-        W: io::Write + io::Seek,
-    {
-        write.seek(io::SeekFrom::Start(self.offsets_start))?;
-
-        for offset in &self.offsets.array {
-            offset.fix_write(write)?;
-        }
-        Ok(())
-    }
 }

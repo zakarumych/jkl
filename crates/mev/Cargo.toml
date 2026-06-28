@@ -1,0 +1,10 @@
+[package]
+name = "jkl-mev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jkl = { path = "../jkl" }
+mev.workspace = true
+bytemuck = { workspace = true }

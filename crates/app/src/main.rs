@@ -240,7 +240,7 @@ fn gpu_block_encoder(
 fn rgba_to_gpu(
     input: &Image,
     device: &wgpu::Device,
-) -> jkl::image::Image<jkl_wgpu::image::WgpuPixels> {
+) -> jkl::image::Image<jkl_wgpu::image::GpuPixels> {
     use jkl_wgpu::image::WgpuImage;
 
     let w = input.width();
@@ -256,7 +256,7 @@ fn rgba_to_gpu(
         _ => unreachable!(),
     };
 
-    <jkl::image::Image<jkl_wgpu::image::WgpuPixels> as WgpuImage>::upload(
+    <jkl::image::Image<jkl_wgpu::image::GpuPixels> as WgpuImage>::upload(
         device,
         wgpu::TextureFormat::Rgba8Unorm,
         wgpu::BufferUsages::STORAGE,
@@ -278,8 +278,8 @@ fn gpu_encode_bc1(
 
     let [bw, bh, _] = gpu_output.extent().raw_size();
 
-    let staging: jkl::image::Image<jkl_wgpu::image::WgpuPixels> =
-        <jkl::image::Image<jkl_wgpu::image::WgpuPixels> as WgpuImage>::new(
+    let staging: jkl::image::Image<jkl_wgpu::image::GpuPixels> =
+        <jkl::image::Image<jkl_wgpu::image::GpuPixels> as WgpuImage>::new(
             device,
             wgpu::TextureFormat::Bc1RgbaUnorm,
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
@@ -331,8 +331,8 @@ fn gpu_encode_bc2(
 
     let [bw, bh, _] = gpu_output.extent().raw_size();
 
-    let staging: jkl::image::Image<jkl_wgpu::image::WgpuPixels> =
-        <jkl::image::Image<jkl_wgpu::image::WgpuPixels> as WgpuImage>::new(
+    let staging: jkl::image::Image<jkl_wgpu::image::GpuPixels> =
+        <jkl::image::Image<jkl_wgpu::image::GpuPixels> as WgpuImage>::new(
             device,
             wgpu::TextureFormat::Bc2RgbaUnorm,
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,

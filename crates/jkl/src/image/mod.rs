@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
-use crate::image::convert::IntoFormat;
+use crate::{encode::FixedCode, image::convert::IntoFormat};
 
 pub mod block;
 pub mod compress;
@@ -155,6 +155,86 @@ impl Extent {
                 layers: value[2],
             }),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum InvalidExtent {
+    InvalidDimensions,
+    TooLarge,
+}
+
+impl fmt::Display for InvalidExtent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InvalidExtent::InvalidDimensions => write!(f, "Invalid dimensions for extent"),
+            InvalidExtent::TooLarge => write!(f, "Extent dimensions are too large"),
+        }
+    }
+}
+
+impl std::error::Error for InvalidExtent {}
+
+impl FixedCode for Extent {
+    const SIZE: usize = 25;
+    type Array = [u8; 25];
+    type Error = InvalidExtent;
+
+    fn fix_encode(&self) -> [u8; 25] {
+        let mut output = [0u8; 25];
+        output[0] = match self.dimensions() {
+            Dimensions::D1 => 0u8,
+            Dimensions::D2 => 1u8,
+            Dimensions::D3 => 2u8,
+            Dimensions::D1Array => 3u8,
+            Dimensions::D2Array => 4u8,
+        };
+
+        let raw_size = self.raw_size();
+
+        output[1..9].copy_from_slice(
+            &u64::try_from(raw_size[0])
+                .expect("Dimension exceeds u64::MAX")
+                .to_le_bytes(),
+        );
+        output[9..17].copy_from_slice(
+            &u64::try_from(raw_size[1])
+                .expect("Dimension exceeds u64::MAX")
+                .to_le_bytes(),
+        );
+        output[17..25].copy_from_slice(
+            &u64::try_from(raw_size[2])
+                .expect("Dimension exceeds u64::MAX")
+                .to_le_bytes(),
+        );
+        output
+    }
+
+    fn fix_decode(input: &[u8; 25]) -> Result<Self, InvalidExtent> {
+        let dimensions = match input[0] {
+            0u8 => Dimensions::D1,
+            1u8 => Dimensions::D2,
+            2u8 => Dimensions::D3,
+            3u8 => Dimensions::D1Array,
+            4u8 => Dimensions::D2Array,
+            _ => return Err(InvalidExtent::InvalidDimensions),
+        };
+
+        let width = u64::from_le_bytes(*input[1..9].as_array().unwrap())
+            .try_into()
+            .map_err(|_| InvalidExtent::TooLarge)?;
+        let height = u64::from_le_bytes(*input[9..17].as_array().unwrap())
+            .try_into()
+            .map_err(|_| InvalidExtent::TooLarge)?;
+        let depth = u64::from_le_bytes(*input[17..25].as_array().unwrap())
+            .try_into()
+            .map_err(|_| InvalidExtent::TooLarge)?;
+
+        let raw_size = [width, height, depth];
+
+        let extent =
+            Extent::from_raw_size(raw_size, dimensions).ok_or(InvalidExtent::InvalidDimensions)?;
+        Ok(extent)
     }
 }
 

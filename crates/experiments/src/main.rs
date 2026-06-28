@@ -387,7 +387,7 @@ impl PixelValue {
             PixelValue::BC1(block) => {
                 block.color0.bits() as usize * 43
                     + block.color1.bits() as usize * 31
-                    + u32::from_le_bytes(block.texels) as usize
+                    + u32::from_le_bytes(block.indices) as usize
             }
         }
     }
@@ -1147,7 +1147,7 @@ impl Filter {
                 ) => PixelValue::BC1(bc1::Block {
                     color0: paeth_rgb565(a.color0, b.color0, c.color0, t.color0),
                     color1: paeth_rgb565(a.color1, b.color1, c.color1, t.color1),
-                    texels: t.texels,
+                    indices: t.indices,
                 }),
                 _ => unreachable!(),
             },
@@ -1157,7 +1157,7 @@ impl Filter {
                 PixelValue::BC1(t) => PixelValue::BC1(bc1::Block {
                     color0: gamma_g_rgb565(t.color0),
                     color1: gamma_g_rgb565(t.color1),
-                    texels: t.texels,
+                    indices: t.indices,
                 }),
             },
             Filter::BC1 => {
@@ -1971,7 +1971,7 @@ impl LZ77CalculatorNode {
 
                                 match p {
                                     PixelValue::BC1(block) => {
-                                        encoder.encode(block.texels, &mut ebs);
+                                        encoder.encode(block.indices, &mut ebs);
                                     }
                                     _ => {}
                                 }
@@ -2316,7 +2316,7 @@ impl LZ78CalculatorNode {
 
                                 match p {
                                     PixelValue::BC1(block) => {
-                                        ebs.extend(encoder.encode(block.texels));
+                                        ebs.extend(encoder.encode(block.indices));
                                     }
                                     _ => {}
                                 }
@@ -2667,7 +2667,7 @@ impl RansCalculatorNode {
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
                     let image = &image;
                     (0..image.height()).flat_map(move |y| match image.get(x, y) {
-                        PixelValue::BC1(b) => b.texels,
+                        PixelValue::BC1(b) => b.indices,
                         _ => unreachable!(),
                     })
                 }));
@@ -2735,16 +2735,16 @@ impl RansCalculatorNode {
 
                         let mut emitted = 0;
                         rev_data.clone().for_each(|p| {
-                            if let Some(_) = encoder.encode(p.texels[0]) {
+                            if let Some(_) = encoder.encode(p.indices[0]) {
                                 emitted += 32;
                             }
-                            if let Some(_) = encoder.encode(p.texels[1]) {
+                            if let Some(_) = encoder.encode(p.indices[1]) {
                                 emitted += 32;
                             }
-                            if let Some(_) = encoder.encode(p.texels[2]) {
+                            if let Some(_) = encoder.encode(p.indices[2]) {
                                 emitted += 32;
                             }
-                            if let Some(_) = encoder.encode(p.texels[3]) {
+                            if let Some(_) = encoder.encode(p.indices[3]) {
                                 emitted += 32;
                             }
                         });
@@ -3244,7 +3244,7 @@ impl LZ77RansCalculatorNode {
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
                     let image = &image;
                     (0..image.height()).flat_map(move |y| match image.get(x, y) {
-                        PixelValue::BC1(b) => b.texels,
+                        PixelValue::BC1(b) => b.indices,
                         _ => unreachable!(),
                     })
                 }));
@@ -3321,16 +3321,16 @@ impl LZ77RansCalculatorNode {
 
                                 match p {
                                     PixelValue::BC1(b) => {
-                                        if let Some(_) = texel_rans.encode(b.texels[0]) {
+                                        if let Some(_) = texel_rans.encode(b.indices[0]) {
                                             emitted += 32;
                                         }
-                                        if let Some(_) = texel_rans.encode(b.texels[1]) {
+                                        if let Some(_) = texel_rans.encode(b.indices[1]) {
                                             emitted += 32;
                                         }
-                                        if let Some(_) = texel_rans.encode(b.texels[2]) {
+                                        if let Some(_) = texel_rans.encode(b.indices[2]) {
                                             emitted += 32;
                                         }
-                                        if let Some(_) = texel_rans.encode(b.texels[3]) {
+                                        if let Some(_) = texel_rans.encode(b.indices[3]) {
                                             emitted += 32;
                                         }
                                     }
@@ -3854,7 +3854,7 @@ impl LZ78RansCalculatorNode {
                 let texel_ctx = jkl::ans::Context::from_input((0..image.width()).flat_map(|x| {
                     let image = &image;
                     (0..image.height()).map(move |y| match image.get(x, y) {
-                        PixelValue::BC1(b) => b.texels,
+                        PixelValue::BC1(b) => b.indices,
                         _ => unreachable!(),
                     })
                 }));
@@ -3932,7 +3932,7 @@ impl LZ78RansCalculatorNode {
 
                                 match p {
                                     PixelValue::BC1(b) => {
-                                        if let Some(_) = texel_rans.encode(b.texels) {
+                                        if let Some(_) = texel_rans.encode(b.indices) {
                                             emitted += 32;
                                         }
                                     }
@@ -5065,7 +5065,7 @@ impl PaletteNode {
                                 *pixel = bc1::Block {
                                     color0: pixel.color0,
                                     color1: Rgb565::BLACK,
-                                    texels: [0x00; 4],
+                                    indices: [0x00; 4],
                                 };
                             }
                         } else {
@@ -5206,7 +5206,7 @@ fn bc1_delta(a: bc1::Block, b: bc1::Block) -> Vle<u64> {
     let bi = interleave16_2(b0, b1);
 
     let hi = bi - ai;
-    let lo = u32::from_le_bytes(b.texels);
+    let lo = u32::from_le_bytes(b.indices);
     Vle(((hi as u64) << 32) | lo as u64)
 }
 

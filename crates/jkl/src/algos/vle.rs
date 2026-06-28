@@ -398,7 +398,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::zigzaq::ZigZag;
+    use crate::algos::zigzaq::ZigZag;
 
     use super::*;
 

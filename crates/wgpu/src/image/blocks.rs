@@ -1,7 +1,7 @@
 use jkl::image::Image;
 use wgpu::util::DeviceExt;
 
-use crate::image::WgpuPixels;
+use crate::image::GpuPixels;
 
 const BINOM_WGSL: &'static str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/binom.wgsl"));
@@ -81,23 +81,16 @@ impl BlockCompressor {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
             ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("jkl-blocks-pl"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            push_constant_ranges: &[wgpu::PushConstantRange {
+                stages: wgpu::ShaderStages::COMPUTE,
+                range: 0..std::mem::size_of::<Params>() as u32,
+            }],
         });
 
         let bc1 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -127,12 +120,12 @@ impl BlockCompressor {
 
     pub fn compress_rgba_to_bc1(
         &self,
-        image: Image<WgpuPixels>,
+        image: Image<GpuPixels>,
         alpha_threshold: f32,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         batch_size: u32,
-    ) -> Image<WgpuPixels> {
+    ) -> Image<GpuPixels> {
         assert_ne!(batch_size, 0);
 
         let batch_size = usize::try_from(batch_size).unwrap_or(1 << 30);
@@ -167,6 +160,22 @@ impl BlockCompressor {
         let batch_height = usize::min(out_height, batch_size / out_width).max(1);
         let batch_width = usize::min(out_width, batch_size);
 
+        // One bind group is shared across all batches since the input and output buffers are the same.
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("jkl-wgpu-decode-bg"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: image.data().buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+            ],
+        });
+
         for z_offset in (0..layers).step_by(batch_layers) {
             debug_assert!(u32::try_from(z_offset).is_ok());
             let this_batch_layers = usize::min(batch_layers, layers - z_offset);
@@ -179,9 +188,21 @@ impl BlockCompressor {
                     debug_assert!(u32::try_from(x_offset).is_ok());
                     let this_batch_width = usize::min(batch_width, out_width - x_offset);
 
-                    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("jkl-blocks-params"),
-                        contents: bytemuck::cast_slice(&[Params {
+                    let mut batch_encoder =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("jkl-bc1-batch-encoder"),
+                        });
+                    {
+                        let mut cpass =
+                            batch_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("jkl-bc1-compress-pass"),
+                                timestamp_writes: None,
+                            });
+
+                        cpass.set_pipeline(&self.bc1);
+                        cpass.set_bind_group(0, &bind_group, &[]);
+
+                        let params = Params {
                             in_width: in_width as u32,
                             in_height: in_height as u32,
                             layers: layers as u32,
@@ -194,41 +215,9 @@ impl BlockCompressor {
                             y_offset: y_offset as u32,
                             z_offset: z_offset as u32,
                             _pad: 0,
-                        }]),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
+                        };
 
-                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("jkl-wgpu-decode-bg"),
-                        layout: &self.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: image.data().buffer.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: out_buf.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: params_buf.as_entire_binding(),
-                            },
-                        ],
-                    });
-
-                    let mut batch_encoder =
-                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("jkl-bc1-batch-encoder"),
-                        });
-                    {
-                        let mut cpass =
-                            batch_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                label: Some("jkl-bc1-compress-pass"),
-                                timestamp_writes: None,
-                            });
-                        cpass.set_pipeline(&self.bc1);
-                        cpass.set_bind_group(0, &bind_group, &[]);
+                        cpass.set_push_constants(0, bytemuck::bytes_of(&params));
                         cpass.dispatch_workgroups(
                             this_batch_width as u32,
                             this_batch_height as u32,
@@ -244,17 +233,17 @@ impl BlockCompressor {
             dim,
             [out_width, out_height, layers],
             [out_row_stride, out_plane_stride],
-            WgpuPixels::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
+            GpuPixels::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
         )
     }
 
     pub fn compress_rgba_to_bc2(
         &self,
-        image: Image<WgpuPixels>,
+        image: Image<GpuPixels>,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         batch_size: u32,
-    ) -> Image<WgpuPixels> {
+    ) -> Image<GpuPixels> {
         assert_ne!(batch_size, 0);
 
         let batch_size = usize::try_from(batch_size).unwrap_or(1 << 30);
@@ -364,7 +353,7 @@ impl BlockCompressor {
             dim,
             [out_width, out_height, layers],
             [out_row_stride, out_plane_stride],
-            WgpuPixels::new(wgpu::TextureFormat::Bc2RgbaUnorm, out_buf),
+            GpuPixels::new(wgpu::TextureFormat::Bc2RgbaUnorm, out_buf),
         )
     }
 }
