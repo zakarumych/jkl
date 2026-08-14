@@ -37,7 +37,7 @@ struct Params {
     z_offset: u32,
 }
 
-var<push_constant> params: Params;
+var<immediate> params: Params;
 
 fn div_ceil(a: u32, b: u32) -> u32 {
     let rem = a % b;

@@ -38,8 +38,7 @@ struct Params {
     z_offset: u32,
 }
 
-@group(0) @binding(2)
-var<uniform> params: Params;
+var<immediate> params: Params;
 
 // Workgroup shared memory
 var<workgroup> shared_sample_count: u32;

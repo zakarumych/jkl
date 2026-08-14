@@ -86,11 +86,8 @@ impl BlockCompressor {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("jkl-blocks-pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[wgpu::PushConstantRange {
-                stages: wgpu::ShaderStages::COMPUTE,
-                range: 0..std::mem::size_of::<Params>() as u32,
-            }],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: std::mem::size_of::<Params>() as u32,
         });
 
         let bc1 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -217,7 +214,7 @@ impl BlockCompressor {
                             _pad: 0,
                         };
 
-                        cpass.set_push_constants(0, bytemuck::bytes_of(&params));
+                        cpass.set_immediates(0, bytemuck::bytes_of(&params));
                         cpass.dispatch_workgroups(
                             this_batch_width as u32,
                             this_batch_height as u32,

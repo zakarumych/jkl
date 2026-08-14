@@ -233,18 +233,11 @@ impl Pixel for bc1::Block {
             &mut colors_tokens,
         )?;
 
-        let total_colors_tokens: usize = colors_tokens.iter().map(|tile| tile.len()).sum();
-
         let mut indices_tokens = Vec::new();
         let texel_cx = compressor.compress_symbols(
             input.map(|image| image.iter_pixels().flat_map(|b| b.indices)),
             &mut indices_tokens,
         )?;
-
-        let total_indices_tokens: usize = indices_tokens.iter().map(|tile| tile.len()).sum();
-
-        dbg!(total_colors_tokens * 4);
-        dbg!(total_indices_tokens * 4);
 
         assert_eq!(
             colors_tokens.len(),

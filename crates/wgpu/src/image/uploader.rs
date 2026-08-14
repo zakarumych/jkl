@@ -135,11 +135,8 @@ impl Uploader {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("jkl-wgpu-rans-pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[wgpu::PushConstantRange {
-                stages: wgpu::ShaderStages::COMPUTE,
-                range: 0..std::mem::size_of::<Params>() as u32,
-            }],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: std::mem::size_of::<Params>() as u32,
         });
 
         let rgb8 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -232,21 +229,29 @@ impl Uploader {
 
         let mut offsets = Vec::new();
         let mut tiles = Vec::new();
+
+        let mut tiles_scratch = Vec::new();
+
         {
-            let mut mapped = payload_buf.slice(..).get_mapped_range_mut();
+            let mut mapped = payload_buf.slice(..).get_mapped_range_mut().unwrap();
 
             let mut last_offset = 0;
             for tile_index in 0..reader.tiles() {
                 let tile = reader.tile(tile_index);
                 let tile_len = reader.tile_payload_len(tile_index) as usize;
 
+                tiles_scratch.resize(tile_len, 0);
+
                 debug_assert!(
                     tile_len % 4 == 0,
                     "tile rANS payload should be multiple of 4"
                 );
 
-                reader
-                    .copy_tile_payload_into(tile_index, &mut mapped[last_offset..][..tile_len])?;
+                reader.copy_tile_payload_into(tile_index, &mut tiles_scratch[..tile_len])?;
+
+                mapped
+                    .slice(last_offset..last_offset + tile_len)
+                    .copy_from_slice(&tiles_scratch[..tile_len]);
 
                 offsets.push((last_offset / 4) as u32);
                 last_offset += tile_len;
@@ -634,12 +639,16 @@ fn write_buffer_from_iter<T>(buffer: &wgpu::Buffer, iter: impl IntoIterator<Item
 where
     T: bytemuck::NoUninit,
 {
-    let mut mapped = buffer.slice(..).get_mapped_range_mut();
+    let mut mapped = buffer.slice(..).get_mapped_range_mut().unwrap();
     let mut offset = 0;
 
     for item in iter {
         let raw_bytes = bytemuck::bytes_of(&item);
-        mapped[offset..][..raw_bytes.len()].copy_from_slice(raw_bytes);
+
+        mapped
+            .slice(offset..offset + raw_bytes.len())
+            .copy_from_slice(raw_bytes);
+
         offset += raw_bytes.len();
     }
 
@@ -740,7 +749,7 @@ impl DecompressDispatch<'_> {
         });
         cpass.set_pipeline(self.pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.set_push_constants(0, bytemuck::bytes_of(&params));
+        cpass.set_immediates(0, bytemuck::bytes_of(&params));
 
         let groups_x = tile_count.div_ceil(64);
         if groups_x > 0 {

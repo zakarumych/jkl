@@ -91,20 +91,26 @@ struct WgpuContext {
 
 impl WgpuContext {
     fn new() -> Option<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            display: None,
         });
 
         let adapters = instance.enumerate_adapters(wgpu::Backends::all());
 
         let f = async || {
+            let adapters = adapters.await;
             for adapter in adapters {
                 let fut = adapter.request_device(&wgpu::DeviceDescriptor {
                     label: Some("jkl-cli-device"),
-                    required_features: wgpu::Features::SUBGROUP,
+                    required_features: wgpu::Features::SUBGROUP | wgpu::Features::IMMEDIATES,
+                    required_limits: wgpu::Limits {
+                        max_immediate_size: 128,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 });
 

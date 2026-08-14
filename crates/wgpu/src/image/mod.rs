@@ -148,7 +148,7 @@ impl WgpuImage for Image<GpuPixels> {
         });
 
         {
-            let mut mapped = buffer.get_mapped_range_mut(..);
+            let mut mapped = buffer.get_mapped_range_mut(..).unwrap();
 
             let image = image.reinterpret_as_3d();
 
@@ -156,13 +156,15 @@ impl WgpuImage for Image<GpuPixels> {
                 let plane_offset = z * plane_stride;
                 for y in 0..raw_size[1] {
                     let row_offset = plane_offset + y * row_stride;
-                    let mapped_row = &mut mapped[row_offset * u_size..];
+                    let mut mapped_row = mapped.slice(row_offset * u_size..);
 
                     for x in 0..raw_size[0] {
                         let pixel = *image.get_pixel(x, y, z);
                         let mapped_pixel = map(pixel);
                         let bytes = bytemuck::bytes_of(&mapped_pixel);
-                        mapped_row[x * u_size..][..u_size].copy_from_slice(bytes);
+                        mapped_row
+                            .slice(x * u_size..x * u_size + u_size)
+                            .copy_from_slice(bytes);
                     }
                 }
             }
@@ -304,7 +306,7 @@ impl WgpuImage for Image<GpuPixels> {
         let plane_stride = row_stride * raw_size[1];
 
         {
-            let src = self.data().buffer.get_mapped_range(..);
+            let src = self.data().buffer.get_mapped_range(..).unwrap();
 
             let mut dst = dst.as_mut_3d();
 
