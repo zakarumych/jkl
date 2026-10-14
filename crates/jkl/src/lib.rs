@@ -17,7 +17,8 @@
 //! # Feature highlights
 //!
 //! * **GPU-oriented block texture codecs** - encode and decode BC1 through BC5
-//!   blocks with cluster-fit quality ([`bc1`](image::block::bc1), [`bc2`](image::block::bc2), [`bc3`](image::block::bc3), [`bc4`](image::block::bc4), [`bc5`](image::block::bc5), powered by [`cluster_fit`]).
+//!   blocks using principal-axis endpoints, up to four least-squares passes,
+//!   and one discrete endpoint-neighbor search ([`bc1`](image::block::bc1), [`bc2`](image::block::bc2), [`bc3`](image::block::bc3), [`bc4`](image::block::bc4), [`bc5`](image::block::bc5)).
 //!   [`bc6`](image::block::bc6) encodes and decodes signed or unsigned HDR RGB
 //!   blocks, with all-mode decoding and encoding across all 32 partitions.
 //! * **Layered entropy coding** - stack [`lz77`] or [`rle`] with [`ans`] for
@@ -73,7 +74,7 @@
 //! | [`bc4`]         | BC4 / RGTC1                | 8 bytes    | R               |
 //! | [`bc5`]         | BC5 / RGTC2                | 16 bytes   | RG              |
 //! | [`bc6`](image::block::bc6) | BC6H / BPTC float | 16 bytes | HDR RGB         |
-//! | [`cluster_fit`] | BC1–BC5 quantizer          | -          | -               |
+//! | [`cluster_fit`] | Archived quantizer compatibility API | - | - |
 //!
 //! ## Image and math
 //!

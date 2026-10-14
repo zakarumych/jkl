@@ -8,10 +8,46 @@ CPU *or* directly on the GPU. If you ship textures, sprite atlases, tile
 maps, or any bulk binary payload that must be ready the instant it hits
 VRAM, JKL was built for you.
 
+## Default BC1–BC5 compression
+
+CPU, wgpu, and mev encoders use principal-axis extrema, up to four
+least-squares passes, and one discrete endpoint-neighbor search with rebuilt
+indices. RGB endpoints use RGB565; scalar endpoints use eight-bit UNORM and
+search both interpolated palette modes. BC1 preserves punch-through alpha,
+BC2 stores four-bit alpha, and BC3 fits its alpha separately. BC4 encodes red;
+BC5 encodes red and green independently. BC6H retains its separate HDR search.
+
+Frozen cluster-fit sources are in [archive/cluster-fit](archive/cluster-fit/README.md).
+The public `jkl::algos::cluster_fit` module remains available for compatibility.
+
+
+Validation on Radeon 8060S with Vulkan covers CPU regressions, all 65,536
+opaque flat RGB565 colors, and both public GPU routes for BC1–5. Native tests
+check alpha, odd dimensions, padded strides, multiple layers, and batch sizes
+1, 63, and 65. The deterministic 512×512 fixture gives these medians for
+reused buffers over five rotating rounds (submit/wait wall-clock, excluding
+pipeline construction and transfers):
+
+| Format | mev | wgpu |
+|---|---:|---:|
+| BC1 opaque | 0.611 ms | 0.667 ms |
+| BC2 | 0.423 ms | 0.472 ms |
+| BC3 | 0.650 ms | 0.695 ms |
+| BC4 | 0.462 ms | 0.495 ms |
+| BC5 | 2.468 ms | 2.516 ms |
+
+On this fixture, GPU and CPU RGB PSNR agree to five decimal places; GPU scalar
+PSNR is 0.00924 dB lower for BC4 and 0.04410 dB lower for BC5. RGB PSNR excludes
+BC1 transparent texels; BC2/3 alpha is checked separately. These are synthetic
+fixture measurements, not a repeat of the texture-pack benchmark. Pipeline
+construction measured 2.66–2.76 seconds separately. Metal and WebGPU runtime
+validation remains unperformed. CLI compilation passes; the broader app check encounters an existing egui
+API error.
+
 ## Feature highlights
 
 * **GPU-oriented block texture codecs** - encode and decode BC1 through BC5 blocks.
-  Cluster-fit algorithm finds endpoints for best perceptual quality.
+  Principal-axis fitting, least squares, and discrete endpoint neighbors provide fast encoding.
 * **Layered entropy coding** - Not all data is equally compressible,
   stack loseless encoders such as rANS, LZ77 or simple RLE.
   Find the optimal combination balancing compression ratio and decompression speed.

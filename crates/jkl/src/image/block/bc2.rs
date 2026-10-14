@@ -3,12 +3,11 @@
 //! BC2 compresses RGBA indices into 16-byte blocks. Alpha is stored as explicit
 //! 4-bit values per texel, while the RGB portion uses the same encoding as [`bc1`](crate::bc1).
 
-use std::{convert::Infallible, mem::swap};
+use std::convert::Infallible;
 
 use crate::{
-    algos::cluster_fit::cluster_fit,
     image::{ImageMut, ImageRef},
-    math::{Rgb32F, Rgb565, Rgba32F, Vec3, Yiq32F},
+    math::{Rgb32F, Rgb565, Rgba32F},
 };
 
 /// A block of 4x4 indices compressed with BC2.
@@ -145,151 +144,33 @@ impl Block {
     }
 
     pub fn encode(colors: [[(Rgb32F, bool); 4]; 4]) -> Self {
-        let mut samples = [Vec3::ZERO; 16];
-
-        let mut count = 0;
-
-        for row in &colors {
-            for &(c, v) in row {
-                if v {
-                    samples[count] = c.into();
-                    count += 1;
-                }
-            }
-        }
-
-        assert_ne!(count, 0, "At least one sample must valid");
-
-        let mut cf = cluster_fit::<Vec3, 4, 16>(
-            &samples[..count],
-            |a: Vec3| Rgb565::from_f32(a.into()).into_f32().into(),
-            |a: Vec3, b: Vec3| Yiq32F::perceptual_distance(Yiq32F(a.0), Yiq32F(b.0)),
-        );
-
-        let (color0, color1) = cf.endpoints;
-
-        let mut color0 = Rgb565::from_f32(Rgb32F::from(color0));
-        let mut color1 = Rgb565::from_f32(Rgb32F::from(color1));
-
-        // This is not really required for BC2,
-        // but it's just more consistent and may reduce entropy in the output.
-        if color0 == color1 {
-            return Block {
-                alpha: [0xFF; 8],
-                color0,
-                color1: Rgb565::BLACK,
-                indices: [0x00; 4],
-            };
-        } else if color0.bits() < color1.bits() {
-            swap(&mut color0, &mut color1);
-            for index in &mut cf.indices {
-                *index = 3 - *index;
-            }
-        }
-
-        let mut indices = [0; 4];
-        let mut index_index = 0;
-        for y in 0..4 {
-            for x in 0..4 {
-                if colors[y][x].1 {
-                    continue;
-                }
-                let idx = match cf.indices[index_index] {
-                    0 => 0,
-                    1 => 2,
-                    2 => 3,
-                    3 => 1,
-                    _ => unreachable!(),
-                };
-                indices[y] |= idx << (x * 2);
-                index_index += 1;
-            }
-        }
-
-        Block {
+        let rgb = super::fast_fit::rgb(colors, false);
+        Self {
             alpha: [0xFF; 8],
-            color0,
-            color1,
-            indices,
+            color0: rgb.color0,
+            color1: rgb.color1,
+            indices: rgb.indices,
         }
     }
 
     /// Encode block into BC2 with alpha.
     pub fn encode_with_alpha(colors: [[(Rgba32F, bool); 4]; 4]) -> Self {
-        let mut samples = [Vec3::ZERO; 16];
-
-        let mut count = 0;
-
-        for row in &colors {
-            for &(c, v) in row {
-                if v {
-                    samples[count] = c.rgb().into();
-                    count += 1;
-                }
-            }
-        }
-
-        assert_ne!(count, 0, "At least one sample must valid");
-
-        let mut cf = cluster_fit::<Vec3, 4, 16>(
-            &samples[..count],
-            |a: Vec3| Rgb565::from_f32(a.into()).into_f32().into(),
-            |a: Vec3, b: Vec3| Yiq32F::perceptual_distance(Yiq32F(a.0), Yiq32F(b.0)),
-        );
-
+        let rgb = super::fast_fit::rgb(colors.map(|r| r.map(|(c, v)| (c.rgb(), v))), false);
         let mut alpha = [0; 8];
         for y in 0..4 {
             for x in 0..4 {
-                let a = (colors[y][x].0.a() * 15.0).round() as u8;
-                alpha[y * 2 + x / 2] |= (a & 0b1111) << (4 * (x % 2));
-            }
-        }
-
-        let (color0, color1) = cf.endpoints;
-
-        let mut color0 = Rgb565::from_f32(Rgb32F::from(color0));
-        let mut color1 = Rgb565::from_f32(Rgb32F::from(color1));
-
-        // This is not really required for BC2,
-        // but it's just more consistent and may reduce entropy in the output.
-        if color0 == color1 {
-            return Block {
-                alpha,
-                color0,
-                color1: Rgb565::BLACK,
-                indices: [0x00; 4],
-            };
-        } else if color0.bits() < color1.bits() {
-            swap(&mut color0, &mut color1);
-            for index in &mut cf.indices {
-                *index = 3 - *index;
-            }
-        }
-
-        let mut indices = [0; 4];
-        let mut index_index = 0;
-        for y in 0..4 {
-            for x in 0..4 {
-                if colors[y][x].1 {
-                    continue;
+                let (c, valid) = colors[y][x];
+                if valid {
+                    let a = (c.a().clamp(0.0, 1.0) * 15.0).round() as u8;
+                    alpha[y * 2 + x / 2] |= a << (4 * (x % 2));
                 }
-                let idx = match cf.indices[index_index] {
-                    0 => 0,
-                    1 => 2,
-                    2 => 3,
-                    3 => 1,
-                    _ => unreachable!(),
-                };
-                indices[y] |= idx << (x * 2);
-                index_index += 1;
             }
         }
-
-        Block {
+        Self {
             alpha,
-            color0,
-            color1,
-            indices,
+            color0: rgb.color0,
+            color1: rgb.color1,
+            indices: rgb.indices,
         }
     }
 }

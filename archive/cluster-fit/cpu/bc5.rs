@@ -1,0 +1,97 @@
+//! BC5 implementation.
+//!
+//! BC5 compresses two-channel (red, green) texels into 16-byte blocks.
+//! Each block stores a pair of independent [`bc4::Block`]s, one per channel.
+
+use std::convert::Infallible;
+
+use crate::math::{R32F, Rg32F};
+
+use super::bc4;
+
+/// A block of 4×4 texels compressed with BC5.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub struct Block {
+    pub red: bc4::Block,
+    pub green: bc4::Block,
+}
+
+impl_fixedcode_struct!(
+    Block {
+        red: bc4::Block,
+        green: bc4::Block,
+    } | Infallible
+);
+
+impl Block {
+    pub const BLACK: Block = Block {
+        red: bc4::Block::BLACK,
+        green: bc4::Block::BLACK,
+    };
+
+    pub const WHITE: Block = Block {
+        red: bc4::Block::WHITE,
+        green: bc4::Block::WHITE,
+    };
+
+    /// Returns the raw 16-byte representation of this block.
+    pub fn bytes(&self) -> [u8; 16] {
+        let red = self.red.bytes();
+        let green = self.green.bytes();
+
+        [
+            red[0], red[1], red[2], red[3], red[4], red[5], red[6], red[7], green[0], green[1],
+            green[2], green[3], green[4], green[5], green[6], green[7],
+        ]
+    }
+
+    /// Constructs a `Block` from its raw 16-byte representation.
+    pub fn from_bytes(bytes: [u8; 16]) -> Block {
+        let red = [
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ];
+        let green = [
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        ];
+
+        Block {
+            red: bc4::Block::from_bytes(red),
+            green: bc4::Block::from_bytes(green),
+        }
+    }
+
+    /// Decodes this BC5 block into a 4×4 grid of two-channel colors.
+    pub fn decode(self) -> [[Rg32F; 4]; 4] {
+        let red = self.red.decode();
+        let green = self.green.decode();
+
+        let mut colors = [[Rg32F::BLACK; 4]; 4];
+
+        for y in 0..4 {
+            for x in 0..4 {
+                colors[y][x] = Rg32F::new(red[y][x].r(), green[y][x].r());
+            }
+        }
+
+        colors
+    }
+
+    /// Encodes a 4×4 grid of two-channel colors into a BC5 block.
+    pub fn encode(colors: [[(Rg32F, bool); 4]; 4]) -> Self {
+        let mut red = [[(R32F::BLACK, false); 4]; 4];
+        let mut green = [[(R32F::BLACK, false); 4]; 4];
+
+        for y in 0..4 {
+            for x in 0..4 {
+                red[y][x] = (R32F::new(colors[y][x].0.r()), colors[y][x].1);
+                green[y][x] = (R32F::new(colors[y][x].0.g()), colors[y][x].1);
+            }
+        }
+
+        let red = bc4::Block::encode(red);
+        let green = bc4::Block::encode(green);
+
+        Block { red, green }
+    }
+}

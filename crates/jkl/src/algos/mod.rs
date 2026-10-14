@@ -1,4 +1,6 @@
 pub mod ans;
+/// Legacy cluster-fit algorithm retained for API compatibility.
+#[path = "archive/cluster_fit.rs"]
 pub mod cluster_fit;
 pub mod lz77;
 pub mod lz78;

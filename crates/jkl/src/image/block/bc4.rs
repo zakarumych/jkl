@@ -4,12 +4,9 @@
 //! [`R8U`] endpoint values and a 4×4 grid of 3-bit indices into an 8-entry
 //! interpolated palette.
 
-use std::{convert::Infallible, mem::swap};
+use std::convert::Infallible;
 
-use crate::{
-    algos::cluster_fit::cluster_fit,
-    math::{R8U, R32F},
-};
+use crate::math::{R8U, R32F};
 
 /// A block of 4x4 indices compressed with BC4.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -121,78 +118,6 @@ impl Block {
 
     /// Encodes a 4×4 grid of single-channel colors into a BC4 block.
     pub fn encode(colors: [[(R32F, bool); 4]; 4]) -> Self {
-        let mut samples = [0.0f32; 16];
-
-        let mut count = 0;
-
-        for row in &colors {
-            for &(c, v) in row {
-                if v {
-                    samples[count] = c.0;
-                    count += 1;
-                }
-            }
-        }
-
-        let mut cf = cluster_fit::<f32, 8, 16>(
-            &samples[..count],
-            |a: f32| R8U::from_f32(R32F::new(a)).into_f32().0,
-            |a: f32, b: f32| f32::abs(a - b),
-        );
-
-        let (color0, color1) = cf.endpoints;
-
-        let mut color0 = R8U::from_f32(R32F::new(color0));
-        let mut color1 = R8U::from_f32(R32F::new(color1));
-
-        if color0 == color1 {
-            return Block {
-                color0,
-                color1: R8U::BLACK,
-                indices: [0x00; 6],
-            };
-        } else if color0.bits() < color1.bits() {
-            swap(&mut color0, &mut color1);
-            for index in &mut cf.indices {
-                *index = 7 - *index;
-            }
-        }
-
-        let mut indices = [0; 6];
-        let mut index_index = 0;
-        for y in 0..4 {
-            for x in 0..4 {
-                if colors[y][x].1 {
-                    continue;
-                }
-
-                let idx = match cf.indices[index_index] {
-                    0 => 0,
-                    1 => 2,
-                    2 => 3,
-                    3 => 4,
-                    4 => 5,
-                    5 => 6,
-                    6 => 7,
-                    7 => 1,
-                    _ => unreachable!(),
-                };
-                index_index += 1;
-
-                let start_bit = (y * 4 + x) * 3;
-                let start_byte = start_bit / 8;
-
-                indices[start_byte] |= idx << (start_bit & 7);
-                if start_bit & 7 > 5 {
-                    indices[start_byte + 1] |= idx >> (8 - (start_bit & 7));
-                }
-            }
-        }
-
-        Block {
-            color0,
-            color1,
-            indices,
-        }
+        super::fast_fit::scalar(colors)
     }
 }

@@ -68,13 +68,25 @@ impl Block {
 
     /// Decodes the RGB channels of this BC3 block, discarding alpha.
     pub fn decode(self) -> [[Rgb32F; 4]; 4] {
-        self.rgb.decode()
+        super::bc2::Block {
+            alpha: [255; 8],
+            color0: self.rgb.color0,
+            color1: self.rgb.color1,
+            indices: self.rgb.indices,
+        }
+        .decode()
     }
 
-    /// Decodes the full RGBA block, combining BC4 alpha and BC1 RGB.
+    /// Decodes the full RGBA block, combining BC4 alpha and four-color RGB.
     pub fn decode_with_alpha(self) -> [[Rgba32F; 4]; 4] {
         let alpha = self.alpha.decode();
-        let rgb = self.rgb.decode();
+        let rgb = super::bc2::Block {
+            alpha: [255; 8],
+            color0: self.rgb.color0,
+            color1: self.rgb.color1,
+            indices: self.rgb.indices,
+        }
+        .decode();
 
         let mut colors = [[Rgba32F::BLACK; 4]; 4];
 
@@ -89,7 +101,7 @@ impl Block {
 
     /// Encodes a 4×4 grid of RGB colors into a BC3 block with full alpha.
     pub fn encode(colors: [[(Rgb32F, bool); 4]; 4]) -> Self {
-        let rgb = bc1::Block::encode(colors);
+        let rgb = super::fast_fit::rgb(colors, false);
 
         Block {
             alpha: bc4::Block::WHITE,
@@ -103,7 +115,7 @@ impl Block {
         let alpha = bc4::Block::encode(alpha_texels);
 
         let rgb_texels = colors.map(|row| row.map(|(c, v)| (c.rgb(), v)));
-        let rgb = bc1::Block::encode(rgb_texels);
+        let rgb = super::fast_fit::rgb(rgb_texels, false);
 
         Block { alpha, rgb }
     }

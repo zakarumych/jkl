@@ -1,28 +1,14 @@
-use jkl::image::Image;
-use wgpu::util::DeviceExt;
-
 use crate::image::GpuPixels;
+use jkl::image::Image;
 
-const BINOM_WGSL: &'static str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/binom.wgsl"));
-
-const REDUCE_WGSL: &'static str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/reduce.wgsl"));
-
-const CLUSTER_FIT_WGSL: &'static str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/shaders/cluster_fit.wgsl"
-));
-
-const BC1_WGSL: &'static str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/bc1.wgsl"));
-
-const BC2_WGSL: &'static str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/bc2.wgsl"));
+const SHADER: &str = include_str!("../../shaders/pa_ls_ns.wgsl");
 
 pub struct BlockCompressor {
     bc1: wgpu::ComputePipeline,
     bc2: wgpu::ComputePipeline,
+    bc3: wgpu::ComputePipeline,
+    bc4: wgpu::ComputePipeline,
+    bc5: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
@@ -40,81 +26,55 @@ struct Params {
     x_offset: u32,
     y_offset: u32,
     z_offset: u32,
-    _pad: u32,
+    batch_width: u32,
 }
 
 impl BlockCompressor {
     pub fn new(device: &wgpu::Device) -> Self {
-        let bc1_shader = format!("{BINOM_WGSL}\n{REDUCE_WGSL}\n{CLUSTER_FIT_WGSL}\n{BC1_WGSL}");
-        let bc2_shader = format!("{BINOM_WGSL}\n{REDUCE_WGSL}\n{CLUSTER_FIT_WGSL}\n{BC2_WGSL}");
-
-        let bc1_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("jkl-bc1-shader"),
-            source: wgpu::ShaderSource::Wgsl(bc1_shader.into()),
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("jkl-pa-ls-ns-shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
-
-        let bc2_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("jkl-bc2-shader"),
-            source: wgpu::ShaderSource::Wgsl(bc2_shader.into()),
-        });
-
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("jkl-blocks-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[true, false].map(|read_only| wgpu::BindGroupLayoutEntry {
+                binding: if read_only { 0 } else { 1 },
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+                count: None,
+            }),
         });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("jkl-blocks-pl"),
             bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: std::mem::size_of::<Params>() as u32,
+            immediate_size: size_of::<Params>() as u32,
         });
-
-        let bc1 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("jkl-bc1-pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &bc1_shader,
-            entry_point: Some("compress_bc1"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        let bc2 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("jkl-bc2-pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &bc2_shader,
-            entry_point: Some("compress_bc2"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        BlockCompressor {
-            bc1,
-            bc2,
+        let pipeline = |entry| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        Self {
+            bc1: pipeline("compress_bc1"),
+            bc2: pipeline("compress_bc2"),
+            bc3: pipeline("compress_bc3"),
+            bc4: pipeline("compress_bc4"),
+            bc5: pipeline("compress_bc5"),
             bind_group_layout,
         }
     }
 
+    /// Encodes RGBA8 texels into BC1 with punch-through alpha below the threshold.
+    /// Uses principal-axis extrema, up to four least-squares passes, and one endpoint neighbor round.
     pub fn compress_rgba_to_bc1(
         &self,
         image: Image<GpuPixels>,
@@ -123,43 +83,131 @@ impl BlockCompressor {
         queue: &wgpu::Queue,
         batch_size: u32,
     ) -> Image<GpuPixels> {
+        self.compress(
+            image,
+            alpha_threshold,
+            device,
+            queue,
+            batch_size,
+            &self.bc1,
+            wgpu::TextureFormat::Bc1RgbaUnorm,
+        )
+    }
+
+    /// Encodes RGBA8 texels into BC2 with explicit four-bit alpha.
+    /// Uses principal-axis extrema, up to four least-squares passes, and one endpoint neighbor round.
+    pub fn compress_rgba_to_bc2(
+        &self,
+        image: Image<GpuPixels>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch_size: u32,
+    ) -> Image<GpuPixels> {
+        self.compress(
+            image,
+            0.0,
+            device,
+            queue,
+            batch_size,
+            &self.bc2,
+            wgpu::TextureFormat::Bc2RgbaUnorm,
+        )
+    }
+
+    /// Encodes RGBA8 texels into BC3 with interpolated alpha.
+    /// Uses principal-axis extrema, up to four least-squares passes, and one endpoint neighbor round.
+    pub fn compress_rgba_to_bc3(
+        &self,
+        image: Image<GpuPixels>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch_size: u32,
+    ) -> Image<GpuPixels> {
+        self.compress(
+            image,
+            0.0,
+            device,
+            queue,
+            batch_size,
+            &self.bc3,
+            wgpu::TextureFormat::Bc3RgbaUnorm,
+        )
+    }
+
+    /// Encodes the red channel of RGBA8 texels into BC4 UNORM.
+    /// Uses principal-axis extrema, up to four least-squares passes, and one endpoint neighbor round.
+    pub fn compress_rgba_to_bc4(
+        &self,
+        image: Image<GpuPixels>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch_size: u32,
+    ) -> Image<GpuPixels> {
+        self.compress(
+            image,
+            0.0,
+            device,
+            queue,
+            batch_size,
+            &self.bc4,
+            wgpu::TextureFormat::Bc4RUnorm,
+        )
+    }
+
+    /// Encodes the red and green channels of RGBA8 texels into BC5 UNORM.
+    /// Uses principal-axis extrema, up to four least-squares passes, and one endpoint neighbor round.
+    pub fn compress_rgba_to_bc5(
+        &self,
+        image: Image<GpuPixels>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch_size: u32,
+    ) -> Image<GpuPixels> {
+        self.compress(
+            image,
+            0.0,
+            device,
+            queue,
+            batch_size,
+            &self.bc5,
+            wgpu::TextureFormat::Bc5RgUnorm,
+        )
+    }
+
+    fn compress(
+        &self,
+        image: Image<GpuPixels>,
+        alpha_threshold: f32,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch_size: u32,
+        pipeline: &wgpu::ComputePipeline,
+        format: wgpu::TextureFormat,
+    ) -> Image<GpuPixels> {
         assert_ne!(batch_size, 0);
-
-        let batch_size = usize::try_from(batch_size).unwrap_or(1 << 30);
-
-        let extent = image.extent();
-        let dim = extent.dimensions();
-
-        let [in_width, in_height, layers] = extent.raw_size();
-
-        assert_ne!(in_width, 0);
-        assert_ne!(in_height, 0);
-        assert_ne!(layers, 0);
-
+        assert!(
+            matches!(
+                image.data().format,
+                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
+            ),
+            "compression requires RGBA8 UNORM or sRGB input"
+        );
+        let [in_width, in_height, layers] = image.extent().raw_size();
+        assert!(in_width != 0 && in_height != 0 && layers != 0);
         let out_width = in_width.div_ceil(4);
         let out_height = in_height.div_ceil(4);
-
-        let out_row_align = 256 / 16;
-
-        let out_row_stride = out_width.div_ceil(out_row_align) * out_row_align;
+        let block_size = format.block_copy_size(None).unwrap() as usize;
+        let align = 256 / block_size;
+        let out_row_stride = out_width.div_ceil(align) * align;
         let out_plane_stride = out_row_stride * out_height;
-
-        let out_buf: wgpu::Buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("jkl-blocks-out"),
-            size: out_plane_stride as u64 * layers as u64 * 8, // Each BC1 block is 8 bytes
+            size: (out_plane_stride * layers * block_size) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-
-        // Dispatch in batches along all three axes to avoid the GPU timeout.
-        // Each batch submits its own command buffer so the GPU processes them sequentially.
-        let batch_layers = usize::min(layers, batch_size / out_width / out_height).max(1);
-        let batch_height = usize::min(out_height, batch_size / out_width).max(1);
-        let batch_width = usize::min(out_width, batch_size);
-
-        // One bind group is shared across all batches since the input and output buffers are the same.
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("jkl-wgpu-decode-bg"),
+            label: Some("jkl-blocks-bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -172,185 +220,63 @@ impl BlockCompressor {
                 },
             ],
         });
-
-        for z_offset in (0..layers).step_by(batch_layers) {
-            debug_assert!(u32::try_from(z_offset).is_ok());
-            let this_batch_layers = usize::min(batch_layers, layers - z_offset);
-
-            for y_offset in (0..out_height).step_by(batch_height) {
-                debug_assert!(u32::try_from(y_offset).is_ok());
-                let this_batch_height = usize::min(batch_height, out_height - y_offset);
-
-                for x_offset in (0..out_width).step_by(batch_width) {
-                    debug_assert!(u32::try_from(x_offset).is_ok());
-                    let this_batch_width = usize::min(batch_width, out_width - x_offset);
-
-                    let mut batch_encoder =
+        let batch_size = batch_size as usize;
+        let batch_width = out_width.min(batch_size).min(65535 * 64);
+        let batch_height = out_height.min(batch_size / batch_width).clamp(1, 65535);
+        let batch_layers = layers
+            .min(batch_size / batch_width / batch_height)
+            .clamp(1, 65535);
+        let u32_size =
+            |value| u32::try_from(value).expect("image dimension or stride exceeds shader range");
+        for z in (0..layers).step_by(batch_layers) {
+            for y in (0..out_height).step_by(batch_height) {
+                for x in (0..out_width).step_by(batch_width) {
+                    let width = batch_width.min(out_width - x);
+                    let params = Params {
+                        in_width: u32_size(in_width),
+                        in_height: u32_size(in_height),
+                        layers: u32_size(layers),
+                        in_row_stride: u32_size(image.row_stride()),
+                        in_plane_stride: u32_size(image.plane_stride()),
+                        out_row_stride: u32_size(out_row_stride),
+                        out_plane_stride: u32_size(out_plane_stride),
+                        alpha_threshold,
+                        x_offset: u32_size(x),
+                        y_offset: u32_size(y),
+                        z_offset: u32_size(z),
+                        batch_width: u32_size(width),
+                    };
+                    let mut encoder =
                         device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("jkl-bc1-batch-encoder"),
+                            label: Some("jkl-blocks-batch"),
                         });
                     {
-                        let mut cpass =
-                            batch_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                label: Some("jkl-bc1-compress-pass"),
+                        let mut compute =
+                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("jkl-blocks-compress"),
                                 timestamp_writes: None,
                             });
-
-                        cpass.set_pipeline(&self.bc1);
-                        cpass.set_bind_group(0, &bind_group, &[]);
-
-                        let params = Params {
-                            in_width: in_width as u32,
-                            in_height: in_height as u32,
-                            layers: layers as u32,
-                            in_row_stride: image.row_stride() as u32,
-                            in_plane_stride: image.plane_stride() as u32,
-                            out_row_stride: out_row_stride as u32,
-                            out_plane_stride: out_plane_stride as u32,
-                            alpha_threshold,
-                            x_offset: x_offset as u32,
-                            y_offset: y_offset as u32,
-                            z_offset: z_offset as u32,
-                            _pad: 0,
-                        };
-
-                        cpass.set_immediates(0, bytemuck::bytes_of(&params));
-                        cpass.dispatch_workgroups(
-                            this_batch_width as u32,
-                            this_batch_height as u32,
-                            this_batch_layers as u32,
+                        compute.set_pipeline(pipeline);
+                        compute.set_bind_group(0, &bind_group, &[]);
+                        compute.set_immediates(0, bytemuck::bytes_of(&params));
+                        compute.dispatch_workgroups(
+                            u32_size(width.div_ceil(64)),
+                            u32_size(batch_height.min(out_height - y)),
+                            u32_size(batch_layers.min(layers - z)),
                         );
                     }
-                    queue.submit([batch_encoder.finish()]);
+                    queue.submit([encoder.finish()]);
                 }
             }
         }
-
         Image::with_stride(
-            dim,
+            image.dimensions(),
             [out_width, out_height, layers],
             [out_row_stride, out_plane_stride],
-            GpuPixels::new(wgpu::TextureFormat::Bc1RgbaUnorm, out_buf),
-        )
-    }
-
-    pub fn compress_rgba_to_bc2(
-        &self,
-        image: Image<GpuPixels>,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        batch_size: u32,
-    ) -> Image<GpuPixels> {
-        assert_ne!(batch_size, 0);
-
-        let batch_size = usize::try_from(batch_size).unwrap_or(1 << 30);
-
-        let extent = image.extent();
-        let dim = extent.dimensions();
-
-        let [in_width, in_height, layers] = extent.raw_size();
-
-        assert_ne!(in_width, 0);
-        assert_ne!(in_height, 0);
-        assert_ne!(layers, 0);
-
-        let out_width = in_width.div_ceil(4);
-        let out_height = in_height.div_ceil(4);
-
-        let out_row_align = 256 / 16; // BC2 blocks are 16 bytes
-
-        let out_row_stride = out_width.div_ceil(out_row_align) * out_row_align;
-        let out_plane_stride = out_row_stride * out_height;
-
-        let out_buf: wgpu::Buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("jkl-bc2-blocks-out"),
-            size: out_plane_stride as u64 * layers as u64 * 16, // Each BC2 block is 16 bytes
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
-        let batch_layers = usize::min(layers, batch_size / out_width / out_height).max(1);
-        let batch_height = usize::min(out_height, batch_size / out_width).max(1);
-        let batch_width = usize::min(out_width, batch_size);
-
-        for z_offset in (0..layers).step_by(batch_layers) {
-            debug_assert!(u32::try_from(z_offset).is_ok());
-            let this_batch_layers = usize::min(batch_layers, layers - z_offset);
-
-            for y_offset in (0..out_height).step_by(batch_height) {
-                debug_assert!(u32::try_from(y_offset).is_ok());
-                let this_batch_height = usize::min(batch_height, out_height - y_offset);
-
-                for x_offset in (0..out_width).step_by(batch_width) {
-                    debug_assert!(u32::try_from(x_offset).is_ok());
-                    let this_batch_width = usize::min(batch_width, out_width - x_offset);
-
-                    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("jkl-bc2-blocks-params"),
-                        contents: bytemuck::cast_slice(&[Params {
-                            in_width: in_width as u32,
-                            in_height: in_height as u32,
-                            layers: layers as u32,
-                            in_row_stride: image.row_stride() as u32,
-                            in_plane_stride: image.plane_stride() as u32,
-                            out_row_stride: out_row_stride as u32,
-                            out_plane_stride: out_plane_stride as u32,
-                            alpha_threshold: 0.0,
-                            x_offset: x_offset as u32,
-                            y_offset: y_offset as u32,
-                            z_offset: z_offset as u32,
-                            _pad: 0,
-                        }]),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-
-                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("jkl-bc2-wgpu-decode-bg"),
-                        layout: &self.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: image.data().buffer.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: out_buf.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: params_buf.as_entire_binding(),
-                            },
-                        ],
-                    });
-
-                    let mut batch_encoder =
-                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("jkl-bc2-batch-encoder"),
-                        });
-                    {
-                        let mut cpass =
-                            batch_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                label: Some("jkl-bc2-compress-pass"),
-                                timestamp_writes: None,
-                            });
-                        cpass.set_pipeline(&self.bc2);
-                        cpass.set_bind_group(0, &bind_group, &[]);
-                        cpass.dispatch_workgroups(
-                            this_batch_width as u32,
-                            this_batch_height as u32,
-                            this_batch_layers as u32,
-                        );
-                    }
-                    queue.submit([batch_encoder.finish()]);
-                }
-            }
-        }
-
-        Image::with_stride(
-            dim,
-            [out_width, out_height, layers],
-            [out_row_stride, out_plane_stride],
-            GpuPixels::new(wgpu::TextureFormat::Bc2RgbaUnorm, out_buf),
+            GpuPixels::new(format, out_buf),
         )
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;

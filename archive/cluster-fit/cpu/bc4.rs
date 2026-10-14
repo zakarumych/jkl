@@ -1,0 +1,198 @@
+//! BC4 (RGTC1) single-channel block texture compression.
+//!
+//! BC4 compresses single-channel indices into 8-byte blocks. Each block stores two
+//! [`R8U`] endpoint values and a 4×4 grid of 3-bit indices into an 8-entry
+//! interpolated palette.
+
+use std::{convert::Infallible, mem::swap};
+
+use crate::{
+    algos::cluster_fit::cluster_fit,
+    math::{R8U, R32F},
+};
+
+/// A block of 4x4 indices compressed with BC4.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub struct Block {
+    pub color0: R8U,
+    pub color1: R8U,
+    pub indices: [u8; 6],
+}
+
+impl_fixedcode_struct!(
+    Block {
+        color0: R8U,
+        color1: R8U,
+        indices: [u8; 6],
+    } | Infallible
+);
+
+impl Block {
+    pub const BLACK: Block = Block {
+        color0: R8U::WHITE,
+        color1: R8U::BLACK,
+        indices: [0xFF; 6],
+    };
+
+    pub const WHITE: Block = Block {
+        color0: R8U::WHITE,
+        color1: R8U::BLACK,
+        indices: [0x00; 6],
+    };
+
+    /// Returns the raw 8-byte representation of this block.
+    pub fn bytes(&self) -> [u8; 8] {
+        let color0 = self.color0.bits();
+        let color1 = self.color1.bits();
+        let indices = self.indices;
+
+        [
+            color0, color1, indices[0], indices[1], indices[2], indices[3], indices[4], indices[5],
+        ]
+    }
+
+    /// Constructs a `Block` from its raw 8-byte representation.
+    pub fn from_bytes(bytes: [u8; 8]) -> Block {
+        let color0 = R8U::new(bytes[0]);
+        let color1 = R8U::new(bytes[1]);
+        let indices = [bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
+
+        Block {
+            color0,
+            color1,
+            indices,
+        }
+    }
+
+    /// Decodes single BC4 block.
+    pub fn decode(self) -> [[R32F; 4]; 4] {
+        #![allow(clippy::needless_range_loop)]
+        // Decode endpoints.
+        let color0 = self.color0.into_f32();
+        let color1 = self.color1.into_f32();
+
+        // Prepare local variables.
+        let mut colors = [[R32F::BLACK; 4]; 4];
+        let indices = self.indices;
+
+        // Check mode and build palette.
+        let palette = if self.color0.bits() > self.color1.bits() {
+            [
+                color0,
+                color1,
+                R32F::lerp(color0, color1, 1.0 / 7.0),
+                R32F::lerp(color0, color1, 2.0 / 7.0),
+                R32F::lerp(color0, color1, 3.0 / 7.0),
+                R32F::lerp(color0, color1, 4.0 / 7.0),
+                R32F::lerp(color0, color1, 5.0 / 7.0),
+                R32F::lerp(color0, color1, 6.0 / 7.0),
+            ]
+        } else {
+            [
+                color0,
+                color1,
+                R32F::lerp(color0, color1, 1.0 / 5.0),
+                R32F::lerp(color0, color1, 2.0 / 5.0),
+                R32F::lerp(color0, color1, 3.0 / 5.0),
+                R32F::lerp(color0, color1, 4.0 / 5.0),
+                R32F::BLACK,
+                R32F::WHITE,
+            ]
+        };
+
+        // Decode indices.
+        for x in 0..4 {
+            for y in 0..4 {
+                let start_bit = (y * 4 + x) * 3;
+                let start_byte = start_bit / 8;
+
+                let mut index = (indices[start_byte] >> (start_bit & 7)) & 0b111;
+                if start_bit & 7 > 5 {
+                    index |= (indices[start_byte + 1] << (8 - (start_bit & 7))) & 0b111;
+                }
+
+                colors[y][x] = palette[index as usize];
+            }
+        }
+
+        colors
+    }
+
+    /// Encodes a 4×4 grid of single-channel colors into a BC4 block.
+    pub fn encode(colors: [[(R32F, bool); 4]; 4]) -> Self {
+        let mut samples = [0.0f32; 16];
+
+        let mut count = 0;
+
+        for row in &colors {
+            for &(c, v) in row {
+                if v {
+                    samples[count] = c.0;
+                    count += 1;
+                }
+            }
+        }
+
+        let mut cf = cluster_fit::<f32, 8, 16>(
+            &samples[..count],
+            |a: f32| R8U::from_f32(R32F::new(a)).into_f32().0,
+            |a: f32, b: f32| f32::abs(a - b),
+        );
+
+        let (color0, color1) = cf.endpoints;
+
+        let mut color0 = R8U::from_f32(R32F::new(color0));
+        let mut color1 = R8U::from_f32(R32F::new(color1));
+
+        if color0 == color1 {
+            return Block {
+                color0,
+                color1: R8U::BLACK,
+                indices: [0x00; 6],
+            };
+        } else if color0.bits() < color1.bits() {
+            swap(&mut color0, &mut color1);
+            for index in &mut cf.indices {
+                *index = 7 - *index;
+            }
+        }
+
+        let mut indices = [0; 6];
+        let mut index_index = 0;
+        for y in 0..4 {
+            for x in 0..4 {
+                if colors[y][x].1 {
+                    continue;
+                }
+
+                let idx = match cf.indices[index_index] {
+                    0 => 0,
+                    1 => 2,
+                    2 => 3,
+                    3 => 4,
+                    4 => 5,
+                    5 => 6,
+                    6 => 7,
+                    7 => 1,
+                    _ => unreachable!(),
+                };
+                index_index += 1;
+
+                let start_bit = (y * 4 + x) * 3;
+                let start_byte = start_bit / 8;
+
+                indices[start_byte] |= idx << (start_bit & 7);
+                if start_bit & 7 > 5 {
+                    indices[start_byte + 1] |= idx >> (8 - (start_bit & 7));
+                }
+            }
+        }
+
+        Block {
+            color0,
+            color1,
+            indices,
+        }
+    }
+}
