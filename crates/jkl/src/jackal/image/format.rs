@@ -11,7 +11,7 @@ use crate::{
         format::Format,
     },
     jackal::image::WriteOffsets,
-    math::{Rgb8U, Rgb565, Rgba8U},
+    math::{R8U, Rg8U, Rgb8U, Rgb565, Rgba8U},
 };
 
 /// This trait is an interface for compression images.
@@ -59,6 +59,148 @@ pub trait Pixel: Copy + Eq + Hash + FixedCode + VarCode + 'static {
     ) -> io::Result<()>
     where
         C: Compressor;
+}
+
+impl Pixel for R8U {
+    type Context<C: Compressor> = C::Context<Vle<u8>>;
+
+    const FORMAT: Format = Format::R8;
+
+    fn compress_images<'a, C>(
+        input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
+        compressor: C,
+        mut write: impl io::Write + io::Seek,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let mut tokens = Vec::new();
+
+        let context = compressor.compress_symbols(
+            input.map(|image| image.iter_pixels().map(|rgb| Vle(rgb.bits()))),
+            &mut tokens,
+        )?;
+
+        let mut offsets = WriteOffsets::new(tokens.len(), &mut write)?;
+
+        write_bits_scope(&mut write, |write_bits| context.var_write(write_bits))?;
+
+        for token_group in &tokens {
+            offsets.push_next(&mut write)?;
+
+            write_bits_scope(&mut write, |write| {
+                for token in token_group {
+                    token.var_write(write)?;
+                }
+                Ok(())
+            })?;
+        }
+
+        offsets.write(&mut write)?;
+        Ok(())
+    }
+
+    fn decompress_image<'a, C>(
+        compressor: C,
+        context: &Self::Context<C>,
+        read: impl io::Read,
+        mut image: Image2DMut<'a, Self>,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let mut read_bits = crate::bits::ReadBits::new(read);
+
+        let mut symbols = compressor.decompress_tokens2(context, read_tokens(&mut read_bits));
+
+        let height = image.height();
+        for y in 0..height {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
+
+                *pixel = R8U::from_bits(bits);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Pixel for Rg8U {
+    type Context<C: Compressor> = C::Context<Vle<u16>>;
+
+    const FORMAT: Format = Format::RG8;
+
+    fn compress_images<'a, C>(
+        input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
+        compressor: C,
+        mut write: impl io::Write + io::Seek,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let mut tokens = Vec::new();
+
+        let context = compressor.compress_symbols(
+            input.map(|image| image.iter_pixels().map(|rgb| Vle(rgb.bits_interleaved()))),
+            &mut tokens,
+        )?;
+
+        let mut offsets = WriteOffsets::new(tokens.len(), &mut write)?;
+
+        write_bits_scope(&mut write, |write_bits| context.var_write(write_bits))?;
+
+        for token_group in &tokens {
+            offsets.push_next(&mut write)?;
+
+            write_bits_scope(&mut write, |write| {
+                for token in token_group {
+                    token.var_write(write)?;
+                }
+                Ok(())
+            })?;
+        }
+
+        offsets.write(&mut write)?;
+        Ok(())
+    }
+
+    fn decompress_image<'a, C>(
+        compressor: C,
+        context: &Self::Context<C>,
+        read: impl io::Read,
+        mut image: Image2DMut<'a, Self>,
+    ) -> io::Result<()>
+    where
+        C: Compressor,
+    {
+        let mut read_bits = crate::bits::ReadBits::new(read);
+
+        let mut symbols = compressor.decompress_tokens2(context, read_tokens(&mut read_bits));
+
+        let height = image.height();
+        for y in 0..height {
+            let mut row = image.get_row_mut(y);
+            for pixel in row.iter_pixels_mut() {
+                let Vle(bits) = symbols.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Not enough data to fill the image",
+                    )
+                })??;
+
+                *pixel = Rg8U::from_bits_interleaved(bits);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Pixel for Rgb8U {

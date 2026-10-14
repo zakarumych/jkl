@@ -1,4 +1,4 @@
-// RGB8U + rANS tile decompression kernel - byte-stream version.
+// rANS tile decompression kernels.
 //
 // Dispatch model:
 // - one invocation per tile (`global_invocation_id.x == tile_index`)
@@ -109,7 +109,7 @@ var<storage, read> symbols: array<u32>;
 @group(0) @binding(5)
 var<storage, read_write> out_buf: array<u32>;
 
-var<push_constants> params: Params;
+var<immediate> params: Params;
 
 fn get_u16_symbol(index: u32) -> u32 {
     let word = symbols[index >> 1u];
@@ -135,7 +135,8 @@ fn write_r8(x: u32, y: u32, stride: u32, r: u32) {
             write_word_buffer = write_word_buffer | (r << 16u);
         }
         case 3, default {
-            let rgba = (r << 24u) | write_word_buffer;
+            write_word_buffer = (r << 24u) | write_word_buffer;
+            let rgba = write_word_buffer;
             out_buf[(y * stride) + (x >> 2u)] = rgba;
         }
     }
@@ -145,7 +146,8 @@ fn write_rg8(x: u32, y: u32, stride: u32, rg: u32) {
     if (x & 1u) == 0u {
         write_word_buffer = rg;
     } else {
-        let rgba = (rg << 16u) | write_word_buffer;
+        write_word_buffer = (rg << 16u) | write_word_buffer;
+        let rgba = write_word_buffer;
         out_buf[(y * stride) + (x >> 1u)] = rgba;
     }
 }
@@ -275,6 +277,92 @@ fn lz77_rans_decode_u16(state: ptr<function, U64>, cursor: ptr<function, u32>, e
 
     lz77_window_push(value);
     return value;
+}
+
+@compute @workgroup_size(64)
+fn decompress_r8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let tile_index = gid.x;
+    if tile_index >= params.tile_count {
+        return;
+    }
+
+    if params.table0_count == 0u {
+        return;
+    }
+
+    let tile = tiles[tile_index];
+
+    var cursor = offsets[tile_index];
+    var end = offsets[tile_index + 1u];
+    var state: U64 = U64(0u, 0u);
+
+    // Prime the decoder state.
+    renorm_state(&state, &cursor, end);
+
+    let pixel_count = tile.w * tile.h;
+
+    for (var i = 0u; i < pixel_count; i += 1u) {
+        let local_x = i % tile.w;
+        let local_y = i / tile.w;
+
+        let x = tile.x + local_x;
+        let y = tile.y + local_y;
+
+        if x >= params.width || y >= params.height {
+            continue;
+        }
+
+        let index = decode_symbol(&state, &cursor, end, 0);
+        let rgbx = symbols[index];
+
+        write_r8(x, y, params.stride, rgbx);
+        if local_x + 1u == tile.w {
+            out_buf[y * params.stride + (x >> 2u)] = write_word_buffer;
+        }
+    }
+}
+
+@compute @workgroup_size(64)
+fn decompress_rg8_rans(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let tile_index = gid.x;
+    if tile_index >= params.tile_count {
+        return;
+    }
+
+    if params.table0_count == 0u {
+        return;
+    }
+
+    let tile = tiles[tile_index];
+
+    var cursor = offsets[tile_index];
+    var end = offsets[tile_index + 1u];
+    var state: U64 = U64(0u, 0u);
+
+    // Prime the decoder state.
+    renorm_state(&state, &cursor, end);
+
+    let pixel_count = tile.w * tile.h;
+
+    for (var i = 0u; i < pixel_count; i += 1u) {
+        let local_x = i % tile.w;
+        let local_y = i / tile.w;
+
+        let x = tile.x + local_x;
+        let y = tile.y + local_y;
+
+        if x >= params.width || y >= params.height {
+            continue;
+        }
+
+        let index = decode_symbol(&state, &cursor, end, 0);
+        let rgbx = symbols[index];
+
+        write_rg8(x, y, params.stride, rgbx);
+        if local_x + 1u == tile.w {
+            out_buf[y * params.stride + (x >> 1u)] = write_word_buffer;
+        }
+    }
 }
 
 @compute @workgroup_size(64)

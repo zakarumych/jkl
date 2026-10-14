@@ -8,13 +8,13 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-hashbrown = "0.16"
-egui = "0.33"
-eframe = "0.33"
+hashbrown = "0.17"
+egui = "0.36"
+eframe = "0.36"
 image = "0.25.8"
-smallvec = "1.15"
+smallvec = "1.16"
 wgpu = "30"
 bytemuck = "1.20"
 num-rational = "0.4"
 futures = "0.3"
-mev = { git = "https://github.com/zakarumych/mev.git" }
+mev = { path = "../../mev" }

@@ -4,7 +4,7 @@ use jkl::{
     algos::{ans, lz77, vle::Vle},
     image::{Image, format::Format},
     jackal::image::{Compression, JackalImageReader},
-    math::{Rgb8U, Rgb565},
+    math::{Rg8U, Rgb8U, Rgb565, Rgba8U},
 };
 use mev::{Arguments, BufferUsage};
 
@@ -49,6 +49,8 @@ struct Params {
 }
 
 pub struct Uploader {
+    r8: mev::ComputePipeline,
+    rg8: mev::ComputePipeline,
     rgb8: mev::ComputePipeline,
     rgb8_lz77: mev::ComputePipeline,
     rgba8: mev::ComputePipeline,
@@ -84,9 +86,7 @@ struct UploaderArguments {
 }
 
 impl Uploader {
-    /// Create an uploader bound to the given device/queue pair. The
-    /// device is cloned internally so the caller may discard its
-    /// handle if desired.
+    /// Create an uploader bound to the given device.
     pub fn new(device: &mev::Device) -> Result<Self, mev::OutOfMemory> {
         let shader = device
             .new_shader_library(mev::LibraryDesc {
@@ -95,6 +95,32 @@ impl Uploader {
             })
             .expect("Failed to create rans decompress shader library");
 
+        let r8 = device
+            .new_compute_pipeline(mev::ComputePipelineDesc {
+                name: "jkl-mev-r8-rans-pipeline",
+                shader: mev::Shader {
+                    library: shader.clone(),
+                    entry: "decompress_r8_rans".into(),
+                },
+                work_group_size: [64, 1, 1],
+                constants: size_of::<Params>(),
+                arguments: &[UploaderArguments::LAYOUT],
+            })
+            .expect("Failed to create r8 rans pipeline");
+
+        let rg8 = device
+            .new_compute_pipeline(mev::ComputePipelineDesc {
+                name: "jkl-mev-rg8-rans-pipeline",
+                shader: mev::Shader {
+                    library: shader.clone(),
+                    entry: "decompress_rg8_rans".into(),
+                },
+                work_group_size: [64, 1, 1],
+                constants: size_of::<Params>(),
+                arguments: &[UploaderArguments::LAYOUT],
+            })
+            .expect("Failed to create rg8 rans pipeline");
+
         let rgb8 = device
             .new_compute_pipeline(mev::ComputePipelineDesc {
                 name: "jkl-mev-rgb8-rans-pipeline",
@@ -102,7 +128,7 @@ impl Uploader {
                     library: shader.clone(),
                     entry: "decompress_rgb8_rans".into(),
                 },
-                work_group_size: [61, 1, 1],
+                work_group_size: [64, 1, 1],
                 constants: size_of::<Params>(),
                 arguments: &[UploaderArguments::LAYOUT],
             })
@@ -115,7 +141,7 @@ impl Uploader {
                     library: shader.clone(),
                     entry: "decompress_rgb8_lz77_rans".into(),
                 },
-                work_group_size: [61, 1, 1],
+                work_group_size: [64, 1, 1],
                 constants: size_of::<Params>(),
                 arguments: &[UploaderArguments::LAYOUT],
             })
@@ -128,7 +154,7 @@ impl Uploader {
                     library: shader.clone(),
                     entry: "decompress_rgba8_rans".into(),
                 },
-                work_group_size: [61, 1, 1],
+                work_group_size: [64, 1, 1],
                 constants: size_of::<Params>(),
                 arguments: &[UploaderArguments::LAYOUT],
             })
@@ -141,7 +167,7 @@ impl Uploader {
                     library: shader.clone(),
                     entry: "decompress_bc1_rans".into(),
                 },
-                work_group_size: [61, 1, 1],
+                work_group_size: [64, 1, 1],
                 constants: size_of::<Params>(),
                 arguments: &[UploaderArguments::LAYOUT],
             })
@@ -154,13 +180,15 @@ impl Uploader {
                     library: shader.clone(),
                     entry: "decompress_bc1_lz77_rans".into(),
                 },
-                work_group_size: [61, 1, 1],
+                work_group_size: [64, 1, 1],
                 constants: size_of::<Params>(),
                 arguments: &[UploaderArguments::LAYOUT],
             })
             .expect("Failed to create bc1 lz77 rans pipeline");
 
         Ok(Uploader {
+            r8,
+            rg8,
             rgb8,
             rgb8_lz77,
             rgba8,
@@ -185,6 +213,15 @@ impl Uploader {
         let height = u32::try_from(height_usize)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "dimension too large"))?;
 
+        if matches!(reader.format(), Format::R8 | Format::RG8)
+            && reader.tile_size().width % reader.format().tile_width_granularity() != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unaligned packed texel tiles",
+            ));
+        }
+
         let payload_len = reader.tiles_payload_len();
         dbg!(payload_len);
 
@@ -195,7 +232,7 @@ impl Uploader {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "payload too large"))?;
 
         dbg!(payload_len);
-        let mut payload_buf = device.new_buffer(mev::BufferDesc {
+        let mut payload_buf = device.new_buffer_mapped(mev::BufferDesc {
             name: "jkl-mev-payload-bytes",
             size: payload_len as usize,
             usage: mev::BufferUsage::STORAGE
@@ -207,9 +244,11 @@ impl Uploader {
         let mut offsets = Vec::new();
         let mut tiles = Vec::new();
 
-        if let Ok(mut mapped) = payload_buf.write_mapped_range(..) {
-            let slice = mapped.as_mut();
-
+        {
+            let mut mapped = payload_buf
+                .write_mapped_range(..)
+                .map_err(io::Error::other)?;
+            let mut tile_payload = Vec::new();
             let mut last_offset = 0;
             for tile_index in 0..reader.tiles() {
                 let tile = reader.tile(tile_index);
@@ -220,7 +259,9 @@ impl Uploader {
                     "tile rANS payload should be multiple of 4"
                 );
 
-                reader.copy_tile_payload_into(tile_index, &mut slice[last_offset..][..tile_len])?;
+                tile_payload.resize(tile_len, 0);
+                reader.copy_tile_payload_into(tile_index, &mut tile_payload)?;
+                mapped.write(last_offset, &tile_payload);
 
                 offsets.push((last_offset / 4) as u32);
                 last_offset += tile_len;
@@ -238,19 +279,135 @@ impl Uploader {
 
         let offsets_buf = device.new_buffer_init(mev::BufferInitDesc {
             name: "jkl-mev-tile-byte-offsets",
-            data: bytemuck::cast_slice(&offsets[..]),
+            data: &offsets[..],
             usage: mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
         });
         dbg!(offsets[..].len());
 
         let tiles_buf = device.new_buffer_init(mev::BufferInitDesc {
             name: "jkl-mev-tiles",
-            data: bytemuck::cast_slice(&tiles[..]),
+            data: &tiles[..],
             usage: mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
         });
         dbg!(tiles[..].len());
 
         match (reader.format(), reader.compression()) {
+            (Format::R8, Compression::Ans) => {
+                let ans_context =
+                    jkl::bits::read_bits_scope(reader.context_reader()?, |context_reader| {
+                        ans::Context::<Vle<u8>>::read(context_reader)
+                    })?;
+
+                let table = ans_context.table();
+                dbg!(table[..].len());
+
+                let table_buf = create_buffer_from_iter(
+                    device,
+                    mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
+                    "jkl-mev-table",
+                    table.iter().copied().map(RawFreqEntry::from),
+                )?;
+
+                let symbol_buf = create_buffer_from_iter(
+                    device,
+                    mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
+                    "jkl-mev-symbols",
+                    table.iter().copied().map(|e| u32::from(e.symbol.0)),
+                )?;
+
+                let byte_stride = width.div_ceil(256) * 256;
+                let output_buffer_size = byte_stride * height;
+                let out_buf = device.new_buffer(mev::BufferDesc {
+                    name: "jkl-mev-output",
+                    size: output_buffer_size as usize,
+                    usage: mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSFER_SRC,
+                });
+
+                DecompressDispatch {
+                    width,
+                    height,
+                    byte_stride,
+                    table1_count: table.len(),
+                    table2_count: 0,
+                    tiles: &tiles,
+                    pipeline: &self.r8,
+                    payload_buf: &payload_buf,
+                    offsets_buf: &offsets_buf,
+                    tiles_buf: &tiles_buf,
+                    table_buf: &table_buf,
+                    symbol_buf: &symbol_buf,
+                    out_buf: &out_buf,
+                }
+                .run(encoder);
+
+                Ok(Image::with_stride(
+                    jkl::image::Dimensions::D2,
+                    [width_usize, height_usize, 1],
+                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    GpuPixels::new(mev::PixelFormat::R8Unorm, out_buf),
+                ))
+            }
+            (Format::RG8, Compression::Ans) => {
+                let ans_context =
+                    jkl::bits::read_bits_scope(reader.context_reader()?, |context_reader| {
+                        ans::Context::<Vle<u16>>::read(context_reader)
+                    })?;
+
+                let table = ans_context.table();
+                dbg!(table[..].len());
+
+                let table_buf = create_buffer_from_iter(
+                    device,
+                    mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
+                    "jkl-mev-table",
+                    table.iter().copied().map(RawFreqEntry::from),
+                )?;
+
+                let symbol_buf = create_buffer_from_iter(
+                    device,
+                    mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
+                    "jkl-mev-symbols",
+                    table
+                        .iter()
+                        .copied()
+                        .map(|e| u32::from(Rg8U::from_bits_interleaved(e.symbol.0).bits())),
+                )?;
+
+                let byte_stride = (width * 2).div_ceil(256) * 256;
+                let output_buffer_size = byte_stride * height;
+                let out_buf = device.new_buffer(mev::BufferDesc {
+                    name: "jkl-mev-output",
+                    size: output_buffer_size as usize,
+                    usage: mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSFER_SRC,
+                });
+
+                DecompressDispatch {
+                    width,
+                    height,
+                    byte_stride,
+                    table1_count: table.len(),
+                    table2_count: 0,
+                    tiles: &tiles,
+                    pipeline: &self.rg8,
+                    payload_buf: &payload_buf,
+                    offsets_buf: &offsets_buf,
+                    tiles_buf: &tiles_buf,
+                    table_buf: &table_buf,
+                    symbol_buf: &symbol_buf,
+                    out_buf: &out_buf,
+                }
+                .run(encoder);
+
+                Ok(Image::with_stride(
+                    jkl::image::Dimensions::D2,
+                    [width_usize, height_usize, 1],
+                    [
+                        byte_stride as usize / 2,
+                        byte_stride as usize / 2 * height_usize,
+                    ],
+                    GpuPixels::new(mev::PixelFormat::Rg8Unorm, out_buf),
+                ))
+            }
             (Format::RGB8, Compression::Ans) => {
                 let ans_context =
                     jkl::bits::read_bits_scope(reader.context_reader()?, |context_reader| {
@@ -265,7 +422,7 @@ impl Uploader {
                     mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
                     "jkl-mev-table",
                     table.iter().copied().map(RawFreqEntry::from),
-                );
+                )?;
 
                 let symbol_buf = create_buffer_from_iter(
                     device,
@@ -275,7 +432,7 @@ impl Uploader {
                         .iter()
                         .copied()
                         .map(|e| Rgb8U::from_bits_interleaved(e.symbol.0).bits()),
-                );
+                )?;
 
                 let byte_stride = (width * 4).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride * height;
@@ -305,7 +462,10 @@ impl Uploader {
                 Ok(Image::with_stride(
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
-                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    [
+                        byte_stride as usize / 4,
+                        byte_stride as usize / 4 * height_usize,
+                    ],
                     GpuPixels::new(mev::PixelFormat::Rgba8Unorm, out_buf),
                 ))
             }
@@ -323,7 +483,7 @@ impl Uploader {
                     mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
                     "jkl-mev-table",
                     table.iter().copied().map(RawFreqEntry::from),
-                );
+                )?;
 
                 let symbol_buf = create_buffer_from_iter(
                     device,
@@ -338,7 +498,7 @@ impl Uploader {
                             distance,
                         } => [u32::from(length_minus_2) + 2, u32::from(distance)],
                     }),
-                );
+                )?;
 
                 let byte_stride = (width * 4).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
@@ -368,7 +528,10 @@ impl Uploader {
                 Ok(Image::with_stride(
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
-                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    [
+                        byte_stride as usize / 4,
+                        byte_stride as usize / 4 * height_usize,
+                    ],
                     GpuPixels::new(mev::PixelFormat::Rgba8Unorm, out_buf),
                 ))
             }
@@ -386,7 +549,7 @@ impl Uploader {
                     mev::BufferUsage::STORAGE | mev::BufferUsage::TRANSIENT,
                     "jkl-mev-table",
                     table.iter().copied().map(RawFreqEntry::from),
-                );
+                )?;
 
                 let symbol_buf = create_buffer_from_iter(
                     device,
@@ -395,8 +558,8 @@ impl Uploader {
                     table
                         .iter()
                         .copied()
-                        .map(|e| Rgb8U::from_bits_interleaved(e.symbol.0).bits()),
-                );
+                        .map(|e| Rgba8U::from_bits_interleaved(e.symbol.0).bits()),
+                )?;
 
                 let byte_stride = (width * 4).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
@@ -426,7 +589,10 @@ impl Uploader {
                 Ok(Image::with_stride(
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
-                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    [
+                        byte_stride as usize / 4,
+                        byte_stride as usize / 4 * height_usize,
+                    ],
                     GpuPixels::new(mev::PixelFormat::Rgba8Unorm, out_buf),
                 ))
             }
@@ -454,7 +620,7 @@ impl Uploader {
                         .copied()
                         .map(RawFreqEntry::from)
                         .chain(indices_table.iter().copied().map(RawFreqEntry::from)),
-                );
+                )?;
 
                 // Buffer should have size multiple of 4
                 // As it is accessed as array of u32 in shader.
@@ -477,9 +643,9 @@ impl Uploader {
                         .chain(indices_table.iter().copied().map(|e| e.symbol))
                         .chain([0u8; 3])
                         .take(padded_len),
-                );
+                )?;
 
-                let byte_stride = (width * 16).div_ceil(256) * 256;
+                let byte_stride = (width * 8).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.new_buffer(mev::BufferDesc {
                     name: "jkl-mev-output",
@@ -507,7 +673,10 @@ impl Uploader {
                 Ok(Image::with_stride(
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
-                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    [
+                        byte_stride as usize / 8,
+                        byte_stride as usize / 8 * height_usize,
+                    ],
                     GpuPixels::new(mev::PixelFormat::Bc1RgbaUnorm, out_buf),
                 ))
             }
@@ -535,7 +704,7 @@ impl Uploader {
                         .copied()
                         .map(RawFreqEntry::from)
                         .chain(indices_table.iter().copied().map(RawFreqEntry::from)),
-                );
+                )?;
 
                 let symbol_buf = create_buffer_from_iter(
                     device,
@@ -560,9 +729,9 @@ impl Uploader {
                                 distance,
                             } => [length_minus_2 + 2, distance],
                         })),
-                );
+                )?;
 
-                let byte_stride = (width * 16).div_ceil(256) * 256;
+                let byte_stride = (width * 8).div_ceil(256) * 256;
                 let output_buffer_size = byte_stride as u64 * height as u64;
                 let out_buf = device.new_buffer(mev::BufferDesc {
                     name: "jkl-mev-output",
@@ -590,7 +759,10 @@ impl Uploader {
                 Ok(Image::with_stride(
                     jkl::image::Dimensions::D2,
                     [width_usize, height_usize, 1],
-                    [byte_stride as usize, byte_stride as usize * height_usize],
+                    [
+                        byte_stride as usize / 8,
+                        byte_stride as usize / 8 * height_usize,
+                    ],
                     GpuPixels::new(mev::PixelFormat::Bc1RgbaUnorm, out_buf),
                 ))
             }
@@ -604,26 +776,24 @@ impl Uploader {
     }
 }
 
-fn write_buffer_from_iter<T>(buffer: &mut mev::Buffer, iter: impl IntoIterator<Item = T>) -> usize
+fn write_buffer_from_iter<T>(
+    buffer: &mut mev::Buffer,
+    iter: impl IntoIterator<Item = T>,
+) -> io::Result<usize>
 where
     T: bytemuck::NoUninit,
 {
-    if buffer.map(..).is_err() {
-        return 0;
-    };
-
     let mut offset = 0;
-    if let Ok(mut mapped) = buffer.write_mapped_range(..) {
-        let slice = mapped.as_mut();
-
+    {
+        let mut mapped = buffer.write_mapped_range(..).map_err(io::Error::other)?;
         for item in iter {
             let raw_bytes = bytemuck::bytes_of(&item);
-            slice[offset..][..raw_bytes.len()].copy_from_slice(raw_bytes);
+            mapped.write(offset, raw_bytes);
             offset += raw_bytes.len();
         }
     }
 
-    offset
+    Ok(offset)
 }
 
 fn create_buffer_from_iter<T>(
@@ -631,7 +801,7 @@ fn create_buffer_from_iter<T>(
     usage: BufferUsage,
     label: &str,
     iter: impl Iterator<Item = T>,
-) -> mev::Buffer
+) -> io::Result<mev::Buffer>
 where
     T: bytemuck::NoUninit,
 {
@@ -640,15 +810,17 @@ where
 
     let size = u64::try_from(lower * std::mem::size_of::<T>()).expect("size exceedes u64");
 
-    let mut buffer = device.new_buffer(mev::BufferDesc {
+    let mut buffer = device.new_buffer_mapped(mev::BufferDesc {
         name: label,
         size: size as usize,
         usage: usage | mev::BufferUsage::HOST_WRITE,
     });
 
-    write_buffer_from_iter(&mut buffer, iter);
+    let written = write_buffer_from_iter(&mut buffer, iter);
+    buffer.unmap();
+    written?;
 
-    buffer
+    Ok(buffer)
 }
 
 #[derive(mev::Arguments)]
