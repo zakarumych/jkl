@@ -21,6 +21,8 @@
 //!   and one discrete endpoint-neighbor search ([`bc1`](image::block::bc1), [`bc2`](image::block::bc2), [`bc3`](image::block::bc3), [`bc4`](image::block::bc4), [`bc5`](image::block::bc5)).
 //!   [`bc6`](image::block::bc6) encodes and decodes signed or unsigned HDR RGB
 //!   blocks, with all-mode decoding and encoding across all 32 partitions.
+//!   [`bc7`](image::block::bc7) encodes and decodes normalized RGBA using all
+//!   eight modes, partitions, rotations, and index selections.
 //! * **Layered entropy coding** - stack [`lz77`] or [`rle`] with [`ans`] for
 //!   near-optimal compression ratios while keeping decompression blazingly fast
 //!   - simple enough for a GPU compute shader.
@@ -39,6 +41,7 @@
 //! | Compress a texture to BC1–BC5             | [`bc1::Block::encode`](image::block::bc1::Block::encode), [`bc2::Block::encode`](image::block::bc2::Block::encode), [`bc3::Block::encode`](image::block::bc3::Block::encode), [`bc4::Block::encode`](image::block::bc4::Block::encode), [`bc5::Block::encode`](image::block::bc5::Block::encode)                             |
 //! | Decompress a BC block                     | [`bc1::Block::decode`](image::block::bc1::Block::decode), [`bc2::Block::decode`](image::block::bc2::Block::decode), [`bc3::Block::decode`](image::block::bc3::Block::decode), [`bc4::Block::decode`](image::block::bc4::Block::decode), [`bc5::Block::decode`](image::block::bc5::Block::decode)                                      |
 //! | Compress / decompress HDR RGB            | [`bc6::Block::encode`](image::block::bc6::Block::encode), [`bc6::Block::decode`](image::block::bc6::Block::decode), [`bc6::Block::encode_signed`](image::block::bc6::Block::encode_signed), [`bc6::Block::decode_signed`](image::block::bc6::Block::decode_signed) |
+//! | Compress / decompress BC7 RGBA           | [`bc7::Block::encode`](image::block::bc7::Block::encode), [`bc7::Block::decode`](image::block::bc7::Block::decode) |
 //! | Write / read a complete Jackal Image file | [`jackal::image::write_image`], [`jackal::image::JackalReader`]                         |
 //! | Entropy-code a symbol stream              | Build an [`ans::Context`], then use [`ans::Encoder`] / [`ans::Decoder`]                 |
 //! | Run-length encode an iterator             | [`rle::rle`], [`rle::rle_power_of_two`], or [`rle::rle_with_cfg`]                       |
@@ -74,6 +77,7 @@
 //! | [`bc4`]         | BC4 / RGTC1                | 8 bytes    | R               |
 //! | [`bc5`]         | BC5 / RGTC2                | 16 bytes   | RG              |
 //! | [`bc6`](image::block::bc6) | BC6H / BPTC float | 16 bytes | HDR RGB         |
+//! | [`bc7`](image::block::bc7) | BC7 / BPTC UNORM | 16 bytes | RGBA            |
 //! | [`cluster_fit`] | Archived quantizer compatibility API | - | - |
 //!
 //! ## Image and math
