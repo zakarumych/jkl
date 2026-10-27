@@ -26,13 +26,14 @@ pub enum Format {
     /// BC3 (DXT5) block compression format.
     BC3,
 
-    /// BC4 block compression format.
+    /// BC4 UNORM block compression format.
     BC4,
 
-    /// BC5 block compression format.
+    /// BC5 UNORM block compression format.
     BC5,
 
-    /// BC6 block compression format.
+    /// BC6H UF16 (unsigned HDR RGB) block compression format.
+    /// Signed BC6H requires a distinct format tag.
     BC6,
 
     /// BC7 block compression format.

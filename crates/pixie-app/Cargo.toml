@@ -1,0 +1,21 @@
+[package]
+name = "jkl-pixie-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "jkl-pixie"
+path = "src/main.rs"
+
+[dependencies]
+jkl = { path = "../jkl" }
+pixie-ui = { path = "../../../pixie-ui" }
+pixie-ui-mev = { path = "../../../pixie-ui/mev" }
+pixie-ui-winit = { path = "../../../pixie-ui/winit" }
+edict = { path = "../../../edict" }
+mev = { workspace = true }
+winit = "0.30"
+image = { workspace = true }
+rfd = "0.15"

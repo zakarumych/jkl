@@ -1,3 +1,12 @@
+//! JKLI pixel payload layouts.
+//!
+//! BC3–BC7 compression encodes one byte-symbol stream per tile, containing
+//! row-major blocks in canonical [`FixedCode`] byte order. All tiles share one
+//! `C::Context<u8>` context. This layout is stable for these format tags: the
+//! container has no version field. BC4/BC5 are UNORM; BC6 is BC6H UF16. Signed
+//! formats require distinct tags. Uncompressed tiles store canonical bytes
+//! directly, without a context.
+
 use std::{hash::Hash, io};
 
 use crate::{
@@ -6,7 +15,7 @@ use crate::{
     encode::{FixedCode, VarCode},
     image::{
         Image2DMut, Image2DRef,
-        block::{bc1, bc2},
+        block::{bc1, bc2, bc3, bc4, bc5, bc6, bc7},
         compress::Compressor,
         format::Format,
     },
@@ -465,7 +474,7 @@ impl Pixel for bc1::Block {
         for y in 0..height {
             let mut row = image.get_row_mut(y);
             for pixel in row.iter_pixels_mut() {
-                for i in 0..4 {
+                for i in pixel.indices.iter_mut() {
                     let bits = symbols.next().ok_or_else(|| {
                         io::Error::new(
                             io::ErrorKind::UnexpectedEof,
@@ -473,7 +482,7 @@ impl Pixel for bc1::Block {
                         )
                     })??;
 
-                    pixel.indices[i] = bits;
+                    *i = bits;
                 }
             }
         }
@@ -595,7 +604,7 @@ impl Pixel for bc2::Block {
         for y in 0..height {
             let mut row = image.get_row_mut(y);
             for pixel in row.iter_pixels_mut() {
-                for i in 0..8 {
+                for a in pixel.alpha.iter_mut() {
                     let byte = symbols.next().ok_or_else(|| {
                         io::Error::new(
                             io::ErrorKind::UnexpectedEof,
@@ -603,7 +612,7 @@ impl Pixel for bc2::Block {
                         )
                     })??;
 
-                    pixel.alpha[i] = byte;
+                    *a = byte;
                 }
             }
         }
@@ -642,7 +651,7 @@ impl Pixel for bc2::Block {
         for y in 0..height {
             let mut row = image.get_row_mut(y);
             for pixel in row.iter_pixels_mut() {
-                for i in 0..4 {
+                for i in pixel.indices.iter_mut() {
                     let bits = symbols.next().ok_or_else(|| {
                         io::Error::new(
                             io::ErrorKind::UnexpectedEof,
@@ -650,7 +659,7 @@ impl Pixel for bc2::Block {
                         )
                     })??;
 
-                    pixel.indices[i] = bits;
+                    *i = bits;
                 }
             }
         }
@@ -658,6 +667,72 @@ impl Pixel for bc2::Block {
         Ok(())
     }
 }
+
+macro_rules! impl_byte_block_pixel {
+    ($block:ty, $format:ident, $size:literal) => {
+        impl Pixel for $block {
+            type Context<C: Compressor> = C::Context<u8>;
+
+            const FORMAT: Format = Format::$format;
+
+            fn compress_images<'a, C>(
+                input: impl Iterator<Item = Image2DRef<'a, Self>> + Clone,
+                compressor: C,
+                mut write: impl io::Write + io::Seek,
+            ) -> io::Result<()>
+            where
+                C: Compressor,
+            {
+                let mut tokens = Vec::new();
+                let context = compressor.compress_symbols(
+                    input.map(|image| image.iter_pixels().flat_map(|block| block.fix_encode())),
+                    &mut tokens,
+                )?;
+                let mut offsets = WriteOffsets::new(tokens.len(), &mut write)?;
+                write_bits_scope(&mut write, |bits| context.var_write(bits))?;
+                for tile in &tokens {
+                    offsets.push_next(&mut write)?;
+                    write_bits_scope(&mut write, |bits| {
+                        for token in tile {
+                            token.var_write(bits)?;
+                        }
+                        Ok(())
+                    })?;
+                }
+                offsets.write(&mut write)
+            }
+
+            fn decompress_image<'a, C>(
+                compressor: C,
+                context: &Self::Context<C>,
+                read: impl io::Read,
+                mut image: Image2DMut<'a, Self>,
+            ) -> io::Result<()>
+            where
+                C: Compressor,
+            {
+                let mut bits = ReadBits::new(read);
+                let mut symbols = compressor.decompress_tokens2(context, read_tokens(&mut bits));
+                for pixel in image.iter_pixels_mut() {
+                    let mut bytes = [0; $size];
+                    for byte in &mut bytes {
+                        *byte = symbols.next().ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::UnexpectedEof, "Incomplete block bytes")
+                        })??;
+                    }
+                    *pixel = Self::from_bytes(bytes);
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+impl_byte_block_pixel!(bc3::Block, BC3, 16);
+impl_byte_block_pixel!(bc4::Block, BC4, 8);
+impl_byte_block_pixel!(bc5::Block, BC5, 16);
+impl_byte_block_pixel!(bc6::Block, BC6, 16);
+impl_byte_block_pixel!(bc7::Block, BC7, 16);
 
 fn read_tokens<T>(read: &mut ReadBits<impl io::Read>) -> impl Iterator<Item = io::Result<T>> + '_
 where

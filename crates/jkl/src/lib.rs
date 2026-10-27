@@ -259,3 +259,4 @@ pub mod encode;
 pub mod image;
 pub mod jackal;
 pub mod math;
+pub mod mesh;

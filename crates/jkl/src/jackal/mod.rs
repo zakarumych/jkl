@@ -48,3 +48,5 @@ macro_rules! define_magic {
 
 pub mod atlas;
 pub mod image;
+pub mod blob;
+pub mod mesh;

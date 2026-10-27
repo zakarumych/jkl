@@ -56,6 +56,12 @@ pub struct LZ77Compressor {
     pub window_size: u16,
 }
 
+impl Default for LZ77Compressor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LZ77Compressor {
     pub fn new() -> Self {
         LZ77Compressor { window_size: 1024 }

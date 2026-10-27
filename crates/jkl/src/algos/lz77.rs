@@ -213,11 +213,6 @@ impl<T> Window<T> {
         idx as u16
     }
 
-    #[inline(always)]
-    fn from_idx(&self, idx: u16) -> u16 {
-        self.idx(idx)
-    }
-
     #[inline]
     fn push(&mut self, value: T) {
         self.buffer[usize::from(self.head)] = value;
@@ -240,18 +235,18 @@ impl<T> Window<T> {
         if offset < self.head {
             for i in (0..offset + 1).rev() {
                 if self.buffer[usize::from(i)] == *elem {
-                    return Some(self.from_idx(i));
+                    return Some(self.idx(i));
                 }
             }
             for i in (self.head..self.len()).rev() {
                 if self.buffer[usize::from(i)] == *elem {
-                    return Some(self.from_idx(i));
+                    return Some(self.idx(i));
                 }
             }
         } else {
             for i in (self.head..offset + 1).rev() {
                 if self.buffer[usize::from(i)] == *elem {
-                    return Some(self.from_idx(i));
+                    return Some(self.idx(i));
                 }
             }
         }
@@ -307,7 +302,7 @@ impl<T> Window<T> {
                 }
 
                 // Found a match of required length, return offset.
-                return Some(self.from_idx(p));
+                return Some(self.idx(p));
             }
 
             // Consider offsets after current one
@@ -371,7 +366,7 @@ impl<T> Window<T> {
                 }
 
                 // Found a match of required length, return offset.
-                return Some(self.from_idx(p));
+                return Some(self.idx(p));
             }
 
             None
@@ -434,9 +429,6 @@ where
             let should_emit_reference = self.length >= 2;
 
             if should_emit_reference {
-                debug_assert!(u16::try_from(self.distance).is_ok());
-                debug_assert!(u16::try_from(self.length).is_ok());
-
                 output.extend(Some(Token::Reference {
                     distance: self.distance,
                     length_minus_2: self.length - 2,
@@ -481,9 +473,6 @@ where
         let should_emit_reference = self.length >= 2;
 
         if should_emit_reference {
-            debug_assert!(u16::try_from(self.distance).is_ok());
-            debug_assert!(u16::try_from(self.length).is_ok());
-
             output.extend(Some(Token::Reference {
                 distance: self.distance,
                 length_minus_2: self.length - 2,

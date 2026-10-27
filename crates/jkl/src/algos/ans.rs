@@ -110,8 +110,10 @@ where
             accum += entry.freq.get();
         }
     } else {
-        let mut accum = 0;
-        for entry in table.iter_mut() {
+        let mut normalized_total = 0u64;
+        let mut largest_freq = 0;
+        let mut largest_index = 0;
+        for (index, entry) in table.iter_mut().enumerate() {
             let new_freq = (u64::from(entry.freq.get()) << 32) / u64::from(total);
 
             // Given that freq is non-zero and less than total
@@ -121,15 +123,29 @@ where
             debug_assert!(new_freq > 0);
             debug_assert!(new_freq <= 0xFFFF_FFFF);
 
-            debug_assert!(0xFFFF_FFFF - accum >= entry.freq.get());
-
             *entry = Entry {
                 symbol: entry.symbol,
                 freq: NonZero::new(new_freq as u32).unwrap(),
-                cumul: accum,
+                cumul: 0,
             };
-
-            accum += entry.freq.get();
+            normalized_total += new_freq;
+            if new_freq > largest_freq {
+                largest_freq = new_freq;
+                largest_index = index;
+            }
+        }
+        // Exact ratios can fill all 2^32 buckets even when the occurrence
+        // total is not a power of two. Reserve one bucket to keep sums in u32.
+        if normalized_total == 0x1_0000_0000 {
+            let entry = &mut table[largest_index];
+            entry.freq = NonZero::new(entry.freq.get() - 1).unwrap();
+        }
+        let mut accum = 0u32;
+        for entry in table {
+            entry.cumul = accum;
+            accum = accum
+                .checked_add(entry.freq.get())
+                .expect("normalized frequency overflow");
         }
     }
 }
@@ -634,8 +650,7 @@ where
 
             let (symbol, freq, cumul) = self.ctx.find_by_bucket(c);
 
-            let new_state = (self.state >> 32) * u64::from(freq.get())
-                + (self.state & 0xFFFF_FFFF) as u64
+            let new_state = (self.state >> 32) * u64::from(freq.get()) + (self.state & 0xFFFF_FFFF)
                 - u64::from(cumul);
 
             self.state = new_state;
@@ -688,7 +703,7 @@ fn test_u16() {
 
     write_bits_scope(&mut ctx_buf, |writer| ctx.write(writer)).unwrap();
 
-    let ctx2 = read_bits_scope(&ctx_buf[..], |reader| Context::read(reader)).unwrap();
+    let ctx2 = read_bits_scope(&ctx_buf[..], Context::read).unwrap();
 
     let mut decoder = Decoder::new(&ctx2);
 
@@ -718,6 +733,49 @@ fn test_u16() {
     assert_eq!(data[..], decoded[..]);
 
     assert!(decoder.finish().is_ok());
+}
+
+#[test]
+fn exact_ratios_with_non_power_of_two_totals() {
+    for counts in [[3u32, 3], [3, 9]] {
+        let ctx = Context::from_frequencies(
+            counts
+                .into_iter()
+                .enumerate()
+                .map(|(symbol, count)| (symbol as u32, NonZero::new(count).unwrap())),
+        );
+        assert_eq!(
+            ctx.table()
+                .iter()
+                .map(|e| u64::from(e.freq.get()))
+                .sum::<u64>(),
+            u64::from(u32::MAX)
+        );
+        let data: Vec<_> = counts
+            .into_iter()
+            .enumerate()
+            .flat_map(|(symbol, count)| std::iter::repeat_n(symbol as u32, count as usize))
+            .collect();
+        let mut encoder = Encoder::new(&ctx);
+        let mut words = Vec::new();
+        for &symbol in data.iter().rev() {
+            words.extend(encoder.encode(symbol));
+        }
+        words.extend(encoder.finish());
+        let mut words = words.into_iter().rev();
+        let mut decoder = Decoder::new(&ctx);
+        let decoded: Vec<_> = (0..data.len())
+            .map(|_| decoder.decode(&mut words).unwrap())
+            .collect();
+        assert_eq!(decoded, data);
+        decoder.finish().unwrap();
+        assert!(words.next().is_none());
+        let first = ((u64::from(counts[0]) << 32) / u64::from(counts[0] + counts[1])) as u32;
+        assert_eq!(
+            ctx.table()[0].freq.get(),
+            first - u32::from(counts[0] >= counts[1])
+        );
+    }
 }
 
 #[inline(always)]

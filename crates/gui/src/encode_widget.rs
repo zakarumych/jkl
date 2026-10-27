@@ -24,7 +24,7 @@ pub struct EncodingWidget<'a> {
 }
 
 impl<'a> EncodingWidget<'a> {
-    pub fn new(id_salt: impl std::hash::Hash, state: &'a mut EncoderState) -> Self {
+    pub fn new(id_salt: impl std::hash::Hash + std::fmt::Debug, state: &'a mut EncoderState) -> Self {
         Self {
             id: Id::new(id_salt),
             state,
